@@ -7,6 +7,7 @@
 #include <optimizer/paths.h>
 #include <catalog/namespace.h>
 #include <utils/guc.h>
+#include <utils/lsyscache.h>
 #include <miscadmin.h>
 
 #include "compat-msvc-enter.h"
@@ -185,15 +186,23 @@ should_optimize_query(Hypertable *ht)
 
 extern void sort_transform_optimization(PlannerInfo *root, RelOptInfo *rel);
 
-static inline bool
+typedef enum AppendOptimization {
+	APPEND_NOOPT,
+	APPEND_EXCLUSION,
+	APPEND_SORT,
+} AppendOptimization;
+
+static inline AppendOptimization
 should_optimize_append(const Path *path)
 {
 	RelOptInfo *rel = path->parent;
 	ListCell   *lc;
 
-	if (!guc_constraint_aware_append ||
-		constraint_exclusion == CONSTRAINT_EXCLUSION_OFF)
-		return false;
+	if (!guc_constraint_aware_append)
+		return APPEND_NOOPT;
+
+	if (constraint_exclusion == CONSTRAINT_EXCLUSION_OFF)
+		return APPEND_NOOPT;
 
 	/*
 	 * If there are clauses that have mutable functions, this path is ripe for
@@ -204,9 +213,14 @@ should_optimize_append(const Path *path)
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
 		if (contain_mutable_functions((Node *) rinfo->clause))
-			return true;
+			return APPEND_EXCLUSION;
 	}
-	return false;
+
+
+	if (IsA(path, MergeAppendPath))
+		return APPEND_SORT;
+
+	return APPEND_NOOPT;
 }
 
 
@@ -306,13 +320,23 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 		{
 			Path	  **pathptr = (Path **) &lfirst(lc);
 			Path	   *path = *pathptr;
+			AppendOptimization appopt;
+
+			elog(NOTICE, "Found path %u (MergeAppendPath=%u AppendPath=%u) cost=%lf",
+				 nodeTag(path), T_MergeAppendPath, T_AppendPath, path->total_cost);
 
 			switch (nodeTag(path))
 			{
-				case T_AppendPath:
 				case T_MergeAppendPath:
-					if (should_optimize_append(path))
-						*pathptr = constraint_aware_append_path_create(root, ht, path);
+				case T_AppendPath:
+					appopt = should_optimize_append(path);
+
+					if (appopt != APPEND_NOOPT)
+					{
+						*pathptr = constraint_aware_append_path_create(root, ht, path, appopt == APPEND_EXCLUSION);
+						elog(NOTICE, "New cost %lf", (*pathptr)->total_cost);
+					}
+
 				default:
 					break;
 			}

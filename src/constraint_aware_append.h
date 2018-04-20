@@ -8,6 +8,7 @@
 typedef struct ConstraintAwareAppendPath
 {
 	CustomPath	cpath;
+	bool perform_exclusion;
 } ConstraintAwareAppendPath;
 
 typedef struct ConstraintAwareAppendState
@@ -19,7 +20,8 @@ typedef struct ConstraintAwareAppendState
 
 typedef struct Hypertable Hypertable;
 
-Path	   *constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *subpath);
+Path	   *constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *subpath,
+												bool perform_exclusion);
 
 
 #endif							/* TIMESCALEDB_CONSTRAINT_AWARE_APPEND_H */
