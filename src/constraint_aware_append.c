@@ -1,13 +1,17 @@
 #include <postgres.h>
+#include <nodes/nodes.h>
 #include <nodes/extensible.h>
 #include <nodes/plannodes.h>
 #include <nodes/makefuncs.h>
+#include <nodes/extensible.h>
+#include <nodes/readfuncs.h>
 #include <parser/parsetree.h>
 #include <optimizer/plancat.h>
 #include <optimizer/clauses.h>
 #include <optimizer/prep.h>
 #include <optimizer/tlist.h>
 #include <optimizer/pathnode.h>
+#include <optimizer/cost.h>
 #include <executor/executor.h>
 #include <catalog/pg_class.h>
 #include <utils/memutils.h>
@@ -19,6 +23,105 @@
 #include "compat.h"
 #include "chunk.h"
 #include "hypercube.h"
+#include "chunk_cache.h"
+
+#define CUSTOM_NAME "ConstraintAwareAppend"
+
+#define strtobool(x)  ((*(x) == 't') ? true : false)
+
+/*
+ * Info passed from planner to executor.
+ *
+ * Must be a planner node that can be copied, so we use ExtensibleNode.
+ */
+typedef struct ConstraintAwareAppendInfo
+{
+	ExtensibleNode enode;
+	Oid hypertable_relid;
+	bool do_exclusion;
+	List *append_rel_list;
+	List *clauses;
+} ConstraintAwareAppendInfo;
+
+static void
+constraint_aware_append_info_copy(struct ExtensibleNode *newnode,
+								  const struct ExtensibleNode *oldnode)
+{
+	ConstraintAwareAppendInfo *newinfo = (ConstraintAwareAppendInfo *) newnode;
+	const ConstraintAwareAppendInfo *oldinfo = (const ConstraintAwareAppendInfo *) oldnode;
+
+	newinfo->append_rel_list = list_copy(oldinfo->append_rel_list);
+	newinfo->clauses = list_copy(oldinfo->clauses);
+}
+
+static bool
+constraint_aware_append_info_equal(const struct ExtensibleNode *an,
+								   const struct ExtensibleNode *bn)
+{
+	const ConstraintAwareAppendInfo *a = (const ConstraintAwareAppendInfo *) an;
+	const ConstraintAwareAppendInfo *b = (const ConstraintAwareAppendInfo *) bn;
+
+	return equal(a->append_rel_list, b->append_rel_list) && equal(a->clauses, b->clauses);
+}
+
+static void
+constraint_aware_append_info_out(struct StringInfoData *str,
+								 const struct ExtensibleNode *node)
+{
+	const ConstraintAwareAppendInfo *info = (const ConstraintAwareAppendInfo *) node;
+
+	appendStringInfo(str, " :hypertable_relid %u", info->hypertable_relid);
+	appendStringInfo(str, " :do_exclusion %c", info->do_exclusion ? 't' : 'f');
+	appendStringInfo(str, " :append_rel_list ");
+	outNode(str, info->append_rel_list);
+	appendStringInfo(str, " :clauses ");
+	outNode(str, info->clauses);
+}
+
+static void
+constraint_aware_append_info_read(struct ExtensibleNode *node)
+{
+	ConstraintAwareAppendInfo *info = (ConstraintAwareAppendInfo *) node;
+	int			length;
+	char	   *token;
+
+	/* Skip :hypertable_relid */
+	token = pg_strtok(&length);
+
+	info->hypertable_relid = strtol(token, NULL, 10);
+
+	/* Skip :do_exclusion */
+	token = pg_strtok(&length);
+
+	info->do_exclusion = strtobool(token);
+
+	/* Skip :append_rel_list */
+	token = pg_strtok(&length);
+
+	/* Read the append_rel_list */
+	info->append_rel_list = nodeRead(NULL, 0);
+
+	/* Skip :clauses */
+	token = pg_strtok(&length);
+
+	/* Read the clauses */
+	info->clauses = nodeRead(NULL, 0);
+}
+
+static ExtensibleNodeMethods constraint_aware_append_info_methods = {
+	.extnodename = "ConstraintAwareAppendInfo",
+	.node_size = sizeof(ConstraintAwareAppendInfo),
+	.nodeCopy = constraint_aware_append_info_copy,
+	.nodeEqual = constraint_aware_append_info_equal,
+	.nodeOut = constraint_aware_append_info_out,
+	.nodeRead = constraint_aware_append_info_read,
+};
+
+static ConstraintAwareAppendInfo *
+constraint_aware_append_info_create()
+{
+	return (ConstraintAwareAppendInfo *) newNode(sizeof(ConstraintAwareAppendInfo), T_ExtensibleNode);
+}
 
 /*
  * Exclude child relations (chunks) at execution time based on constraints.
@@ -163,9 +266,9 @@ exclude_scans(ConstraintAwareAppendState *state,
 {
 	int num_scans = 0;
 	CustomScan *cscan = (CustomScan *) state->csstate.ss.ps.plan;
-	List	   *append_rel_info = lsecond(cscan->custom_private);
-	List	   *restrictinfos = constify_restrictinfos(lthird(cscan->custom_private));
-	bool       do_exclusion = linitial_int(lfourth(cscan->custom_private));
+	ConstraintAwareAppendInfo *info = linitial(cscan->custom_private);
+	List	   *append_rel_list = info->append_rel_list;
+	List	   *restrictinfos = constify_restrictinfos(info->clauses);
 	List	  **appendplans,
 			   *old_appendplans;
 	ListCell   *lc_plan,
@@ -189,7 +292,6 @@ exclude_scans(ConstraintAwareAppendState *state,
 				old_appendplans = append->mergeplans;
 				append->mergeplans = NIL;
 				appendplans = &append->mergeplans;
-				elog(NOTICE, "Num plans %u", list_length(old_appendplans));
 				break;
 			}
 		case T_Result:
@@ -202,10 +304,10 @@ exclude_scans(ConstraintAwareAppendState *state,
 			 */
 			return num_scans;
 		default:
-			elog(ERROR, "Invalid plan %d", nodeTag(plan));
+			elog(ERROR, "invalid plan %d", nodeTag(plan));
 	}
 
-	lc_info = list_head(append_rel_info);
+	lc_info = list_head(append_rel_list);
 
 	foreach(lc_plan, old_appendplans)
 	{
@@ -216,7 +318,7 @@ exclude_scans(ConstraintAwareAppendState *state,
 		{
 			Scan *scan = (Scan *) subplan;
 
-			if (!do_exclusion ||
+			if (!info->do_exclusion ||
 				!should_exclude_scan(scan, appinfo, restrictinfos, estate))
 			{
 				*appendplans = lappend(*appendplans, subplan);
@@ -231,8 +333,8 @@ exclude_scans(ConstraintAwareAppendState *state,
 		else if (nodeTag(subplan) == T_MergeAppend)
 		{
 			MergeAppend *ma = (MergeAppend *) subplan;
-			ListCell *lc;
 			List *mergeplans = ma->mergeplans;
+			ListCell *lc;
 
 			ma->mergeplans = NIL;
 
@@ -245,7 +347,7 @@ exclude_scans(ConstraintAwareAppendState *state,
 				{
 					Scan *scan = (Scan *) ma_plan;
 
-					if (!do_exclusion ||
+					if (!info->do_exclusion ||
 						!should_exclude_scan(scan, appinfo, restrictinfos, estate))
 					{
 						ma->mergeplans = lappend(ma->mergeplans, ma_plan);
@@ -262,8 +364,6 @@ exclude_scans(ConstraintAwareAppendState *state,
 		}
 	}
 
-	elog(NOTICE, "Num scans=%d", num_scans);
-
 	return num_scans;
 }
 
@@ -277,7 +377,6 @@ ca_append_begin(CustomScanState *node, EState *estate, int eflags)
 {
 	ConstraintAwareAppendState *state = (ConstraintAwareAppendState *) node;
 	Plan	   *subplan = copyObject(state->subplan);
-	//CustomScan *cscan = (CustomScan *) state->csstate.ss.ps.plan;
 
 	state->num_append_subplans = exclude_scans(state, subplan, estate);
 
@@ -347,9 +446,7 @@ static void
 ca_append_end(CustomScanState *node)
 {
 	if (node->custom_ps != NIL)
-	{
 		ExecEndNode(linitial(node->custom_ps));
-	}
 }
 
 static void
@@ -359,9 +456,7 @@ ca_append_rescan(CustomScanState *node)
 	node->ss.ps.ps_TupFromTlist = false;
 #endif
 	if (node->custom_ps != NIL)
-	{
 		ExecReScan(linitial(node->custom_ps));
-	}
 }
 
 static void
@@ -371,9 +466,9 @@ ca_append_explain(CustomScanState *node,
 {
 	CustomScan *cscan = (CustomScan *) node->ss.ps.plan;
 	ConstraintAwareAppendState *state = (ConstraintAwareAppendState *) node;
-	Oid			relid = linitial_oid(linitial(cscan->custom_private));
+	ConstraintAwareAppendInfo *info = (ConstraintAwareAppendInfo *) linitial(cscan->custom_private);
 
-	ExplainPropertyText("Hypertable", get_rel_name(relid), es);
+	ExplainPropertyText("Hypertable", get_rel_name(info->hypertable_relid), es);
 	ExplainPropertyInteger("Chunks left after exclusion", state->num_append_subplans, es);
 }
 
@@ -401,7 +496,7 @@ constraint_aware_append_state_create(CustomScan *cscan)
 }
 
 static CustomScanMethods constraint_aware_append_plan_methods = {
-	.CustomName = "ConstraintAwareAppend",
+	.CustomName = CUSTOM_NAME,
 	.CreateCustomScanState = constraint_aware_append_state_create,
 };
 
@@ -415,16 +510,14 @@ constraint_aware_append_plan_create(PlannerInfo *root,
 {
 	CustomScan *cscan = makeNode(CustomScan);
 	Plan	   *subplan = linitial(custom_plans);
-	RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
 	ConstraintAwareAppendPath *ca_path = (ConstraintAwareAppendPath *) path;
+	ConstraintAwareAppendInfo *ca_info = ca_path->info;
 
+	ca_info->clauses = list_copy(clauses);
 	cscan->scan.scanrelid = 0;	/* Not a real relation we are scanning */
 	cscan->scan.plan.targetlist = tlist;	/* Target list we expect as output */
 	cscan->custom_plans = custom_plans;
-	cscan->custom_private = list_make4(list_make1_oid(rte->relid),
-									   list_copy(root->append_rel_list),
-									   list_copy(clauses),
-									   list_make1_int(ca_path->perform_exclusion));
+	cscan->custom_private = list_make1(ca_info);
 	cscan->custom_scan_tlist = subplan->targetlist; /* Target list of tuples
 													 * we expect as input */
 	cscan->flags = path->flags;
@@ -434,24 +527,9 @@ constraint_aware_append_plan_create(PlannerInfo *root,
 }
 
 static CustomPathMethods constraint_aware_append_path_methods = {
-	.CustomName = "ConstraintAwareAppend",
+	.CustomName = CUSTOM_NAME,
 	.PlanCustomPath = constraint_aware_append_plan_create,
 };
-
-static inline List *
-remove_parent_subpath(PlannerInfo *root, List *subpaths, Oid parent_relid)
-{
-	Path	   *childpath;
-	Oid			relid;
-
-	childpath = linitial(subpaths);
-	relid = root->simple_rte_array[childpath->parent->relid]->relid;
-
-	if (relid == parent_relid)
-		subpaths = list_delete_first(subpaths);
-
-	return subpaths;
-}
 
 typedef struct PathSortInfo
 {
@@ -460,7 +538,10 @@ typedef struct PathSortInfo
 	Dimension *dim;
 	MergeAppendPath *ma;
 	PathKey *key;
+	ConstraintAwareAppendInfo *ca_info;
+	Cost startup_cost;
 	Cost total_cost;
+	Cache *ccache;
 } PathSortInfo;
 
 
@@ -554,56 +635,30 @@ expand_relation_arrays(PlannerInfo *root, int num_extra_relations)
 	return idx;
 }
 
-static List *
-sort_paths(PathSortInfo *sortinfo, List *paths)
+static ChunkPath *
+create_and_sort_chunk_paths(PathSortInfo *sortinfo, List *paths)
 {
 	int num_paths = list_length(paths);
 	ChunkPath *chunkpaths = palloc(sizeof(ChunkPath) * num_paths);
-	ListCell *lc_path, *lc_appinfo;
-	List *merge_append_paths = NIL;
-	List *append_rel_list = NIL;
+	ListCell *lc_path, *lc_rel;
 	int i = 0;
 
-	lc_appinfo = list_head(sortinfo->root->append_rel_list);
-
-	foreach(lc_path, paths) {
+	forboth(lc_path, paths, lc_rel, sortinfo->ca_info->append_rel_list) {
 		Path *path = lfirst(lc_path);
-		AppendRelInfo *appendinfo;
+		AppendRelInfo *relinfo = lfirst(lc_rel);
 		ChunkPath *cpath = &chunkpaths[i++];
 		RangeTblEntry *rte;
 
-		/* We need the match up AppendRelInfos with the corresponding path node
-		 * in order to later do runtime constraint exclusion. We can expect
-		 * relations in the append_rel_list to be in the same order as the
-		 * subpaths of the append node, but due to constraint exclusion there
-		 * might be more AppendRelInfos than subpaths. We need to skip those
-		 * AppendRelInfos that were exluded */
-		for (; lc_appinfo != NULL; lc_appinfo = lnext(lc_appinfo))
-		{
-			appendinfo = lfirst(lc_appinfo);
-
-			if (appendinfo->child_relid == path->parent->relid)
-				break;
-		}
-
-		if (lc_appinfo == NULL)
-			elog(ERROR, "no AppendRelInfo found for relation with RTE index %u", path->parent->relid);
-
-		/* FIXME: Could we expect something else than a chunk here? */
 		if (path->parent->reloptkind != RELOPT_OTHER_MEMBER_REL)
-		{
-			elog(NOTICE, "not a chunk");
-			return paths;
-		}
+			elog(ERROR, "relation is not a hypertable chunk");
 
-		/* FIXME: do proper cost calc. */
-		sortinfo->total_cost += (path->total_cost / 3);
-		rte = sortinfo->root->simple_rte_array[path->parent->relid];
+		rte = planner_rt_fetch(path->parent->relid, sortinfo->root);
 
 		if (NULL == rte)
 			elog(ERROR, "no range table entry for index %u", path->parent->relid);
 
-		cpath->chunk = chunk_get_by_relid(rte->relid, sortinfo->ht->space->num_dimensions, true);
+		//cpath->chunk = chunk_get_by_relid(rte->relid, sortinfo->ht->space->num_dimensions, false);
+		cpath->chunk = chunk_cache_get(sortinfo->ccache, rte->relid, sortinfo->ht->space->num_dimensions);
 
 		/* FIXME: Could we expect something else than a chunk here? */
 		if (NULL == cpath->chunk)
@@ -611,33 +666,50 @@ sort_paths(PathSortInfo *sortinfo, List *paths)
 
 		cpath->slice = hypercube_get_slice_by_dimension_id(cpath->chunk->cube, sortinfo->dim->fd.id);
 		cpath->path = path;
-		cpath->appendinfo = appendinfo;
-		Assert(appendinfo->child_relid == path->parent->relid);
+		cpath->appendinfo = relinfo;
+		Assert(relinfo->child_relid == path->parent->relid);
 		Assert(cpath->slice != NULL);
 	}
 
 	qsort_r(chunkpaths, num_paths, sizeof(ChunkPath), sortinfo, compar_path);
 
+	return chunkpaths;
+}
+
+static List *
+sort_paths(PathSortInfo *sortinfo, List *paths)
+{
+	int num_paths = list_length(paths);
+	ChunkPath *chunkpaths;
+	List *merge_append_paths = NIL;
+	List *append_rel_list = NIL;
+	int i = 0;
+
+	chunkpaths = create_and_sort_chunk_paths(sortinfo, paths);
+
 	paths = NIL;
 
+	/*
+	 * Chunk paths are now sorted on time. We need to find paths that are
+	 * overlapping in the time dimension and then replace each overlapping set
+	 * of paths with a MergeAppend. Paths can be overlapping if the, e.g., are
+	 * part of the same "space" partition.
+	 */
 	for (i = 0; i < num_paths; i++)
 	{
 		ChunkPath *cpath = &chunkpaths[i];
+		List *overlapping_paths = NIL;
 		MergeAppendPath *mappend = NULL;
 		Path *path = cpath->path;
 		int j;
-
-		append_rel_list = lappend(append_rel_list, cpath->appendinfo);
-		elog(NOTICE, "Handling path for chunk %s", NameStr(cpath->chunk->fd.table_name));
 
 		for (j = i + 1; j < num_paths; j++)
 		{
 			ChunkPath *cpath_next = &chunkpaths[j];
 
+			/* Does the next path overlap with the previou one? */
 			if (!dimension_slices_collide(cpath->slice, cpath_next->slice))
 				break;
-
-			append_rel_list = lappend(append_rel_list, cpath_next->appendinfo);
 
 			if (NULL == mappend)
 			{
@@ -645,28 +717,46 @@ sort_paths(PathSortInfo *sortinfo, List *paths)
 				 * copy the subpaths */
 				mappend = makeNode(MergeAppendPath);
 				memcpy(&mappend->path, &sortinfo->ma->path, sizeof(Path));
-				mappend->path.startup_cost = 0;
-				mappend->path.total_cost += cpath->path->total_cost;
+				mappend->path.startup_cost = cpath->path->startup_cost;
+				mappend->path.total_cost = cpath->path->total_cost;
+				mappend->path.rows = cpath->path->rows;
 				mappend->subpaths = lappend(mappend->subpaths, cpath->path);
+				append_rel_list = lappend(append_rel_list, cpath->appendinfo);
 				path = &mappend->path;
 				merge_append_paths = lappend(merge_append_paths, mappend);
 			}
 
+			if (list_length(overlapping_paths) == 0)
+				overlapping_paths = lappend(overlapping_paths, cpath);
+
+			overlapping_paths = lappend(overlapping_paths, cpath_next);
+
+			append_rel_list = lappend(append_rel_list, cpath_next->appendinfo);
 			mappend->subpaths = lappend(mappend->subpaths, cpath_next->path);
+			mappend->path.startup_cost += cpath_next->path->startup_cost;
 			mappend->path.total_cost += cpath_next->path->total_cost;
+			mappend->path.rows += cpath_next->path->rows;
 			cpath = &chunkpaths[++i];
 		}
 
+		sortinfo->startup_cost += path->startup_cost;
+		sortinfo->total_cost += path->total_cost;
 		paths = lappend(paths, path);
 	}
 
+
+	/*
+	 * Build RelOptInfos for the MergeAppend nodes and do cost calculation
+	 */
 	if (list_length(merge_append_paths) > 0)
 	{
+		ListCell *lc;
+
 		i = expand_relation_arrays(sortinfo->root, list_length(merge_append_paths));
 
-		foreach(lc_path, merge_append_paths)
+		foreach(lc, merge_append_paths)
 		{
-			MergeAppendPath *map = lfirst(lc_path);
+			MergeAppendPath *map = lfirst(lc);
 			RangeTblEntry *rte = make_subquery_rte(sortinfo->root, map->subpaths);
 			RelOptInfo *rel = add_other_rel(sortinfo->root, i, rte, NULL);
 			ListCell *lc;
@@ -682,17 +772,24 @@ sort_paths(PathSortInfo *sortinfo, List *paths)
 			}
 
 			sortinfo->root->parse->rtable = lappend(sortinfo->root->parse->rtable, rte);
+			cost_merge_append(&map->path,
+							  sortinfo->root,
+							  map->path.pathkeys,
+							  list_length(map->subpaths),
+							  map->path.startup_cost,
+							  map->path.total_cost,
+							  map->path.rows);
 			i++;
 		}
 	}
 
-	sortinfo->root->append_rel_list = append_rel_list;
+	sortinfo->ca_info->append_rel_list = append_rel_list;
 
 	return paths;
 }
 
 static Path *
-maybe_transform_merge_append_into_sorted_append(PlannerInfo *root, Hypertable *ht, Path *path)
+make_sorted_append(PlannerInfo *root, Hypertable *ht, Path *path, ConstraintAwareAppendInfo *ca_info)
 {
 	MergeAppendPath *ma = (MergeAppendPath *) path;
 	PathKey *key;
@@ -706,32 +803,36 @@ maybe_transform_merge_append_into_sorted_append(PlannerInfo *root, Hypertable *h
 
 	if (IsA(ecm->em_expr, Var)) {
 		Var *v = (Var *) ecm->em_expr;
-		RangeTblEntry *rte = root->simple_rte_array[v->varno];
+		RangeTblEntry *rte = planner_rt_fetch(v->varno, root);
 		const char *attname = get_relid_attribute_name(rte->relid, v->varattno);
 		Dimension *dim = hyperspace_get_dimension_by_name(ht->space, DIMENSION_TYPE_OPEN, attname);
 
 		if (NULL != dim)
 		{
-			AppendPath *append = makeNode(AppendPath);
+			AppendPath *append;
 			PathSortInfo info = {
 				.root = root,
 				.ht = ht,
 				.dim = dim,
 				.key = key,
 				.ma = ma,
+				.ca_info = ca_info,
+				.ccache = chunk_cache_pin(),
 			};
 
+			append = makeNode(AppendPath);
+			/* Copy basic info from the original merge append */
 			memcpy(&append->path, path, sizeof(Path));
 			append->path.type = T_AppendPath;
 			append->path.pathtype = T_Append;
+			append->subpaths = sort_paths(&info, ma->subpaths);
 			append->path.rows = ma->path.rows;
-			append->path.pathtarget = ma->path.pathtarget;
-			append->path.startup_cost = 0;
+			append->path.startup_cost = info.startup_cost;
+			append->path.total_cost = info.total_cost;
 #if PG10
 			append->partitioned_rels = ma->partitioned_rels;
 #endif
-			append->subpaths = sort_paths(&info, ma->subpaths);
-			append->path.total_cost = info.total_cost;
+			cache_release(info.ccache);
 
 			return &append->path;
 		}
@@ -739,70 +840,95 @@ maybe_transform_merge_append_into_sorted_append(PlannerInfo *root, Hypertable *h
 
 	return path;
 }
+
 /*
-static void
-print_subpaths(List *subpaths)
+ * Preprocess all append relations.
+ *
+ * Since we are doing constraint exclusion at execution time, we need to save
+ * some information about append relations that we need when executing the
+ * query. We need the list of append relations to match the subpath list so that
+ * we can efficiently iterate them in tandem. However, the list of append
+ * relations in the PlannerInfo doesn't match the Path nodes since the planner
+ * might already have pruned the subpaths list using regular constraint
+ * exclusion. Further, we would like to remove the hypertable's root table from
+ * the plan, since it doesn't have any tuples. Therefore, we create a new append
+ * relations list that matches the subpaths list.
+ */
+static inline List *
+preprocess_append_relations(PlannerInfo *root, List *subpaths, ConstraintAwareAppendInfo *info)
 {
-	ListCell *lc;
-	int i = 0;
+	ListCell *lc, *lc_prev = NULL, *lc_info = list_head(root->append_rel_list);
+	List *newpaths = NIL;
 
-	foreach(lc, subpaths) {
-		Path *path = lfirst(lc);
-
-		elog(NOTICE, "Subpath %d: relididx=%u",
-			 i++, path->parent->relid);
-	}
-}
-
-static void
-print_appendrelinfo(PlannerInfo *root)
-{
-	ListCell *lc;
-	int i = 0;
-
-	foreach(lc, root->append_rel_list)
+	foreach(lc, subpaths)
 	{
-		AppendRelInfo *info = lfirst(lc);
-		RelOptInfo *relopt = root->simple_rel_array[info->child_relid];
-		char *name = "";
+		Path *path = lfirst(lc);
+		Oid	 reloid = root->simple_rte_array[path->parent->relid]->relid;
+		AppendRelInfo *apprelinfo;
 
-		if (IS_SIMPLE_REL(relopt))
-			name = get_rel_name(root->simple_rte_array[relopt->relid]->relid);
+		/* Remove the main/root table since it has no tuples */
+		if (reloid == info->hypertable_relid)
+			continue;
 
-		elog(NOTICE, "AppendRelinfo %d: relididx=%u name=%s", i++, info->child_relid, name);
+		for (; NULL != lc_info; lc_info = lnext(lc_info))
+		{
+			apprelinfo = lfirst(lc_info);
+
+			if (apprelinfo->child_relid == path->parent->relid)
+				break;
+		}
+
+		if (NULL == lc_info)
+			elog(ERROR, "no append relation info for relation %s", get_rel_name(reloid));
+
+		info->append_rel_list = lappend(info->append_rel_list, apprelinfo);
+		newpaths = lappend(newpaths, path);
+		lc_prev = lc;
 	}
-}
-*/
-Path *
-constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *subpath, bool do_exclusion)
-{
-	ConstraintAwareAppendPath *path;
-	AppendRelInfo *appinfo;
-	Oid			relid;
 
+	return newpaths;
+}
+
+static Path *
+transform_append_path(PlannerInfo *root, Hypertable *ht, Path *path, ConstraintAwareAppendInfo *info)
+{
 	/*
-	 * Remove the main table from the append_rel_list and Append's subpaths
-	 * since it cannot contain any tuples
+	 * Remove the main table from the Append's subpaths since it cannot contain
+	 * any tuples
 	 */
-	switch (nodeTag(subpath))
+	switch (nodeTag(path))
 	{
 		case T_AppendPath:
 			{
-				AppendPath *append = (AppendPath *) subpath;
-				append->subpaths = remove_parent_subpath(root, append->subpaths, ht->main_table_relid);
+				AppendPath *append = (AppendPath *) path;
+				append->subpaths = preprocess_append_relations(root, append->subpaths, info);
 				break;
 			}
 		case T_MergeAppendPath:
 			{
-				MergeAppendPath *append = (MergeAppendPath *) subpath;
-				append->subpaths = remove_parent_subpath(root, append->subpaths, ht->main_table_relid);
-				subpath = maybe_transform_merge_append_into_sorted_append(root, ht, subpath);
+				MergeAppendPath *append = (MergeAppendPath *) path;
+				append->subpaths = preprocess_append_relations(root, append->subpaths, info);
+				path = make_sorted_append(root, ht, path, info);
 				break;
 			}
 		default:
-			elog(ERROR, "Invalid node type %u", nodeTag(subpath));
+			elog(ERROR, "unexpected node type %u", nodeTag(path));
 			break;
 	}
+
+	return path;
+}
+
+Path *
+constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *subpath, bool do_exclusion)
+{
+	ConstraintAwareAppendPath *path;
+	ConstraintAwareAppendInfo *info = constraint_aware_append_info_create();
+
+	info->hypertable_relid = ht->main_table_relid;
+	info->do_exclusion = do_exclusion;
+
+	subpath = transform_append_path(root, ht, subpath, info);
 
 	path = (ConstraintAwareAppendPath *) newNode(sizeof(ConstraintAwareAppendPath), T_CustomPath);
 	path->cpath.path.pathtype = T_CustomScan;
@@ -813,7 +939,7 @@ constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *sub
 	path->cpath.path.pathkeys = subpath->pathkeys;
 	path->cpath.path.param_info = subpath->param_info;
 	path->cpath.path.pathtarget = subpath->pathtarget;
-	path->perform_exclusion = do_exclusion;
+	path->info = info;
 
 	/*
 	 * Set flags. We can set CUSTOMPATH_SUPPORT_BACKWARD_SCAN and
@@ -827,11 +953,16 @@ constraint_aware_append_path_create(PlannerInfo *root, Hypertable *ht, Path *sub
 	path->cpath.custom_paths = list_make1(subpath);
 	path->cpath.methods = &constraint_aware_append_path_methods;
 
-	appinfo = linitial(root->append_rel_list);
-	relid = root->simple_rte_array[appinfo->child_relid]->relid;
-
-	if (relid == ht->main_table_relid)
-		root->append_rel_list = list_delete_first(root->append_rel_list);
-
 	return &path->cpath.path;
+}
+
+void
+_constraint_aware_append_init(void)
+{
+	RegisterExtensibleNodeMethods(&constraint_aware_append_info_methods);
+}
+
+void
+_constraint_aware_append_fini(void)
+{
 }

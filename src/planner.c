@@ -322,9 +322,6 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 			Path	   *path = *pathptr;
 			AppendOptimization appopt;
 
-			elog(NOTICE, "Found path %u (MergeAppendPath=%u AppendPath=%u) cost=%lf",
-				 nodeTag(path), T_MergeAppendPath, T_AppendPath, path->total_cost);
-
 			switch (nodeTag(path))
 			{
 				case T_MergeAppendPath:
@@ -332,11 +329,7 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 					appopt = should_optimize_append(path);
 
 					if (appopt != APPEND_NOOPT)
-					{
 						*pathptr = constraint_aware_append_path_create(root, ht, path, appopt == APPEND_EXCLUSION);
-						elog(NOTICE, "New cost %lf", (*pathptr)->total_cost);
-					}
-
 				default:
 					break;
 			}
