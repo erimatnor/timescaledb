@@ -5,6 +5,7 @@
 #include <access/htup.h>
 #include <access/tupdesc.h>
 #include <utils/hsearch.h>
+#include <foreign/foreign.h>
 
 #include "catalog.h"
 #include "chunk_constraint.h"
@@ -28,6 +29,7 @@ typedef struct Chunk
 	FormData_chunk fd;
 	Oid			table_id;
 	Oid			hypertable_relid;
+	List        *servers;
 
 	/*
 	 * The hypercube defines the chunks position in the N-dimensional space.

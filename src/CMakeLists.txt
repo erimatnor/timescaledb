@@ -71,6 +71,7 @@ set(HEADERS
   plan_add_hashagg.h
   process_utility.h
   scanner.h
+  server.h
   subspace_store.h
   tablespace.h
   trigger.h
@@ -113,6 +114,7 @@ set(SOURCES
   planner_utils.c
   process_utility.c
   scanner.c
+  server.c
   sort_transform.c
   subspace_store.c
   tablespace.c

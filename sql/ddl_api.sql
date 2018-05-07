@@ -148,3 +148,12 @@ AS '@MODULE_PATHNAME@', 'tablespace_detach_all_from_hypertable' LANGUAGE C VOLAT
 
 CREATE OR REPLACE FUNCTION show_tablespaces(hypertable REGCLASS) RETURNS SETOF NAME
 AS '@MODULE_PATHNAME@', 'tablespace_show' LANGUAGE C VOLATILE STRICT;
+
+
+CREATE OR REPLACE FUNCTION add_server(
+    server_name            NAME,
+    host                   NAME = NULL,
+    dbname                 NAME = NULL,
+    port                   SMALLINT = 5432
+) RETURNS VOID
+AS '@MODULE_PATHNAME@', 'server_add' LANGUAGE C VOLATILE;

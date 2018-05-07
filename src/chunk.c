@@ -96,12 +96,13 @@ chunk_insert_lock(Chunk *chunk, LOCKMODE lock)
 }
 
 static void
-chunk_fill(Chunk *chunk, HeapTuple tuple)
+chunk_fill(Chunk *chunk, HeapTuple tuple, TupleDesc desc)
 {
 	memcpy(&chunk->fd, GETSTRUCT(tuple), sizeof(FormData_chunk));
 	chunk->table_id = get_relname_relid(chunk->fd.table_name.data,
 										get_namespace_oid(chunk->fd.schema_name.data, true));
 	chunk->hypertable_relid = parent_relid(chunk->table_id);
+	chunk->servers = NIL;
 }
 
 /*-
@@ -526,7 +527,7 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 {
 	Chunk	   *chunk = arg;
 
-	chunk_fill(chunk, ti->tuple);
+	chunk_fill(chunk, ti->tuple, ti->desc);
 	return false;
 }
 
