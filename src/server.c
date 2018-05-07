@@ -1,16 +1,15 @@
 #include <postgres.h>
-#include <fmgr.h>
+#include <access/xact.h>
 #include <foreign/foreign.h>
 #include <nodes/parsenodes.h>
 #include <nodes/makefuncs.h>
 #include <commands/dbcommands.h>
 #include <commands/defrem.h>
 #include <miscadmin.h>
+#include <fmgr.h>
 
 #include "server.h"
 #include "compat.h"
-
-//Datum add_server(PG_FUNCTION_ARGS);
 
 TS_FUNCTION_INFO_V1(server_add);
 
@@ -36,6 +35,7 @@ server_add(PG_FUNCTION_ARGS)
 		CreateForeignServerStmt stmt = {
 			.type = T_CreateForeignServerStmt,
 			.servername = NameStr(*server_name),
+			.fdwname = "timescaledb_fdw",
 			.options = list_make3(makeDefElem("host", (Node *) makeString(NameStr(*server_name)), -1),
 								  makeDefElem("dbname", (Node *) makeString(pstrdup(dbname)), -1),
 								  makeDefElem("port", (Node *) makeInteger(port), -1)),
@@ -45,10 +45,11 @@ server_add(PG_FUNCTION_ARGS)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 (errmsg("invalid host"),
-					  (errhint("A host must be specified when a foreign server does not already exist.")))));
+					  (errhint("A hostname or IP address must be specified when a foreign server does not already exist.")))));
 
 
 		objaddr = CreateForeignServer(&stmt);
+		CommandCounterIncrement();
 		server = GetForeignServer(objaddr.objectId);
 	}
 

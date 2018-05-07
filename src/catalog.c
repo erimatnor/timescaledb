@@ -100,7 +100,7 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 	[CHUNK_SERVER_MAPPING] = {
 		.length = _MAX_CHUNK_SERVER_MAPPING_INDEX,
 		.names = (char *[]) {
-			[CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX] = "chunk_server_mapping_chunk_id_server_name_idx",
+			[CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX] = "chunk_server_mapping_chunk_id_server_name_key",
 		}
 	}
 };
