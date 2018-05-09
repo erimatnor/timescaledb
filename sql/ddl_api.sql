@@ -152,7 +152,7 @@ AS '@MODULE_PATHNAME@', 'tablespace_show' LANGUAGE C VOLATILE STRICT;
 
 CREATE OR REPLACE FUNCTION add_server(
     server_name            NAME,
-    host                   NAME = NULL,
+    host                   TEXT = NULL,
     dbname                 NAME = NULL,
     port                   SMALLINT = 5432
 ) RETURNS VOID

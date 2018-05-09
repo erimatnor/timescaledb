@@ -468,7 +468,11 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 
 enum Anum_server
 {
-	Anum_server_name = 1,
+	Anum_server_id = 1,
+	Anum_server_name,
+	Anum_server_dbname,
+	Anum_server_host,
+	Anum_server_port,
 	_Anum_server_max,
 };
 
@@ -477,7 +481,11 @@ enum Anum_server
 
 typedef struct FormData_server
 {
-	NameData server_name;
+	int32 id;
+	NameData name;
+	text     dbname;
+	text     host;
+	int32    port;
 } FormData_server;
 
 typedef FormData_server *Form_server;
@@ -485,19 +493,31 @@ typedef FormData_server *Form_server;
 enum
 {
 	SERVER_PKEY_IDX = 0,
+	SERVER_NAME_IDX,
 	_MAX_SERVER_INDEX,
 };
 
 enum Anum_server_pkey_idx
 {
-	Anum_server_pkey_idx_server_name = 1,
+	Anum_server_pkey_idx_id = 1,
 	_Anum_server_pkey_idx_max,
 };
 
 typedef struct FormData_server_pkey_idx
 {
-	NameData server_name;
+	int32 id;
 } FormData_server_pkey_idx;
+
+enum Anum_server_name_idx
+{
+	Anum_server_name_idx_id = 1,
+	_Anum_server_name_idx_max,
+};
+
+typedef struct FormData_server_name_idx
+{
+	NameData server_name;
+} FormData_server_name_idx;
 
 
 #define CHUNK_SERVER_MAPPING_TABLE_NAME "chunk_server_mapping"
@@ -505,27 +525,36 @@ typedef struct FormData_server_pkey_idx
 enum Anum_chunk_server_mapping
 {
 	Anum_chunk_server_mapping_chunk_id = 1,
-	Anum_chunk_server_mapping_server_name,
+	Anum_chunk_server_mapping_server_id,
 	_Anum_chunk_server_mapping_max,
 };
 
+#define Natts_chunk_server_mapping \
+	(_Anum_chunk_server_mapping_max - 1)
+
+typedef struct FormData_chunk_server_mapping
+{
+	int32 chunk_id;
+	int32 server_id;
+} FormData_chunk_server_mapping;
+
 enum
 {
-	CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX,
+	CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_ID_IDX,
 	_MAX_CHUNK_SERVER_MAPPING_INDEX,
 };
 
 enum Anum_chunk_server_mapping_chunk_id_server_name_idx
 {
 	Anum_chunk_server_mapping_chunk_id_server_name_idx_chunk_id = 1,
-	Anum_chunk_server_mapping_chunk_id_server_name_idx_server_name,
+	Anum_chunk_server_mapping_chunk_id_server_name_idx_server_id,
 	_Anum_chunk_server_mapping_chunk_id_server_name_idx_max,
 };
 
-typedef struct FormData_chunk_server_mapping_chunk_id_server_name_idx
+typedef struct FormData_chunk_server_mapping_chunk_id_server_id_idx
 {
 	int32 chunk_id;
-	NameData server_name;
+	int32 server_id;
 } FormData_chunk_server_mapping_chunk_id_server_name_idx;
 
 #define MAX(a, b)								\

@@ -95,12 +95,13 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 		.length = _MAX_SERVER_INDEX,
 		.names = (char *[]) {
 			[SERVER_PKEY_IDX] = "server_pkey",
+			[SERVER_NAME_IDX] = "server_name_key",
 		}
 	},
 	[CHUNK_SERVER_MAPPING] = {
 		.length = _MAX_CHUNK_SERVER_MAPPING_INDEX,
 		.names = (char *[]) {
-			[CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX] = "chunk_server_mapping_chunk_id_server_name_key",
+			[CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_ID_IDX] = "chunk_server_mapping_chunk_id_server_id_key",
 		}
 	}
 };
@@ -113,7 +114,7 @@ static const char *catalog_table_serial_id_names[_MAX_CATALOG_TABLES] = {
 	[CHUNK_CONSTRAINT] = CATALOG_SCHEMA_NAME ".chunk_constraint_name",
 	[CHUNK_INDEX] = NULL,
 	[TABLESPACE] = CATALOG_SCHEMA_NAME ".tablespace_id_seq",
-	[SERVER] = NULL,
+	[SERVER] = CATALOG_SCHEMA_NAME ".server_id_seq",
 	[CHUNK_SERVER_MAPPING] = NULL,
 };
 

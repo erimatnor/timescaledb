@@ -144,14 +144,19 @@ ON _timescaledb_catalog.chunk_index(hypertable_id, hypertable_index_name);
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '');
 
 CREATE TABLE IF NOT EXISTS _timescaledb_catalog.server (
-    server_name     NAME   NOT NULL     PRIMARY KEY
+    id              SERIAL  NOT NULL     PRIMARY KEY,
+    name            NAME    NOT NULL     UNIQUE,
+    host            TEXT    NOT NULL,
+    dbname          TEXT    NOT NULL,
+    port            INTEGER NOT NULL
 );
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.server', '');
+SELECT pg_catalog.pg_extension_config_dump(pg_get_serial_sequence('_timescaledb_catalog.server','id'), '');
 
 CREATE TABLE IF NOT EXISTS _timescaledb_catalog.chunk_server_mapping (
-    chunk_id        INT    NOT NULL     REFERENCES _timescaledb_catalog.chunk(id),
-    server_name     NAME   NOT NULL     REFERENCES _timescaledb_catalog.server(server_name),
-    UNIQUE(chunk_id, server_name)
+    chunk_id        INTEGER NOT NULL     REFERENCES _timescaledb_catalog.chunk(id),
+    server_id       INTEGER NOT NULL     REFERENCES _timescaledb_catalog.server(id),
+    UNIQUE(chunk_id, server_id)
 );
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_server_mapping', '');
 
