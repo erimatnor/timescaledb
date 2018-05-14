@@ -49,6 +49,7 @@ set(HEADERS
   compat-endian.h
   compat-msvc-enter.h
   compat-msvc-exit.h
+  connection.h
   constraint_aware_append.h
   copy.h
   dimension.h
@@ -90,6 +91,7 @@ set(SOURCES
   chunk_dispatch_state.c
   chunk_index.c
   chunk_insert_state.c
+  connection.c
   constraint_aware_append.c
   copy.c
   dimension.c

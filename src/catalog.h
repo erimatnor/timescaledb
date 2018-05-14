@@ -462,7 +462,7 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 {
 	int32		hypertable_id;
 	NameData	tablespace_name;
-}			FormData_tablespace_hypertable_id_tablespace_name_idx;
+} FormData_tablespace_hypertable_id_tablespace_name_idx;
 
 #define SERVER_TABLE_NAME "server"
 
@@ -471,8 +471,8 @@ enum Anum_server
 	Anum_server_id = 1,
 	Anum_server_name,
 	Anum_server_dbname,
-	Anum_server_host,
 	Anum_server_port,
+	Anum_server_host,
 	_Anum_server_max,
 };
 
@@ -483,9 +483,9 @@ typedef struct FormData_server
 {
 	int32 id;
 	NameData name;
-	text     dbname;
-	text     host;
+	NameData dbname;
 	int32    port;
+	text     host;
 } FormData_server;
 
 typedef FormData_server *Form_server;
@@ -510,7 +510,7 @@ typedef struct FormData_server_pkey_idx
 
 enum Anum_server_name_idx
 {
-	Anum_server_name_idx_id = 1,
+	Anum_server_name_idx_name = 1,
 	_Anum_server_name_idx_max,
 };
 

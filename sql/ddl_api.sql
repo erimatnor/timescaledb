@@ -154,6 +154,6 @@ CREATE OR REPLACE FUNCTION add_server(
     server_name            NAME,
     host                   TEXT = NULL,
     dbname                 NAME = NULL,
-    port                   SMALLINT = 5432
+    port                   INTEGER = 5432
 ) RETURNS VOID
 AS '@MODULE_PATHNAME@', 'server_add' LANGUAGE C VOLATILE;
