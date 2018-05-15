@@ -58,6 +58,7 @@ set(HEADERS
   errors.h
   event_trigger.h
   extension.h
+  fdw.h
   guc.h
   hypercube.h
   hypertable_cache.h
@@ -94,6 +95,7 @@ set(SOURCES
   connection.c
   constraint_aware_append.c
   copy.c
+  deparse.c
   dimension.c
   dimension_slice.c
   dimension_vector.c
@@ -109,6 +111,7 @@ set(SOURCES
   hypertable_restrict_info.c
   indexing.c
   init.c
+  option.c
   partitioning.c
   planner.c
   plan_expand_hypertable.c
@@ -118,6 +121,7 @@ set(SOURCES
   process_utility.c
   scanner.c
   server.c
+  shippable.c
   sort_transform.c
   subspace_store.c
   tablespace.c
@@ -127,6 +131,14 @@ set(SOURCES
 
 configure_file(version.h.in version.h)
 set(GITCOMMIT_H ${CMAKE_CURRENT_BINARY_DIR}/gitcommit.h)
+
+find_library(LIBPQ_LIB
+  libpq pq
+  HINTS ${PG_LIBDIR})
+
+if (NOT LIBPQ_LIB)
+  message(FATAL_ERROR "Unable to find 'libpq'")
+endif ()
 
 if (WIN32)
   add_custom_command(
@@ -172,6 +184,8 @@ add_library(${PROJECT_NAME} MODULE ${SOURCES} ${HEADERS} ${GITCOMMIT_H})
 set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
     PREFIX "")
+
+target_link_libraries(${PROJECT_NAME} "${LIBPQ_LIB}")
 
 install(
   TARGETS ${PROJECT_NAME}

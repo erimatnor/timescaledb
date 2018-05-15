@@ -5,7 +5,6 @@
 
 typedef struct Server
 {
-	FormData_server fd;
 } Server;
 
 extern Server *server_get_by_name(const char *server_name);

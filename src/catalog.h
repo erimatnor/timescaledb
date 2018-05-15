@@ -30,7 +30,6 @@ typedef enum CatalogTable
 	CHUNK_CONSTRAINT,
 	CHUNK_INDEX,
 	TABLESPACE,
-	SERVER,
 	CHUNK_SERVER_MAPPING,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
@@ -464,68 +463,13 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 	NameData	tablespace_name;
 } FormData_tablespace_hypertable_id_tablespace_name_idx;
 
-#define SERVER_TABLE_NAME "server"
-
-enum Anum_server
-{
-	Anum_server_id = 1,
-	Anum_server_name,
-	Anum_server_dbname,
-	Anum_server_port,
-	Anum_server_host,
-	_Anum_server_max,
-};
-
-#define Natts_server \
-	(_Anum_server_max - 1)
-
-typedef struct FormData_server
-{
-	int32 id;
-	NameData name;
-	NameData dbname;
-	int32    port;
-	text     host;
-} FormData_server;
-
-typedef FormData_server *Form_server;
-
-enum
-{
-	SERVER_PKEY_IDX = 0,
-	SERVER_NAME_IDX,
-	_MAX_SERVER_INDEX,
-};
-
-enum Anum_server_pkey_idx
-{
-	Anum_server_pkey_idx_id = 1,
-	_Anum_server_pkey_idx_max,
-};
-
-typedef struct FormData_server_pkey_idx
-{
-	int32 id;
-} FormData_server_pkey_idx;
-
-enum Anum_server_name_idx
-{
-	Anum_server_name_idx_name = 1,
-	_Anum_server_name_idx_max,
-};
-
-typedef struct FormData_server_name_idx
-{
-	NameData server_name;
-} FormData_server_name_idx;
-
 
 #define CHUNK_SERVER_MAPPING_TABLE_NAME "chunk_server_mapping"
 
 enum Anum_chunk_server_mapping
 {
 	Anum_chunk_server_mapping_chunk_id = 1,
-	Anum_chunk_server_mapping_server_id,
+	Anum_chunk_server_mapping_server_name,
 	_Anum_chunk_server_mapping_max,
 };
 
@@ -540,7 +484,8 @@ typedef struct FormData_chunk_server_mapping
 
 enum
 {
-	CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_ID_IDX,
+	CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX,
+	CHUNK_SERVER_MAPPING_SERVER_NAME_IDX,
 	_MAX_CHUNK_SERVER_MAPPING_INDEX,
 };
 
@@ -568,8 +513,7 @@ typedef struct FormData_chunk_server_mapping_chunk_id_server_id_idx
 					MAX(_MAX_CHUNK_INDEX_INDEX,							\
 						MAX(_MAX_TABLESPACE_INDEX,						\
 							MAX(_MAX_CHUNK_INDEX,						\
-								MAX(_MAX_SERVER_INDEX,					\
-									_MAX_CHUNK_SERVER_MAPPING_INDEX))))))))
+									_MAX_CHUNK_SERVER_MAPPING_INDEX)))))))
 
 typedef enum CacheType
 {

@@ -14,6 +14,7 @@
 #include <miscadmin.h>
 #include <parser/parsetree.h>
 #include <rewrite/rewriteManip.h>
+#include <foreign/fdwapi.h>
 
 #include "errors.h"
 #include "chunk_insert_state.h"
@@ -21,6 +22,7 @@
 #include "chunk_dispatch_state.h"
 #include "compat.h"
 #include "chunk_index.h"
+#include "fdw.h"
 
 /*
  * Create a new RangeTblEntry for the chunk in the executor's range table and
@@ -200,6 +202,8 @@ create_chunk_result_relation_info(ChunkDispatch *dispatch, Relation rel, Index r
 	rri->ri_projectReturning = rri_orig->ri_projectReturning;
 	rri->ri_onConflictSetProj = rri_orig->ri_onConflictSetProj;
 	rri->ri_onConflictSetWhere = rri_orig->ri_onConflictSetWhere;
+	rri->ri_FdwRoutine = fdw_get_routine();
+	rri->ri_usesFdwDirectModify = true;
 
 	create_chunk_rri_constraint_expr(rri, rel);
 
