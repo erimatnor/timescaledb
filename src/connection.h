@@ -1,0 +1,7 @@
+#ifndef TIMESCALEDB_CONNECTION_H
+#define TIMESCALEDB_CONNECTION_H
+
+#include <postgres.h>
+
+
+#endif /* TIMESCALEDB_CONNECTION_H */
