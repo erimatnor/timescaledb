@@ -1115,6 +1115,7 @@ postgresGetForeignPlan(PlannerInfo *root,
 	StringInfoData sql;
 	ListCell   *lc;
 
+	elog(NOTICE, "GetForeignPlan");
 	if (IS_SIMPLE_REL(foreignrel))
 	{
 		/*
@@ -1562,12 +1563,13 @@ postgresPlanForeignModify(PlannerInfo *root,
 
 	initStringInfo(&sql);
 
+	elog(NOTICE, "Planning foreign modify");
 	/*
 	 * Core code already has some lock on each rel being planned, so we can
 	 * use NoLock here.
 	 */
 	rel = heap_open(rte->relid, NoLock);
-
+	elog(NOTICE, "Planning foreign modify done");
 	/*
 	 * In an INSERT, we transmit all columns that are defined in the foreign
 	 * table.  In an UPDATE, we transmit only columns that were explicitly
@@ -1683,6 +1685,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	bool		isvarlena;
 	ListCell   *lc;
 
+	elog(NOTICE, "Being Foreign Modify");
 	/*
 	 * Do nothing in EXPLAIN (no ANALYZE) case.  resultRelInfo->ri_FdwState
 	 * stays NULL.

@@ -9,8 +9,16 @@ chunk_dispatch_info_copy(struct ExtensibleNode *newnode,
 {
 	ChunkDispatchInfo *newinfo = (ChunkDispatchInfo *) newnode;
 	const ChunkDispatchInfo *oldinfo = (const ChunkDispatchInfo *) oldnode;
+	Size sql_len = oldinfo->deparsed_sql != NULL ? strlen(oldinfo->deparsed_sql) + 1 : 0;
 
 	newinfo->hypertable_relid = oldinfo->hypertable_relid;
+	newinfo->deparsed_sql = NULL;
+
+	if (sql_len > 0)
+	{
+		newinfo->deparsed_sql = palloc(sql_len);
+		StrNCpy(newinfo->deparsed_sql, oldinfo->deparsed_sql, sql_len);
+	}
 }
 
 static bool

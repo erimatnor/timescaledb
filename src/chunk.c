@@ -5,6 +5,7 @@
 #include <catalog/pg_inherits.h>
 #include <commands/trigger.h>
 #include <commands/tablecmds.h>
+#include <commands/defrem.h>
 #include <tcop/tcopprot.h>
 #include <access/htup.h>
 #include <access/htup_details.h>
@@ -103,6 +104,7 @@ chunk_fill(Chunk *chunk, HeapTuple tuple, TupleDesc desc)
 										get_namespace_oid(chunk->fd.schema_name.data, true));
 	chunk->hypertable_relid = parent_relid(chunk->table_id);
 	chunk->servers = NIL;
+	chunk->relkind = RELKIND_RELATION;
 }
 
 /*-
@@ -382,12 +384,12 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 	Relation	rel;
 	ObjectAddress objaddr;
 	int			sec_ctx;
-	CreateStmt	stmt = {
-		.type = T_CreateStmt,
-		.relation = makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), 0),
-		.inhRelations = list_make1(makeRangeVar(NameStr(ht->fd.schema_name), NameStr(ht->fd.table_name), 0)),
-		.tablespacename = hypertable_select_tablespace_name(ht, chunk),
-		.options = get_reloptions(ht->main_table_relid),
+	CreateForeignTableStmt	stmt = {
+		.base.type = T_CreateStmt,
+		.base.relation = makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), 0),
+		.base.inhRelations = list_make1(makeRangeVar(NameStr(ht->fd.schema_name), NameStr(ht->fd.table_name), 0)),
+		.base.tablespacename = hypertable_select_tablespace_name(ht, chunk),
+		.base.options = get_reloptions(ht->main_table_relid),
 	};
 	Oid			uid,
 				saved_uid;
@@ -408,14 +410,23 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 	if (uid != saved_uid)
 		SetUserIdAndSecContext(uid, sec_ctx | SECURITY_LOCAL_USERID_CHANGE);
 
-	objaddr = DefineRelation(&stmt,
-							 RELKIND_RELATION,
+
+
+	objaddr = DefineRelation(&stmt.base,
+							 //RELKIND_RELATION,
+							 RELKIND_FOREIGN_TABLE,
 							 rel->rd_rel->relowner,
 							 NULL
 #if PG10
 							 ,NULL
 #endif
 		);
+
+	if (true)
+	{
+		stmt.servername = "foo";
+		CreateForeignTable(&stmt, objaddr.objectId);
+	}
 
 	if (uid != saved_uid)
 		SetUserIdAndSecContext(saved_uid, sec_ctx);
@@ -474,12 +485,15 @@ chunk_create_after_lock(Hypertable *ht, Point *p, const char *schema, const char
 							 chunk->hypertable_relid,
 							 chunk->fd.hypertable_id);
 
-	trigger_create_all_on_chunk(ht, chunk);
+	if (chunk->relkind == RELKIND_RELATION)
+	{
+		trigger_create_all_on_chunk(ht, chunk);
 
-	chunk_index_create_all(chunk->fd.hypertable_id,
-						   chunk->hypertable_relid,
-						   chunk->fd.id,
-						   chunk->table_id);
+		chunk_index_create_all(chunk->fd.hypertable_id,
+							   chunk->hypertable_relid,
+							   chunk->fd.id,
+							   chunk->table_id);
+	}
 
 	return chunk;
 }
@@ -515,6 +529,7 @@ chunk_create_stub(int32 id, int16 num_constraints)
 
 	chunk = palloc0(sizeof(Chunk));
 	chunk->fd.id = id;
+	chunk->relkind = RELKIND_FOREIGN_TABLE;//RELKIND_RELATION;
 
 	if (num_constraints > 0)
 		chunk->constraints = chunk_constraints_alloc(num_constraints, CurrentMemoryContext);

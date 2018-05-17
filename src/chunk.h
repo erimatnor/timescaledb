@@ -27,6 +27,7 @@ typedef struct Hypertable Hypertable;
 typedef struct Chunk
 {
 	FormData_chunk fd;
+	char        relkind;
 	Oid			table_id;
 	Oid			hypertable_relid;
 	List        *servers;

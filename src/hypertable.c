@@ -11,6 +11,8 @@
 #include <nodes/memnodes.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_inherits_fn.h>
+#include <catalog/indexing.h>
+#include <catalog/pg_foreign_table.h>
 #include <commands/tablespace.h>
 #include <commands/dbcommands.h>
 #include <commands/schemacmds.h>
@@ -847,6 +849,58 @@ hypertable_create_schema(const char *schema_name)
 #endif
 		);
 }
+
+/*
+static void
+hypertable_make_foreign(Hypertable *ht)
+{
+	Relation	rel;
+	HeapTuple	tuple,
+				newtuple;
+	Datum		values[MAX(Natts_pg_class, Natts_pg_foreign_table)];
+	bool		nulls[MAX(Natts_pg_class, Natts_pg_foreign_table)],
+				replace[MAX(Natts_pg_class, Natts_pg_foreign_table)];
+
+	rel = heap_open(RelationRelationId, RowExclusiveLock);
+	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(ht->main_table_relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", ht->main_table_relid);
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replace, false, sizeof(replace));
+	values[Anum_pg_class_relkind - 1] = CharGetDatum(RELKIND_FOREIGN_TABLE);
+	nulls[Anum_pg_class_relkind - 1] = false;
+	replace[Anum_pg_class_relkind - 1] = true;
+	newtuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
+								 values, nulls, replace);
+
+	CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
+	heap_freetuple(newtuple);
+	heap_close(rel, RowExclusiveLock);
+
+	rel = heap_open(ForeignTableRelationId, RowExclusiveLock);
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	#define Anum_pg_foreign_table_ftrelid			1
+#define Anum_pg_foreign_table_ftserver			2
+#define Anum_pg_foreign_table_ftoptions			3
+	values[Anum_pg_foreign_table_ftrelid - 1] = ObjectIdGetDatum(ht->main_table_relid);
+	values[Anum_pg_foreign_table_ftserver - 1] = ObjectIdGetDatum(
+	nulls[Anum_pg_class_relkind - 1] = false;
+	replace[Anum_pg_class_relkind - 1] = true;
+	newtuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
+								 values, nulls, replace);
+
+	CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
+	heap_freetuple(newtuple);
+	heap_close(rel, RowExclusiveLock);
+
+	CommandCounterIncrement();
+}
+*/
 
 TS_FUNCTION_INFO_V1(hypertable_create);
 
