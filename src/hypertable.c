@@ -9,6 +9,7 @@
 #include <utils/acl.h>
 #include <utils/snapmgr.h>
 #include <nodes/memnodes.h>
+#include <nodes/makefuncs.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_inherits_fn.h>
 #include <catalog/indexing.h>
@@ -16,6 +17,7 @@
 #include <commands/tablespace.h>
 #include <commands/dbcommands.h>
 #include <commands/schemacmds.h>
+#include <commands/defrem.h>
 #include <storage/lmgr.h>
 #include <miscadmin.h>
 
@@ -35,6 +37,7 @@
 #include "guc.h"
 #include "errors.h"
 #include "copy.h"
+#include "server.h"
 
 Oid
 rel_get_owner(Oid relid)
@@ -89,6 +92,7 @@ hypertable_from_tuple(HeapTuple tuple, MemoryContext mctx)
 	h->main_table_relid = get_relname_relid(NameStr(h->fd.table_name), namespace_oid);
 	h->space = dimension_scan(h->fd.id, h->main_table_relid, h->fd.num_dimensions, mctx);
 	h->chunk_cache = subspace_store_init(h->space, mctx, guc_max_cached_chunks_per_hypertable);
+	h->servers = server_get_list(); /* TODO: Support per-hypertable server lists */
 
 	return h;
 }
@@ -851,6 +855,53 @@ hypertable_create_schema(const char *schema_name)
 }
 
 /*
+ * Recreate the hypertable's CREATE TABLE statement.
+ *
+ *
+ */
+static char *
+hypertable_generate_create_stmt(Hypertable *ht)
+{
+	StringInfo stmt = makeStringInfo();
+	Relation rel = RelationIdGetRelation(ht->main_table_relid);
+	int i;
+
+	appendStringInfo(stmt, "CREATE TABLE \"%s\".\"%s\" (",
+					 NameStr(ht->fd.schema_name),
+					 NameStr(ht->fd.table_name));
+
+	for (i = 0; i < rel->rd_att->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(rel->rd_att, i);
+
+		if (attr->attisdropped)
+			continue;
+
+		appendStringInfo(stmt, "\"%s\" %s",
+						 NameStr(attr->attname),
+						 format_type_with_typemod_qualified(attr->atttypid, attr->atttypmod));
+
+		if (i != (rel->rd_att->natts - 1))
+			appendStringInfoString(stmt, ", ");
+	}
+
+	appendStringInfoChar(stmt, ')');
+
+	RelationClose(rel);
+
+	return stmt->data;
+}
+
+static void
+hypertable_create_remotely(Hypertable *ht)
+{
+	const char *stmt = hypertable_generate_create_stmt(ht);
+
+	elog(NOTICE, "Remote hypertable stmt: '%s'", stmt);
+
+	server_exec_on_all(ht->servers, stmt);
+}
+
 static void
 hypertable_make_foreign(Hypertable *ht)
 {
@@ -860,6 +911,15 @@ hypertable_make_foreign(Hypertable *ht)
 	Datum		values[MAX(Natts_pg_class, Natts_pg_foreign_table)];
 	bool		nulls[MAX(Natts_pg_class, Natts_pg_foreign_table)],
 				replace[MAX(Natts_pg_class, Natts_pg_foreign_table)];
+	CreateForeignTableStmt stmt = {
+		.base.type = T_CreateForeignTableStmt,
+		.base.relation = makeRangeVar(NameStr(ht->fd.schema_name), NameStr(ht->fd.table_name), 0),
+	};
+
+	if (list_length(ht->servers) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+				 (errmsg("hypertable has no associated servers"))));
 
 	rel = heap_open(RelationRelationId, RowExclusiveLock);
 	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(ht->main_table_relid));
@@ -867,6 +927,7 @@ hypertable_make_foreign(Hypertable *ht)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", ht->main_table_relid);
 
+	/* Change relkind in pg_class */
 	memset(values, 0, sizeof(values));
 	memset(nulls, false, sizeof(nulls));
 	memset(replace, false, sizeof(replace));
@@ -880,27 +941,13 @@ hypertable_make_foreign(Hypertable *ht)
 	heap_freetuple(newtuple);
 	heap_close(rel, RowExclusiveLock);
 
-	rel = heap_open(ForeignTableRelationId, RowExclusiveLock);
-
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-	#define Anum_pg_foreign_table_ftrelid			1
-#define Anum_pg_foreign_table_ftserver			2
-#define Anum_pg_foreign_table_ftoptions			3
-	values[Anum_pg_foreign_table_ftrelid - 1] = ObjectIdGetDatum(ht->main_table_relid);
-	values[Anum_pg_foreign_table_ftserver - 1] = ObjectIdGetDatum(
-	nulls[Anum_pg_class_relkind - 1] = false;
-	replace[Anum_pg_class_relkind - 1] = true;
-	newtuple = heap_modify_tuple(tuple, RelationGetDescr(rel),
-								 values, nulls, replace);
-
-	CatalogTupleUpdate(rel, &newtuple->t_self, newtuple);
-	heap_freetuple(newtuple);
-	heap_close(rel, RowExclusiveLock);
+	stmt.servername = linitial(ht->servers);
+	CreateForeignTable(&stmt, ht->main_table_relid);
 
 	CommandCounterIncrement();
+
+	hypertable_create_remotely(ht);
 }
-*/
 
 TS_FUNCTION_INFO_V1(hypertable_create);
 
@@ -1099,6 +1146,9 @@ hypertable_create(PG_FUNCTION_ARGS)
 
 	if (create_default_indexes)
 		indexing_create_default_indexes(ht);
+
+	if (guc_frontend)
+		hypertable_make_foreign(ht);
 
 	cache_release(hcache);
 

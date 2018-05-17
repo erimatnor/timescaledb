@@ -1,17 +1,22 @@
 #include <postgres.h>
 #include <access/xact.h>
+#include <access/genam.h>
+#include <access/htup_details.h>
 #include <foreign/foreign.h>
 #include <nodes/parsenodes.h>
 #include <nodes/makefuncs.h>
+#include <catalog/pg_foreign_server.h>
 #include <commands/dbcommands.h>
 #include <commands/defrem.h>
 #include <utils/builtins.h>
+#include <utils/fmgroids.h>
 #include <miscadmin.h>
 #include <fmgr.h>
 
 #include "server.h"
 #include "compat.h"
 #include "catalog.h"
+#include "fdw.h"
 
 TS_FUNCTION_INFO_V1(server_add);
 
@@ -63,5 +68,64 @@ server_add(PG_FUNCTION_ARGS)
 
 	Assert(server != NULL);
 
+	// Need user mapping:
+	//server_exec_on_all(list_make1(server->servername), "CREATE EXTENSION IF NOT EXISTS timescaledb");
+
 	PG_RETURN_VOID();
+}
+
+List *
+server_get_list(void)
+{
+	HeapTuple	tuple;
+	ScanKeyData scankey[1];
+	SysScanDesc scandesc;
+	Relation rel;
+	ForeignDataWrapper *fdw = GetForeignDataWrapperByName("timescaledb", false);
+	List *servers = NIL;
+
+	rel = heap_open(ForeignServerRelationId, AccessShareLock);
+
+	ScanKeyInit(&scankey[0],
+				Anum_pg_foreign_server_srvfdw,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(fdw->fdwid));
+
+	scandesc = systable_beginscan(rel, InvalidOid, false, NULL, 1, scankey);
+
+	tuple = systable_getnext(scandesc);
+
+	/* We assume that there can be at most one matching tuple */
+	if (HeapTupleIsValid(tuple))
+	{
+		Form_pg_foreign_server form = (Form_pg_foreign_server) GETSTRUCT(tuple);
+		servers = lappend(servers, NameStr(form->srvname));
+	}
+
+	systable_endscan(scandesc);
+	heap_close(rel, AccessShareLock);
+
+	return servers;
+}
+
+void
+server_exec_on_all(List *servers, const char *stmt)
+{
+	ListCell *lc;
+
+	/* TODO: 2PC */
+	foreach (lc, servers)
+	{
+		ForeignServer *server = GetForeignServerByName(lfirst(lc), false);
+		UserMapping *user = GetUserMapping(GetUserId(), server->serverid);
+		PGconn *conn = GetConnection(user, false);
+		PGresult *res;
+
+		res = PQexec(conn, stmt);
+
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pgfdw_report_error(ERROR, res, conn, true, stmt);
+
+		PQclear(res);
+	}
 }

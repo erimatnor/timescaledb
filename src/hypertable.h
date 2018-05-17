@@ -19,6 +19,7 @@ typedef struct Hypertable
 	Oid			main_table_relid;
 	Hyperspace *space;
 	SubspaceStore *chunk_cache;
+	List *servers;
 } Hypertable;
 
 

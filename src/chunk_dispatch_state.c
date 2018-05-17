@@ -158,6 +158,7 @@ chunk_dispatch_state_set_parent(ChunkDispatchState *state, ModifyTableState *par
 	ModifyTable *mt_plan;
 
 	state->parent = parent;
+	state->dispatch->mt = (ModifyTable *) parent->ps.plan;
 	state->dispatch->arbiter_indexes = parent->mt_arbiterindexes;
 	state->dispatch->on_conflict = parent->mt_onconflict;
 	state->dispatch->cmd_type = parent->operation;

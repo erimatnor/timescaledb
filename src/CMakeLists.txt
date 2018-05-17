@@ -1,8 +1,16 @@
 set(CMAKE_C_FLAGS_DEBUG "-DUSE_ASSERT_CHECKING=1")
 
+find_library(LIBPQ_LIB
+  libpq pq
+  HINTS ${PG_LIBDIR})
+
+if (NOT LIBPQ_LIB)
+  message(FATAL_ERROR "Unable to find 'libpq'")
+endif ()
+
 if (UNIX)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L${PG_LIBDIR}")
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -L${PG_LIBDIR}")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L${PG_LIBDIR} -lpq")
+  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -L${PG_LIBDIR} -lpq")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PG_CFLAGS}")
   set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} ${PG_CPPFLAGS}")
   set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
@@ -132,14 +140,6 @@ set(SOURCES
 configure_file(version.h.in version.h)
 set(GITCOMMIT_H ${CMAKE_CURRENT_BINARY_DIR}/gitcommit.h)
 
-find_library(LIBPQ_LIB
-  libpq pq
-  HINTS ${PG_LIBDIR})
-
-if (NOT LIBPQ_LIB)
-  message(FATAL_ERROR "Unable to find 'libpq'")
-endif ()
-
 if (WIN32)
   add_custom_command(
     OUTPUT ${GITCOMMIT_H}
@@ -181,11 +181,14 @@ endif (PGINDENT)
 
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${HEADERS} ${GITCOMMIT_H})
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
-    PREFIX "")
+get_filename_component(LIBPQ_LIBDIR ${LIBPQ_LIB} DIRECTORY)
 
-target_link_libraries(${PROJECT_NAME} "${LIBPQ_LIB}")
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
+  INSTALL_RPATH "${LIBPQ_LIBDIR}"
+  PREFIX "")
+
+target_link_libraries(${PROJECT_NAME} ${LIBPQ_LIB})
 
 install(
   TARGETS ${PROJECT_NAME}

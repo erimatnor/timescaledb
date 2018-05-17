@@ -9,6 +9,7 @@ bool		guc_disable_optimizations = false;
 bool		guc_optimize_non_hypertables = false;
 bool		guc_restoring = false;
 bool		guc_constraint_aware_append = true;
+bool        guc_frontend = false;
 int			guc_max_open_chunks_per_insert = 10;
 int			guc_max_cached_chunks_per_hypertable = 10;
 
@@ -45,6 +46,16 @@ _guc_init(void)
 	DefineCustomBoolVariable("timescaledb.restoring", "Install timescale in restoring mode",
 							 "Used for running pg_restore",
 							 &guc_restoring,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("timescaledb.frontend", "Make instance a frontend node",
+							 "Used for setting up clustering",
+							 &guc_frontend,
 							 false,
 							 PGC_SUSET,
 							 0,

@@ -20,6 +20,7 @@ typedef struct ChunkDispatch
 	Hypertable *hypertable;
 	SubspaceStore *cache;
 	EState	   *estate;
+	ModifyTable *mt; /* The ModifyTable plan of the parent Hypertable */
 
 	/*
 	 * Keep a pointer to the original (hypertable's) ResultRelInfo since we

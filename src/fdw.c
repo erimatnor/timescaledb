@@ -1685,7 +1685,9 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	bool		isvarlena;
 	ListCell   *lc;
 
-	elog(NOTICE, "Being Foreign Modify");
+	elog(NOTICE, "Begin Foreign Modify on table %s",
+		 get_rel_name(resultRelInfo->ri_RelationDesc->rd_id));
+
 	/*
 	 * Do nothing in EXPLAIN (no ANALYZE) case.  resultRelInfo->ri_FdwState
 	 * stays NULL.

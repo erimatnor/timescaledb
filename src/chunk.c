@@ -391,6 +391,7 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 		.base.tablespacename = hypertable_select_tablespace_name(ht, chunk),
 		.base.options = get_reloptions(ht->main_table_relid),
 	};
+	char relkind = get_rel_relkind(ht->main_table_relid);
 	Oid			uid,
 				saved_uid;
 
@@ -410,11 +411,8 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 	if (uid != saved_uid)
 		SetUserIdAndSecContext(uid, sec_ctx | SECURITY_LOCAL_USERID_CHANGE);
 
-
-
 	objaddr = DefineRelation(&stmt.base,
-							 //RELKIND_RELATION,
-							 RELKIND_FOREIGN_TABLE,
+							 relkind,
 							 rel->rd_rel->relowner,
 							 NULL
 #if PG10
@@ -422,9 +420,15 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 #endif
 		);
 
-	if (true)
+	if (relkind == RELKIND_FOREIGN_TABLE)
 	{
-		stmt.servername = "foo";
+		if (list_length(ht->servers) == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+					 (errmsg("hypertable has no associated servers"))));
+
+		stmt.base.type = T_CreateForeignServerStmt;
+		stmt.servername = linitial(ht->servers);
 		CreateForeignTable(&stmt, objaddr.objectId);
 	}
 

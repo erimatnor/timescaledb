@@ -170,52 +170,6 @@ create_chunk_rri_constraint_expr(ResultRelInfo *rri, Relation rel)
 #endif
 }
 
-static List *
-create_foreign_insert_private_data(ChunkDispatch *dispatch, Relation rel, Index rti)
-{
-	TupleDesc	tupdesc = RelationGetDescr(rel);
-	int			attnum;
-	StringInfoData sql;
-	List	   *targetAttrs = NIL;
-	List	   *returningList = NIL;
-	List	   *retrieved_attrs = NIL;
-	bool		doNothing = false;
-
-	for (attnum = 1; attnum <= tupdesc->natts; attnum++)
-	{
-		Form_pg_attribute attr = tupdesc->attrs[attnum - 1];
-
-		if (!attr->attisdropped)
-			targetAttrs = lappend_int(targetAttrs, attnum);
-	}
-	/*
-	 * Extract the relevant RETURNING list if any.
-	 */
-	//if (plan->returningLists)
-	//returningList = (List *) list_nth(plan->returningLists, subplan_index);
-
-	/*
-	 * ON CONFLICT DO UPDATE and DO NOTHING case with inference specification
-	 * should have already been rejected in the optimizer, as presently there
-	 * is no way to recognize an arbiter index on a foreign table.  Only DO
-	 * NOTHING is supported without an inference specification.
-	 */
-	if (dispatch->on_conflict == ONCONFLICT_NOTHING)
-		doNothing = true;
-	else if (dispatch->on_conflict != ONCONFLICT_NONE)
-		elog(ERROR, "unexpected ON CONFLICT specification: %d",
-			 (int) dispatch->on_conflict);
-
-	deparseInsertSql(&sql, root, rti, rel,
-					 targetAttrs, doNothing, returningList,
-					 &retrieved_attrs);
-
-	return list_make4(makeString(sql.data),
-					  targetAttrs,
-					  makeInteger((retrieved_attrs != NIL)),
-					  retrieved_attrs);
-}
-
 /*
  * Create a new ResultRelInfo for a chunk.
  *
@@ -252,21 +206,9 @@ create_chunk_result_relation_info(ChunkDispatch *dispatch, Relation rel, Index r
 	{
 		rri->ri_FdwRoutine = GetFdwRoutineForRelation(rel, true);
 		rri->ri_usesFdwDirectModify = false;
-		/*
-		List *fdw_private = list_make3(makeString(sql.data),
-									   retrieved_attrs,
-									   makeInteger(fpinfo->fetch_size));
-		//List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
-
-		rri->ri_FdwRoutine->BeginForeignModify(mtstate,
-											   rri,
-											   fdw_private,
-											   i,
-											   eflags);
-
-		}
-		*/
-		elog(NOTICE, "Set FdwRoutine %p", rri->ri_FdwRoutine);
+		/* We actually insert via the hypertable, so reuse the FDW state for the
+		 * hypertable */
+		rri->ri_FdwState = rri_orig->ri_FdwState;
 	}
 
 	create_chunk_rri_constraint_expr(rri, rel);
