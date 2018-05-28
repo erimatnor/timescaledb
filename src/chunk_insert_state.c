@@ -68,7 +68,8 @@ create_chunk_range_table_entry(ChunkDispatch *dispatch, Relation rel)
 	{
 		RangeTblEntry *hypertable_rte;
 
-		hypertable_rte = rt_fetch(dispatch->hypertable_result_rel_info->ri_RangeTableIndex, estate->es_range_table);
+		hypertable_rte = rt_fetch(dispatch->hypertable_result_rel_info->ri_RangeTableIndex,
+								  estate->es_range_table);
 		rte->eref = hypertable_rte->eref;
 	}
 

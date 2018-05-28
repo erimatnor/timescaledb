@@ -19,6 +19,9 @@ typedef struct Hypertable
 	Oid			main_table_relid;
 	Hyperspace *space;
 	SubspaceStore *chunk_cache;
+
+	/* Allows restricting the servers to use for the hypertable. Default is to
+	 * use all available servers */
 	List *servers;
 } Hypertable;
 

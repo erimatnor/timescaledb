@@ -143,12 +143,12 @@ CREATE INDEX IF NOT EXISTS chunk_index_hypertable_id_hypertable_index_name_idx
 ON _timescaledb_catalog.chunk_index(hypertable_id, hypertable_index_name);
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '');
 
-CREATE TABLE IF NOT EXISTS _timescaledb_catalog.chunk_server_mapping (
+CREATE TABLE IF NOT EXISTS _timescaledb_catalog.chunk_server (
     chunk_id        INTEGER NOT NULL     REFERENCES _timescaledb_catalog.chunk(id),
     server_name     NAME NOT NULL UNIQUE,
     UNIQUE(chunk_id, server_name)
 );
-SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_server_mapping', '');
+SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_server', '');
 
 -- Set table permissions
 GRANT SELECT ON ALL TABLES IN SCHEMA _timescaledb_catalog TO PUBLIC;

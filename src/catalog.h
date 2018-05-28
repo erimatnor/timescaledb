@@ -30,7 +30,7 @@ typedef enum CatalogTable
 	CHUNK_CONSTRAINT,
 	CHUNK_INDEX,
 	TABLESPACE,
-	CHUNK_SERVER_MAPPING,
+	CHUNK_SERVER,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -464,17 +464,17 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 } FormData_tablespace_hypertable_id_tablespace_name_idx;
 
 
-#define CHUNK_SERVER_MAPPING_TABLE_NAME "chunk_server_mapping"
+#define CHUNK_SERVER_TABLE_NAME "chunk_server"
 
 enum Anum_chunk_server_mapping
 {
-	Anum_chunk_server_mapping_chunk_id = 1,
-	Anum_chunk_server_mapping_server_name,
-	_Anum_chunk_server_mapping_max,
+	Anum_chunk_server_chunk_id = 1,
+	Anum_chunk_server_server_name,
+	_Anum_chunk_server_max,
 };
 
 #define Natts_chunk_server_mapping \
-	(_Anum_chunk_server_mapping_max - 1)
+	(_Anum_chunk_server_max - 1)
 
 typedef struct FormData_chunk_server_mapping
 {
@@ -484,23 +484,23 @@ typedef struct FormData_chunk_server_mapping
 
 enum
 {
-	CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX,
-	CHUNK_SERVER_MAPPING_SERVER_NAME_IDX,
-	_MAX_CHUNK_SERVER_MAPPING_INDEX,
+	CHUNK_SERVER_CHUNK_ID_SERVER_NAME_IDX,
+	CHUNK_SERVER_SERVER_NAME_IDX,
+	_MAX_CHUNK_SERVER_INDEX,
 };
 
-enum Anum_chunk_server_mapping_chunk_id_server_name_idx
+enum Anum_chunk_server_chunk_id_server_name_idx
 {
-	Anum_chunk_server_mapping_chunk_id_server_name_idx_chunk_id = 1,
-	Anum_chunk_server_mapping_chunk_id_server_name_idx_server_id,
-	_Anum_chunk_server_mapping_chunk_id_server_name_idx_max,
+	Anum_chunk_server_chunk_id_server_name_idx_chunk_id = 1,
+	Anum_chunk_server_chunk_id_server_name_idx_server_id,
+	_Anum_chunk_server_chunk_id_server_name_idx_max,
 };
 
-typedef struct FormData_chunk_server_mapping_chunk_id_server_id_idx
+typedef struct FormData_chunk_server_chunk_id_server_id_idx
 {
 	int32 chunk_id;
 	int32 server_id;
-} FormData_chunk_server_mapping_chunk_id_server_name_idx;
+} FormData_chunk_server_chunk_id_server_name_idx;
 
 #define MAX(a, b)								\
 	((long)(a) > (long)(b) ? (a) : (b))
@@ -513,7 +513,7 @@ typedef struct FormData_chunk_server_mapping_chunk_id_server_id_idx
 					MAX(_MAX_CHUNK_INDEX_INDEX,							\
 						MAX(_MAX_TABLESPACE_INDEX,						\
 							MAX(_MAX_CHUNK_INDEX,						\
-									_MAX_CHUNK_SERVER_MAPPING_INDEX)))))))
+									_MAX_CHUNK_SERVER_INDEX)))))))
 
 typedef enum CacheType
 {

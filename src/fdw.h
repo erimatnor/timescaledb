@@ -185,4 +185,6 @@ extern bool is_shippable(Oid objectId, Oid classId, PgFdwRelationInfo *fpinfo);
 
 extern FdwRoutine *fdw_get_routine(void);
 
+extern void timescaledb_fdw_update_modify_state(ResultRelInfo *rri, EState *estate);
+
 #endif							/* POSTGRES_FDW_H */

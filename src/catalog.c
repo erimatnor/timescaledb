@@ -29,7 +29,7 @@ static const char *catalog_table_names[_MAX_CATALOG_TABLES + 1] = {
 	[CHUNK_CONSTRAINT] = CHUNK_CONSTRAINT_TABLE_NAME,
 	[CHUNK_INDEX] = CHUNK_INDEX_TABLE_NAME,
 	[TABLESPACE] = TABLESPACE_TABLE_NAME,
-	[CHUNK_SERVER_MAPPING] = CHUNK_SERVER_MAPPING_TABLE_NAME,
+	[CHUNK_SERVER] = CHUNK_SERVER_TABLE_NAME,
 	[_MAX_CATALOG_TABLES] = "invalid table",
 };
 
@@ -90,11 +90,11 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 			[TABLESPACE_HYPERTABLE_ID_TABLESPACE_NAME_IDX] = "tablespace_hypertable_id_tablespace_name_key",
 		}
 	},
-	[CHUNK_SERVER_MAPPING] = {
-		.length = _MAX_CHUNK_SERVER_MAPPING_INDEX,
+	[CHUNK_SERVER] = {
+		.length = _MAX_CHUNK_SERVER_INDEX,
 		.names = (char *[]) {
-			[CHUNK_SERVER_MAPPING_SERVER_NAME_IDX] = "chunk_server_mapping_server_name_key",
-			[CHUNK_SERVER_MAPPING_CHUNK_ID_SERVER_NAME_IDX] = "chunk_server_mapping_chunk_id_server_name_key",
+			[CHUNK_SERVER_SERVER_NAME_IDX] = "chunk_server_server_name_key",
+			[CHUNK_SERVER_CHUNK_ID_SERVER_NAME_IDX] = "chunk_server_chunk_id_server_name_key",
 		}
 	}
 };
@@ -107,7 +107,7 @@ static const char *catalog_table_serial_id_names[_MAX_CATALOG_TABLES] = {
 	[CHUNK_CONSTRAINT] = CATALOG_SCHEMA_NAME ".chunk_constraint_name",
 	[CHUNK_INDEX] = NULL,
 	[TABLESPACE] = CATALOG_SCHEMA_NAME ".tablespace_id_seq",
-	[CHUNK_SERVER_MAPPING] = NULL,
+	[CHUNK_SERVER] = NULL,
 };
 
 typedef struct InternalFunctionDef

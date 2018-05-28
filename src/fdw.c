@@ -164,10 +164,9 @@ typedef struct PgFdwModifyState
 {
 	Relation	rel;			/* relcache entry for the foreign table */
 	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
-	Chunk *chunk;
 
 	/* for remote query execution */
-	PGconn	   *conn;			/* connection for the scan */
+	List	   *conns;			/* connection for the scan */
 	char	   *p_name;			/* name of prepared statement, if created */
 
 	/* extracted fdw_private data */
@@ -1661,6 +1660,20 @@ postgresPlanForeignModify(PlannerInfo *root,
 					  retrieved_attrs);
 }
 
+void
+timescaledb_fdw_update_modify_state(ResultRelInfo *rri, EState *estate)
+{
+	PgFdwModifyState *fmstate = rri->ri_FdwState;
+	RangeTblEntry *rte = rt_fetch(rri->ri_RangeTableIndex, estate->es_range_table);
+	Oid			userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+	ForeignTable *table = GetForeignTable(RelationGetRelid(rri->ri_RelationDesc));
+	UserMapping *user = GetUserMapping(userid, table->serverid);
+
+	//fmstate->rel = rri->ri_RelationDesc;
+	/* Open connection; report that we'll create a prepared statement. */
+	fmstate->conns = list_make1(GetConnection(user, true));
+}
+
 /*
  * postgresBeginForeignModify
  *		Begin an insert/update/delete operation on a foreign table
@@ -1711,7 +1724,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	user = GetUserMapping(userid, table->serverid);
 
 	/* Open connection; report that we'll create a prepared statement. */
-	fmstate->conn = GetConnection(user, true);
+	fmstate->conns = list_make1(GetConnection(user, true));
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Deconstruct fdw_private data. */
@@ -1789,6 +1802,8 @@ postgresExecForeignInsert(EState *estate,
 	const char **p_values;
 	PGresult   *res;
 	int			n_rows;
+	ListCell *lc;
+	bool first_conn = true;
 
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
@@ -1797,41 +1812,51 @@ postgresExecForeignInsert(EState *estate,
 	/* Convert parameters needed by prepared statement to text form */
 	p_values = convert_prep_stmt_params(fmstate, NULL, slot);
 
-	/*
-	 * Execute the prepared statement.
-	 */
-	if (!PQsendQueryPrepared(fmstate->conn,
-							 fmstate->p_name,
-							 fmstate->p_nums,
-							 p_values,
-							 NULL,
-							 NULL,
-							 0))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
-
-	/*
-	 * Get the result, and check for success.
-	 *
-	 * We don't use a PG_TRY block here, so be careful not to throw error
-	 * without releasing the PGresult.
-	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
-	if (PQresultStatus(res) !=
-		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
-
-	/* Check number of rows affected, and fetch RETURNING tuple if any */
-	if (fmstate->has_returning)
+	foreach (lc, fmstate->conns)
 	{
-		n_rows = PQntuples(res);
-		if (n_rows > 0)
-			store_returning_result(fmstate, slot, res);
-	}
-	else
-		n_rows = atoi(PQcmdTuples(res));
+		PGconn *conn = lfirst(lc);
 
-	/* And clean up */
-	PQclear(res);
+		/*
+		 * Execute the prepared statement.
+		 */
+		if (!PQsendQueryPrepared(conn,
+								 fmstate->p_name,
+								 fmstate->p_nums,
+								 p_values,
+								 NULL,
+								 NULL,
+								 0))
+			pgfdw_report_error(ERROR, NULL, conn, false, fmstate->query);
+
+		/*
+		 * Get the result, and check for success.
+		 *
+		 * We don't use a PG_TRY block here, so be careful not to throw error
+		 * without releasing the PGresult.
+		 */
+		res = pgfdw_get_result(conn, fmstate->query);
+		if (PQresultStatus(res) !=
+			(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
+			pgfdw_report_error(ERROR, res, conn, true, fmstate->query);
+
+		/* Check number of rows affected, and fetch RETURNING tuple if any */
+		if (first_conn)
+		{
+			if (fmstate->has_returning)
+			{
+				n_rows = PQntuples(res);
+				if (n_rows > 0)
+					store_returning_result(fmstate, slot, res);
+			}
+			else
+				n_rows = atoi(PQcmdTuples(res));
+		}
+
+		/* And clean up */
+		PQclear(res);
+
+		first_conn = false;
+	}
 
 	MemoryContextReset(fmstate->temp_cxt);
 
@@ -1855,6 +1880,8 @@ postgresExecForeignUpdate(EState *estate,
 	const char **p_values;
 	PGresult   *res;
 	int			n_rows;
+	bool first_conn = true;
+	ListCell *lc;
 
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
@@ -1873,41 +1900,51 @@ postgresExecForeignUpdate(EState *estate,
 										(ItemPointer) DatumGetPointer(datum),
 										slot);
 
-	/*
-	 * Execute the prepared statement.
-	 */
-	if (!PQsendQueryPrepared(fmstate->conn,
-							 fmstate->p_name,
-							 fmstate->p_nums,
-							 p_values,
-							 NULL,
-							 NULL,
-							 0))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
 
-	/*
-	 * Get the result, and check for success.
-	 *
-	 * We don't use a PG_TRY block here, so be careful not to throw error
-	 * without releasing the PGresult.
-	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
-	if (PQresultStatus(res) !=
-		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
-
-	/* Check number of rows affected, and fetch RETURNING tuple if any */
-	if (fmstate->has_returning)
+	foreach(lc, fmstate->conns)
 	{
-		n_rows = PQntuples(res);
-		if (n_rows > 0)
-			store_returning_result(fmstate, slot, res);
-	}
-	else
-		n_rows = atoi(PQcmdTuples(res));
+		PGconn *conn = lfirst(lc);
+		/*
+		 * Execute the prepared statement.
+		 */
+		if (!PQsendQueryPrepared(conn,
+								 fmstate->p_name,
+								 fmstate->p_nums,
+								 p_values,
+								 NULL,
+								 NULL,
+							 0))
+			pgfdw_report_error(ERROR, NULL, conn, false, fmstate->query);
 
-	/* And clean up */
-	PQclear(res);
+		/*
+		 * Get the result, and check for success.
+		 *
+		 * We don't use a PG_TRY block here, so be careful not to throw error
+		 * without releasing the PGresult.
+		 */
+		res = pgfdw_get_result(conn, fmstate->query);
+		if (PQresultStatus(res) !=
+			(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
+			pgfdw_report_error(ERROR, res, conn, true, fmstate->query);
+
+		if (first_conn)
+		{
+			/* Check number of rows affected, and fetch RETURNING tuple if any */
+			if (fmstate->has_returning)
+			{
+				n_rows = PQntuples(res);
+				if (n_rows > 0)
+					store_returning_result(fmstate, slot, res);
+			}
+			else
+				n_rows = atoi(PQcmdTuples(res));
+		}
+
+		first_conn = false;
+
+		/* And clean up */
+		PQclear(res);
+	}
 
 	MemoryContextReset(fmstate->temp_cxt);
 
@@ -1931,6 +1968,8 @@ postgresExecForeignDelete(EState *estate,
 	const char **p_values;
 	PGresult   *res;
 	int			n_rows;
+	bool first_conn = true;
+	ListCell *lc;
 
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
@@ -1949,41 +1988,52 @@ postgresExecForeignDelete(EState *estate,
 										(ItemPointer) DatumGetPointer(datum),
 										NULL);
 
-	/*
-	 * Execute the prepared statement.
-	 */
-	if (!PQsendQueryPrepared(fmstate->conn,
-							 fmstate->p_name,
-							 fmstate->p_nums,
-							 p_values,
-							 NULL,
-							 NULL,
-							 0))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
-
-	/*
-	 * Get the result, and check for success.
-	 *
-	 * We don't use a PG_TRY block here, so be careful not to throw error
-	 * without releasing the PGresult.
-	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
-	if (PQresultStatus(res) !=
-		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
-
-	/* Check number of rows affected, and fetch RETURNING tuple if any */
-	if (fmstate->has_returning)
+	foreach (lc, fmstate->conns)
 	{
-		n_rows = PQntuples(res);
-		if (n_rows > 0)
-			store_returning_result(fmstate, slot, res);
-	}
-	else
-		n_rows = atoi(PQcmdTuples(res));
+		PGconn *conn = lfirst(lc);
 
-	/* And clean up */
-	PQclear(res);
+		/*
+		 * Execute the prepared statement.
+		 */
+		if (!PQsendQueryPrepared(conn,
+								 fmstate->p_name,
+								 fmstate->p_nums,
+								 p_values,
+								 NULL,
+								 NULL,
+								 0))
+			pgfdw_report_error(ERROR, NULL, conn, false, fmstate->query);
+
+		/*
+		 * Get the result, and check for success.
+		 *
+		 * We don't use a PG_TRY block here, so be careful not to throw error
+		 * without releasing the PGresult.
+		 */
+		res = pgfdw_get_result(conn, fmstate->query);
+		if (PQresultStatus(res) !=
+			(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
+			pgfdw_report_error(ERROR, res, conn, true, fmstate->query);
+
+
+		if (first_conn)
+		{
+			/* Check number of rows affected, and fetch RETURNING tuple if any */
+			if (fmstate->has_returning)
+			{
+				n_rows = PQntuples(res);
+				if (n_rows > 0)
+					store_returning_result(fmstate, slot, res);
+			}
+			else
+				n_rows = atoi(PQcmdTuples(res));
+		}
+
+		first_conn = false;
+
+		/* And clean up */
+		PQclear(res);
+	}
 
 	MemoryContextReset(fmstate->temp_cxt);
 
@@ -2000,33 +2050,40 @@ postgresEndForeignModify(EState *estate,
 						 ResultRelInfo *resultRelInfo)
 {
 	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
+	ListCell *lc;
 
 	/* If fmstate is NULL, we are in EXPLAIN; nothing to do */
 	if (fmstate == NULL)
 		return;
 
-	/* If we created a prepared statement, destroy it */
-	if (fmstate->p_name)
+	foreach (lc, fmstate->conns)
 	{
-		char		sql[64];
-		PGresult   *res;
+		PGconn *conn = lfirst(lc);
 
-		snprintf(sql, sizeof(sql), "DEALLOCATE %s", fmstate->p_name);
+		/* If we created a prepared statement, destroy it */
+		if (fmstate->p_name)
+		{
+			char		sql[64];
+			PGresult   *res;
 
-		/*
-		 * We don't use a PG_TRY block here, so be careful not to throw error
-		 * without releasing the PGresult.
-		 */
-		res = pgfdw_exec_query(fmstate->conn, sql);
-		if (PQresultStatus(res) != PGRES_COMMAND_OK)
-			pgfdw_report_error(ERROR, res, fmstate->conn, true, sql);
-		PQclear(res);
-		fmstate->p_name = NULL;
+			snprintf(sql, sizeof(sql), "DEALLOCATE %s", fmstate->p_name);
+
+			/*
+			 * We don't use a PG_TRY block here, so be careful not to throw error
+			 * without releasing the PGresult.
+			 */
+			res = pgfdw_exec_query(conn, sql);
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+				pgfdw_report_error(ERROR, res, conn, true, sql);
+			PQclear(res);
+			fmstate->p_name = NULL;
+		}
+
+		/* Release remote connection */
+		ReleaseConnection(conn);
 	}
 
-	/* Release remote connection */
-	ReleaseConnection(fmstate->conn);
-	fmstate->conn = NULL;
+	fmstate->conns = NIL;
 }
 
 /*
@@ -3151,36 +3208,42 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 	char		prep_name[NAMEDATALEN];
 	char	   *p_name;
 	PGresult   *res;
+	ListCell *lc;
 
-	/* Construct name we'll use for the prepared statement. */
-	snprintf(prep_name, sizeof(prep_name), "pgsql_fdw_prep_%u",
-			 GetPrepStmtNumber(fmstate->conn));
-	p_name = pstrdup(prep_name);
+	foreach(lc, fmstate->conns)
+	{
+		PGconn *conn = lfirst(lc);
 
-	/*
-	 * We intentionally do not specify parameter types here, but leave the
-	 * remote server to derive them by default.  This avoids possible problems
-	 * with the remote server using different type OIDs than we do.  All of
-	 * the prepared statements we use in this module are simple enough that
-	 * the remote server will make the right choices.
-	 */
-	if (!PQsendPrepare(fmstate->conn,
-					   p_name,
-					   fmstate->query,
-					   0,
-					   NULL))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+		/* Construct name we'll use for the prepared statement. */
+		snprintf(prep_name, sizeof(prep_name), "pgsql_fdw_prep_%u",
+				 GetPrepStmtNumber(conn));
+		p_name = pstrdup(prep_name);
 
-	/*
-	 * Get the result, and check for success.
-	 *
-	 * We don't use a PG_TRY block here, so be careful not to throw error
-	 * without releasing the PGresult.
-	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
-	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
-	PQclear(res);
+		/*
+		 * We intentionally do not specify parameter types here, but leave the
+		 * remote server to derive them by default.  This avoids possible problems
+		 * with the remote server using different type OIDs than we do.  All of
+		 * the prepared statements we use in this module are simple enough that
+		 * the remote server will make the right choices.
+		 */
+		if (!PQsendPrepare(conn,
+						   p_name,
+						   fmstate->query,
+						   0,
+						   NULL))
+			pgfdw_report_error(ERROR, NULL, conn, false, fmstate->query);
+
+		/*
+		 * Get the result, and check for success.
+		 *
+		 * We don't use a PG_TRY block here, so be careful not to throw error
+		 * without releasing the PGresult.
+		 */
+		res = pgfdw_get_result(conn, fmstate->query);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pgfdw_report_error(ERROR, res, conn, true, fmstate->query);
+		PQclear(res);
+	}
 
 	/* This action shows that the prepare has been done. */
 	fmstate->p_name = p_name;

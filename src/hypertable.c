@@ -946,7 +946,7 @@ hypertable_make_foreign(Hypertable *ht)
 
 	CommandCounterIncrement();
 
-	hypertable_create_remotely(ht);
+	//hypertable_create_remotely(ht);
 }
 
 TS_FUNCTION_INFO_V1(hypertable_create);

@@ -14,6 +14,7 @@
 #include "hypertable_cache.h"
 #include "dimension.h"
 #include "hypertable.h"
+#include "fdw.h"
 
 static void
 chunk_dispatch_begin(CustomScanState *node, EState *estate, int eflags)
@@ -103,6 +104,8 @@ chunk_dispatch_exec(CustomScanState *node)
 		 * chunk.
 		 */
 		estate->es_result_relation_info = cis->result_relation_info;
+
+		timescaledb_fdw_update_modify_state(cis->result_relation_info, estate);
 
 		MemoryContextSwitchTo(old);
 
