@@ -22,6 +22,7 @@
 #include <miscadmin.h>
 
 #include "hypertable.h"
+#include "hypertable_server.h"
 #include "dimension.h"
 #include "chunk.h"
 #include "compat.h"
@@ -92,7 +93,7 @@ hypertable_from_tuple(HeapTuple tuple, MemoryContext mctx)
 	h->main_table_relid = get_relname_relid(NameStr(h->fd.table_name), namespace_oid);
 	h->space = dimension_scan(h->fd.id, h->main_table_relid, h->fd.num_dimensions, mctx);
 	h->chunk_cache = subspace_store_init(h->space, mctx, guc_max_cached_chunks_per_hypertable);
-	h->servers = server_get_list(); /* TODO: Support per-hypertable server lists */
+	h->servers = hypertable_server_scan(h->fd.id);
 
 	return h;
 }

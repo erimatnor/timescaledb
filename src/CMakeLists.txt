@@ -53,6 +53,7 @@ set(HEADERS
   chunk.h
   chunk_index.h
   chunk_insert_state.h
+  chunk_server.h
   compat.h
   compat-endian.h
   compat-msvc-enter.h
@@ -73,6 +74,7 @@ set(HEADERS
   hypertable.h
   hypertable_insert.h
   hypertable_restrict_info.h
+  hypertable_server.h
   indexing.h
   partitioning.h
   planner_utils.h
@@ -100,6 +102,7 @@ set(SOURCES
   chunk_dispatch_state.c
   chunk_index.c
   chunk_insert_state.c
+  chunk_server.c
   connection.c
   constraint_aware_append.c
   copy.c
@@ -117,6 +120,7 @@ set(SOURCES
   hypertable_cache.c
   hypertable_insert.c
   hypertable_restrict_info.c
+  hypertable_server.c
   indexing.c
   init.c
   option.c

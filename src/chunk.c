@@ -21,6 +21,7 @@
 
 #include "chunk.h"
 #include "chunk_index.h"
+#include "chunk_server.h"
 #include "catalog.h"
 #include "dimension.h"
 #include "dimension_slice.h"
@@ -602,6 +603,8 @@ chunk_fill_stub(Chunk *chunk_stub, bool tuplock)
 		 * sort them in dimension order.
 		 */
 		hypercube_slice_sort(chunk_stub->cube);
+
+	chunk_stub->servers = chunk_server_scan(chunk_stub->fd.id);
 
 	return chunk_stub;
 }
