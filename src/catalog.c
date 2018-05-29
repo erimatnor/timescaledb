@@ -23,13 +23,14 @@
 
 static const char *catalog_table_names[_MAX_CATALOG_TABLES + 1] = {
 	[HYPERTABLE] = HYPERTABLE_TABLE_NAME,
+	[HYPERTABLE_SERVER] = HYPERTABLE_SERVER_TABLE_NAME,
 	[DIMENSION] = DIMENSION_TABLE_NAME,
 	[DIMENSION_SLICE] = DIMENSION_SLICE_TABLE_NAME,
 	[CHUNK] = CHUNK_TABLE_NAME,
 	[CHUNK_CONSTRAINT] = CHUNK_CONSTRAINT_TABLE_NAME,
 	[CHUNK_INDEX] = CHUNK_INDEX_TABLE_NAME,
-	[TABLESPACE] = TABLESPACE_TABLE_NAME,
 	[CHUNK_SERVER] = CHUNK_SERVER_TABLE_NAME,
+	[TABLESPACE] = TABLESPACE_TABLE_NAME,
 	[_MAX_CATALOG_TABLES] = "invalid table",
 };
 
@@ -45,6 +46,13 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 		.names = (char *[]) {
 			[HYPERTABLE_ID_INDEX] = "hypertable_pkey",
 			[HYPERTABLE_NAME_INDEX] = "hypertable_schema_name_table_name_key",
+		}
+	},
+	[HYPERTABLE_SERVER] = {
+		.length = _MAX_CHUNK_SERVER_INDEX,
+		.names = (char *[]) {
+			[HYPERTABLE_SERVER_SERVER_NAME_IDX] = "hypertable_server_server_name_key",
+			[HYPERTABLE_SERVER_HYPERTABLE_ID_SERVER_NAME_IDX] = "hypertable_server_hypertable_id_server_name_key",
 		}
 	},
 	[DIMENSION] = {
@@ -101,6 +109,7 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 
 static const char *catalog_table_serial_id_names[_MAX_CATALOG_TABLES] = {
 	[HYPERTABLE] = CATALOG_SCHEMA_NAME ".hypertable_id_seq",
+	[HYPERTABLE_SERVER] = NULL,
 	[DIMENSION] = CATALOG_SCHEMA_NAME ".dimension_id_seq",
 	[DIMENSION_SLICE] = CATALOG_SCHEMA_NAME ".dimension_slice_id_seq",
 	[CHUNK] = CATALOG_SCHEMA_NAME ".chunk_id_seq",
@@ -490,6 +499,7 @@ catalog_invalidate_cache(Oid catalog_relid, CmdType operation)
 	{
 		case CHUNK:
 		case CHUNK_CONSTRAINT:
+		case CHUNK_SERVER:
 		case DIMENSION_SLICE:
 			if (operation == CMD_UPDATE || operation == CMD_DELETE)
 			{
@@ -498,6 +508,7 @@ catalog_invalidate_cache(Oid catalog_relid, CmdType operation)
 			}
 			break;
 		case HYPERTABLE:
+		case HYPERTABLE_SERVER:
 		case DIMENSION:
 			relid = catalog_get_cache_proxy_id(catalog, CACHE_TYPE_HYPERTABLE);
 			CacheInvalidateRelcacheByRelid(relid);

@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS _timescaledb_catalog.hypertable (
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.hypertable', '');
 SELECT pg_catalog.pg_extension_config_dump(pg_get_serial_sequence('_timescaledb_catalog.hypertable','id'), '');
 
+
+CREATE TABLE IF NOT EXISTS _timescaledb_catalog.hypertable_server (
+    hypertable_id        INTEGER NOT NULL     REFERENCES _timescaledb_catalog.hypertable(id),
+    server_hypertable_id INTEGER NOT NULL,
+    server_name     NAME NOT NULL UNIQUE,
+    UNIQUE(hypertable_id, server_name)
+);
+SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.hypertable_server', '');
+
 -- The tablespace table maps tablespaces to hypertables.
 -- This allows spreading a hypertable's chunks across multiple disks.
 CREATE TABLE IF NOT EXISTS _timescaledb_catalog.tablespace (
@@ -145,6 +154,7 @@ SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '
 
 CREATE TABLE IF NOT EXISTS _timescaledb_catalog.chunk_server (
     chunk_id        INTEGER NOT NULL     REFERENCES _timescaledb_catalog.chunk(id),
+    server_chunk_id INTEGER NOT NULL,
     server_name     NAME NOT NULL UNIQUE,
     UNIQUE(chunk_id, server_name)
 );

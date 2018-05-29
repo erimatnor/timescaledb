@@ -24,13 +24,14 @@
 typedef enum CatalogTable
 {
 	HYPERTABLE = 0,
+	HYPERTABLE_SERVER,
 	DIMENSION,
 	DIMENSION_SLICE,
 	CHUNK,
 	CHUNK_CONSTRAINT,
 	CHUNK_INDEX,
-	TABLESPACE,
 	CHUNK_SERVER,
+	TABLESPACE,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -121,6 +122,49 @@ enum
 	_MAX_HYPERTABLE_INDEX,
 };
 
+
+#define HYPERTABLE_SERVER_TABLE_NAME "hypertable_server"
+
+enum Anum_hypertable_server
+{
+	Anum_hypertable_server_hypertable_id = 1,
+	Anum_hypertable_server_server_hypertable_id = 1,
+	Anum_hypertable_server_server_name,
+	_Anum_hypertable_server_max,
+};
+
+#define Natts_hypertable_server \
+	(_Anum_hypertable_server_max - 1)
+
+typedef struct FormData_hypertable_server
+{
+	int32 hypertable_id;
+	int32 server_hypertable_id;
+	NameData server_name;
+} FormData_hypertable_server;
+
+
+typedef FormData_hypertable_server *Form_hypertable_server;
+
+enum
+{
+	HYPERTABLE_SERVER_HYPERTABLE_ID_SERVER_NAME_IDX,
+	HYPERTABLE_SERVER_SERVER_NAME_IDX,
+	_MAX_HYPERTABLE_SERVER_INDEX,
+};
+
+enum Anum_hypertable_server_hypertable_id_server_name_idx
+{
+	Anum_hypertable_server_hypertable_id_server_name_idx_hypertable_id = 1,
+	Anum_hypertable_server_hypertable_id_server_name_idx_server_name,
+	_Anum_hypertable_server_hypertable_id_server_name_idx_max,
+};
+
+typedef struct FormData_hypertable_server_hypertable_id_server_name_idx
+{
+	int32 chunk_id;
+	NameData server_name;
+} FormData_hypertable_server_hypertable_id_server_name_idx;
 
 /******************************
  *
@@ -466,21 +510,26 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 
 #define CHUNK_SERVER_TABLE_NAME "chunk_server"
 
-enum Anum_chunk_server_mapping
+enum Anum_chunk_server
 {
 	Anum_chunk_server_chunk_id = 1,
+	Anum_chunk_server_server_chunk_id = 1,
 	Anum_chunk_server_server_name,
 	_Anum_chunk_server_max,
 };
 
-#define Natts_chunk_server_mapping \
+#define Natts_chunk_server \
 	(_Anum_chunk_server_max - 1)
 
-typedef struct FormData_chunk_server_mapping
+typedef struct FormData_chunk_server
 {
 	int32 chunk_id;
-	int32 server_id;
-} FormData_chunk_server_mapping;
+	int32 server_chunk_id;
+	NameData server_name;
+} FormData_chunk_server;
+
+
+typedef FormData_chunk_server *Form_chunk_server;
 
 enum
 {
@@ -492,14 +541,14 @@ enum
 enum Anum_chunk_server_chunk_id_server_name_idx
 {
 	Anum_chunk_server_chunk_id_server_name_idx_chunk_id = 1,
-	Anum_chunk_server_chunk_id_server_name_idx_server_id,
+	Anum_chunk_server_chunk_id_server_name_idx_server_name,
 	_Anum_chunk_server_chunk_id_server_name_idx_max,
 };
 
-typedef struct FormData_chunk_server_chunk_id_server_id_idx
+typedef struct FormData_chunk_server_chunk_id_server_name_idx
 {
 	int32 chunk_id;
-	int32 server_id;
+	NameData server_name;
 } FormData_chunk_server_chunk_id_server_name_idx;
 
 #define MAX(a, b)								\
