@@ -25,7 +25,8 @@ CREATE OR REPLACE FUNCTION  create_hypertable(
     if_not_exists           BOOLEAN = FALSE,
     partitioning_func       REGPROC = NULL,
     migrate_data            BOOLEAN = FALSE
-) RETURNS VOID AS '@MODULE_PATHNAME@', 'hypertable_create' LANGUAGE C VOLATILE;
+) RETURNS TABLE(hypertable_id INTEGER, schema_name NAME, table_name NAME)
+  AS '@MODULE_PATHNAME@', 'hypertable_create' LANGUAGE C VOLATILE;
 
 -- Update chunk_time_interval for a hypertable.
 --

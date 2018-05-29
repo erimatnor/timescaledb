@@ -23,19 +23,25 @@ hypertable_server_insert_relation(Relation rel,
 	catalog_restore_user(&sec_ctx);
 }
 
-static void
-hypertable_server_insert(int32 hypertable_id,
-						 int32 server_hypertable_id,
-						 Name server_name)
+void
+hypertable_server_insert_multi(List *hypertable_servers)
 {
 	Catalog    *catalog = catalog_get();
 	Relation	rel;
+	ListCell *lc;
 
 	rel = heap_open(catalog->tables[HYPERTABLE_SERVER].id, RowExclusiveLock);
-	hypertable_server_insert_relation(rel,
-									  hypertable_id,
-									  server_hypertable_id,
-									  server_name);
+
+	foreach (lc, hypertable_servers)
+	{
+		HypertableServer *server = lfirst(lc);
+
+		hypertable_server_insert_relation(rel,
+										  server->fd.hypertable_id,
+										  server->fd.server_hypertable_id,
+										  &server->fd.server_name);
+	}
+
 	heap_close(rel, RowExclusiveLock);
 }
 

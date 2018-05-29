@@ -20,6 +20,7 @@
 #include <commands/defrem.h>
 #include <storage/lmgr.h>
 #include <miscadmin.h>
+#include <funcapi.h>
 
 #include "hypertable.h"
 #include "hypertable_server.h"
@@ -893,14 +894,17 @@ hypertable_generate_create_stmt(Hypertable *ht)
 	return stmt->data;
 }
 
-static void
+static List *
 hypertable_create_remotely(Hypertable *ht)
 {
 	const char *stmt = hypertable_generate_create_stmt(ht);
+	List *remote_ids = NIL;
 
 	elog(NOTICE, "Remote hypertable stmt: '%s'", stmt);
 
 	server_exec_on_all(ht->servers, stmt);
+
+	return remote_ids;
 }
 
 static void
@@ -947,7 +951,34 @@ hypertable_make_foreign(Hypertable *ht)
 
 	CommandCounterIncrement();
 
-	//hypertable_create_remotely(ht);
+
+	if (guc_frontend)
+	{
+		List *remote_ids = hypertable_create_remotely(ht);
+		hypertable_server_insert_multi(remote_ids);
+	}
+
+}
+
+static Datum
+create_hypertable_datum(FunctionCallInfo fcinfo, Hypertable *ht)
+{
+	TupleDesc	tupdesc;
+	Datum		values[3];
+	bool		nulls[3] = {false};
+	HeapTuple	tuple;
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "function returning record called in context that cannot accept type record");
+
+	tupdesc = BlessTupleDesc(tupdesc);
+
+	values[0] = Int32GetDatum(ht->fd.id);
+	values[1] = NameGetDatum(&ht->fd.schema_name);
+	values[2] = NameGetDatum(&ht->fd.table_name);
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+
+	return HeapTupleGetDatum(tuple);
 }
 
 TS_FUNCTION_INFO_V1(hypertable_create);
@@ -991,6 +1022,7 @@ hypertable_create(PG_FUNCTION_ARGS)
 	};
 	Cache	   *hcache;
 	Hypertable *ht;
+	Datum       retval;
 	Oid			associated_schema_oid;
 	Oid			user_oid = GetUserId();
 	Oid			tspc_oid = get_rel_tablespace(table_relid);
@@ -1151,7 +1183,8 @@ hypertable_create(PG_FUNCTION_ARGS)
 	if (guc_frontend)
 		hypertable_make_foreign(ht);
 
+	retval = create_hypertable_datum(fcinfo, ht);
 	cache_release(hcache);
 
-	PG_RETURN_VOID();
+	PG_RETURN_DATUM(retval);
 }
