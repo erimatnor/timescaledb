@@ -22,6 +22,7 @@ extern int ts_guc_telemetry_level;
 extern TSDLLEXPORT char *ts_guc_license_key;
 extern char *ts_last_tune_time;
 extern char *ts_last_tune_version;
+extern TSDLLEXPORT bool ts_guc_enable_2pc;
 
 #ifdef TS_DEBUG
 extern bool ts_shutdown_bgw;

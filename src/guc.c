@@ -45,6 +45,7 @@ int ts_guc_telemetry_level = TELEMETRY_BASIC;
 TSDLLEXPORT char *ts_guc_license_key = TS_DEFAULT_LICENSE;
 char *ts_last_tune_time = NULL;
 char *ts_last_tune_version = NULL;
+TSDLLEXPORT bool ts_guc_enable_2pc;
 
 #ifdef TS_DEBUG
 bool ts_shutdown_bgw = false;
@@ -110,6 +111,17 @@ _guc_init(void)
 							 "Enable ordered append optimization for queries that are ordered by "
 							 "the time dimension",
 							 &ts_guc_enable_ordered_append,
+							 true,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("timescaledb.enable_2pc",
+							 "Enable 2pc",
+							 "Enable two-phase commit",
+							 &ts_guc_enable_2pc,
 							 true,
 							 PGC_USERSET,
 							 0,
