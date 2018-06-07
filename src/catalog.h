@@ -13,6 +13,7 @@
 #include <access/heapam.h>
 #include "extension_constants.h"
 #include "scanner.h"
+#include "export.h"
 
 /*
  * TimescaleDB catalog.
@@ -46,6 +47,7 @@ typedef enum CatalogTable
 	BGW_POLICY_REORDER,
 	BGW_POLICY_DROP_CHUNKS,
 	BGW_POLICY_CHUNK_STATS,
+	REMOTE_TXN,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -895,6 +897,44 @@ typedef struct FormData_bgw_policy_chunk_stats_job_id_chunk_id_idx
  * This needs to be bumped in case of new catalog tables that have more indexes.
  */
 #define _MAX_TABLE_INDEXES 5
+/************************************
+ *
+ * Remote txn table of 2pc commits
+ *
+ ************************************/
+
+#define REMOTE_TXN_TABLE_NAME "remote_txn"
+
+enum Anum_remote_txn
+{
+	Anum_remote_txn_server_name = 1,
+	Anum_remote_txn_remote_transaction_id,
+	_Anum_remote_txn_max,
+};
+
+#define Natts_remote_txn (_Anum_remote_txn_max - 1)
+
+typedef struct FormData_remote_txn
+{
+	NameData server_name;
+	text *remote_transaction_id;
+	;
+} FormData_remote_txn;
+
+typedef FormData_remote_txn *Form_remote_txn;
+
+enum
+{
+	REMOTE_TXN_PKEY_IDX = 0,
+	_MAX_REMOTE_TXN_INDEX,
+};
+
+enum Anum_remote_txn_pkey_idx
+{
+	Anum_remote_txn_pkey_idx_server_name = 1,
+	Anum_remote_txn_pkey_idx_remote_transaction_id,
+	_Anum_remote_txn_pkey_idx_max,
+};
 
 typedef enum CacheType
 {
@@ -949,8 +989,8 @@ extern void ts_catalog_table_info_init(CatalogTableInfo *tables, int max_table,
 									   const TableInfoDef *table_ary,
 									   const TableIndexDef *index_ary, const char **serial_id_ary);
 
-extern CatalogDatabaseInfo *ts_catalog_database_info_get(void);
-extern Catalog *ts_catalog_get(void);
+extern TSDLLEXPORT CatalogDatabaseInfo *ts_catalog_database_info_get(void);
+extern TSDLLEXPORT Catalog *ts_catalog_get(void);
 extern void ts_catalog_reset(void);
 
 /* Functions should operate on a passed-in Catalog struct */
@@ -970,14 +1010,15 @@ extern int64 ts_catalog_table_next_seq_id(Catalog *catalog, CatalogTable table);
 extern Oid ts_catalog_get_cache_proxy_id(Catalog *catalog, CacheType type);
 
 /* Functions that modify the actual catalog table on disk */
-extern bool ts_catalog_database_info_become_owner(CatalogDatabaseInfo *database_info,
-												  CatalogSecurityContext *sec_ctx);
-extern void ts_catalog_restore_user(CatalogSecurityContext *sec_ctx);
-extern void ts_catalog_insert_values(Relation rel, TupleDesc tupdesc, Datum *values, bool *nulls);
+extern TSDLLEXPORT bool ts_catalog_database_info_become_owner(CatalogDatabaseInfo *database_info,
+															  CatalogSecurityContext *sec_ctx);
+extern TSDLLEXPORT void ts_catalog_restore_user(CatalogSecurityContext *sec_ctx);
+extern TSDLLEXPORT void ts_catalog_insert_values(Relation rel, TupleDesc tupdesc, Datum *values,
+												 bool *nulls);
 extern void ts_catalog_update_tid(Relation rel, ItemPointer tid, HeapTuple tuple);
 extern void ts_catalog_update(Relation rel, HeapTuple tuple);
 extern void ts_catalog_delete_tid(Relation rel, ItemPointer tid);
-extern void ts_catalog_delete(Relation rel, HeapTuple tuple);
+extern TSDLLEXPORT void ts_catalog_delete(Relation rel, HeapTuple tuple);
 extern void ts_catalog_invalidate_cache(Oid catalog_relid, CmdType operation);
 
 /* Delete only: do not increment command counter or invalidate caches */

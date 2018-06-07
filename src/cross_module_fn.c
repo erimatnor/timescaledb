@@ -86,6 +86,7 @@ ts_timescaledb_fdw_validator(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(ts_cm_functions->timescaledb_fdw_validator(fcinfo));
 }
 
+#if !PG96
 Datum
 ts_remote_txn_id_in(PG_FUNCTION_ARGS)
 {
@@ -97,6 +98,7 @@ ts_remote_txn_id_out(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(ts_cm_functions->remote_txn_id_out(fcinfo));
 }
+#endif
 
 /*
  * casting a function pointer to a pointer of another type is undefined
