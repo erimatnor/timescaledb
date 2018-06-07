@@ -11,3 +11,8 @@ add_library(${TSL_TESTS_LIB_NAME} OBJECT ${SOURCES})
 # module, it needs to be compiled as position-independent code
 # (e.g., the -fPIC compiler flag for GCC)
 set_target_properties(${TSL_TESTS_LIB_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+
+if (NOT ${PG_VERSION} VERSION_LESS "10")
+  add_subdirectory(remote)
+endif ()
