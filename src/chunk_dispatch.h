@@ -34,6 +34,7 @@ typedef struct ChunkDispatch
 	List	   *on_conflict_set;
 	List	   *on_conflict_where;
 	CmdType		cmd_type;
+	void       *fdw_state;
 
 } ChunkDispatch;
 

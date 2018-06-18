@@ -13,6 +13,7 @@
 #include <nodes/makefuncs.h>
 #include <optimizer/var.h>
 #include <optimizer/restrictinfo.h>
+#include <foreign/fdwapi.h>
 #include <utils/lsyscache.h>
 #include <executor/nodeAgg.h>
 #include <utils/timestamp.h>
@@ -122,7 +123,7 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 
 		if (mt->operation == CMD_INSERT)
 		{
-			bool		hypertable_found = false;
+			Hypertable *ht = NULL;
 			ListCell   *lc_plan,
 					   *lc_rel;
 
@@ -135,7 +136,7 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 			{
 				Index		rti = lfirst_int(lc_rel);
 				RangeTblEntry *rte = rt_fetch(rti, ctx->rtable);
-				Hypertable *ht = hypertable_cache_get_entry(ctx->hcache, rte->relid);
+				ht = hypertable_cache_get_entry(ctx->hcache, rte->relid);
 
 				if (ht != NULL)
 				{
@@ -154,12 +155,11 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 					 * plan.
 					 */
 					*subplan_ptr = chunk_dispatch_plan_create(subplan, rti, rte->relid, ctx->parse);
-					hypertable_found = true;
 				}
 			}
 
-			if (hypertable_found)
-				*planptr = hypertable_insert_plan_create(mt);
+			if (ht != NULL)
+				*planptr = hypertable_insert_plan_create(ctx->parse, ht, mt);
 		}
 	}
 }
@@ -459,6 +459,13 @@ timescaledb_get_relation_info_hook(PlannerInfo *root,
 									  relation_objectid,
 									  inhparent,
 									  rel);
+
+		if (ht->servers != NIL)
+		{
+			/* Distributed hypertable */
+			//rel->fdwroutine = GetFdwRoutineForRelation(rel, true);
+			rel->fdw_private =
+		}
 
 		cache_release(hcache);
 	}

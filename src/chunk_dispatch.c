@@ -24,6 +24,12 @@ chunk_dispatch_create(Hypertable *ht, EState *estate)
 	cd->cmd_type = CMD_INSERT;
 	cd->cache = subspace_store_init(ht->space, estate->es_query_cxt, guc_max_open_chunks_per_insert);
 
+	/* Setup fdw state in case this is a distributed table */
+	if (ht->servers != NIL)
+	{
+		cd->fdw_state =
+	}
+
 	return cd;
 }
 

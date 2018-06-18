@@ -4,12 +4,15 @@
 #include <postgres.h>
 #include <nodes/execnodes.h>
 
+#include "hypertable.h"
+
 typedef struct HypertableInsertState
 {
 	CustomScanState cscan_state;
 	ModifyTable *mt;
+	void *fdw_state;
 } HypertableInsertState;
 
-Plan	   *hypertable_insert_plan_create(ModifyTable *mt);
+Plan	   *hypertable_insert_plan_create(Hypertable *ht, ModifyTable *mt);
 
 #endif							/* TIMESCALEDB_HYPERTABLE_INSERT_H */

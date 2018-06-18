@@ -209,7 +209,7 @@ create_chunk_result_relation_info(ChunkDispatch *dispatch, Relation rel, Index r
 		rri->ri_usesFdwDirectModify = false;
 		/* We actually insert via the hypertable, so reuse the FDW state for the
 		 * hypertable */
-		rri->ri_FdwState = rri_orig->ri_FdwState;
+		rri->ri_FdwState = dispatch->fdw_state;
 	}
 
 	create_chunk_rri_constraint_expr(rri, rel);
