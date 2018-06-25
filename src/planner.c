@@ -159,7 +159,7 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 			}
 
 			if (ht != NULL)
-				*planptr = hypertable_insert_plan_create(ctx->parse, ht, mt);
+				*planptr = hypertable_insert_plan_create(ht, mt);
 		}
 	}
 }
@@ -463,8 +463,8 @@ timescaledb_get_relation_info_hook(PlannerInfo *root,
 		if (ht->servers != NIL)
 		{
 			/* Distributed hypertable */
-			//rel->fdwroutine = GetFdwRoutineForRelation(rel, true);
-			rel->fdw_private =
+			rel->fdwroutine = GetFdwRoutineByRelId(rte->relid);
+			rel->fdw_private = rel->fdwroutine->PlanForeignModify(root,
 		}
 
 		cache_release(hcache);
