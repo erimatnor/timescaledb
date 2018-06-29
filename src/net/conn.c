@@ -34,6 +34,7 @@ connection_internal_create(ConnectionType type, ConnOps *ops)
 
 Connection *
 connection_create(ConnectionType type)
+
 {
 	Connection *conn;
 
