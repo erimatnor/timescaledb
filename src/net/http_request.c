@@ -229,9 +229,7 @@ http_request_build(HttpRequest *req, size_t *buf_size)
 		{
 			/* make sure it's equal to body_len */
 			if (content_length != req->body_len)
-			{
 				return NULL;
-			}
 			else
 				verified_content_length = true;
 		}
@@ -248,9 +246,7 @@ http_request_build(HttpRequest *req, size_t *buf_size)
 	{
 		/* Then there was no header field for Content-Length */
 		if (req->body_len != 0)
-		{
 			return NULL;
-		}
 	}
 
 	http_request_serialize_body(req, &buf);
