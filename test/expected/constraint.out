@@ -75,14 +75,16 @@ SELECT * FROM test.show_constraints('hyper');
       Constraint      | Type |  Columns   | Index |            Expr            
 ----------------------+------+------------+-------+----------------------------
  hyper_sensor_1_check | c    | {sensor_1} | -     | (sensor_1 > (10)::numeric)
-(1 row)
+ time_parent_empty    | c    | {time}     | -     | ("time" IS NULL)
+(2 rows)
 
 SELECT * FROM test.show_constraints('hyper_unique_with_looooooooooooooooooooooooooooooooooooong_name');
                            Constraint                            | Type |  Columns   |                              Index                              |            Expr            
 -----------------------------------------------------------------+------+------------+-----------------------------------------------------------------+----------------------------
  hyper_unique_with_looooooooooooooooooooooooooooo_sensor_1_check | c    | {sensor_1} | -                                                               | (sensor_1 > (10)::numeric)
  hyper_unique_with_looooooooooooooooooooooooooooooooooo_time_key | u    | {time}     | hyper_unique_with_looooooooooooooooooooooooooooooooooo_time_key | 
-(2 rows)
+ time_parent_empty                                               | c    | {time}     | -                                                               | ("time" IS NULL)
+(3 rows)
 
 --should have unique constraint not just unique index
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_2_4_chunk');
@@ -146,7 +148,8 @@ SELECT * FROM test.show_constraints('hyper_unique_with_loooooooooooooooooooooooo
  hyper_unique_with_looooooooooooooooooooooooooooo_sensor_1_check | c    | {sensor_1} | -                                                               | (sensor_1 > (10)::numeric)
  hyper_unique_with_looooooooooooooooooooooooooooooooo_time_check | c    | {time}     | -                                                               | ("time" > 0)
  hyper_unique_with_looooooooooooooooooooooooooooooooooo_time_key | u    | {time}     | hyper_unique_with_looooooooooooooooooooooooooooooooooo_time_key | 
-(3 rows)
+ time_parent_empty                                               | c    | {time}     | -                                                               | ("time" IS NULL)
+(4 rows)
 
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_2_4_chunk');
                            Constraint                            | Type |  Columns   |                                          Index                                          |                                           Expr                                           
@@ -172,7 +175,8 @@ SELECT * FROM test.show_constraints('hyper_unique_with_loooooooooooooooooooooooo
                            Constraint                            | Type |  Columns   | Index |            Expr            
 -----------------------------------------------------------------+------+------------+-------+----------------------------
  hyper_unique_with_looooooooooooooooooooooooooooo_sensor_1_check | c    | {sensor_1} | -     | (sensor_1 > (10)::numeric)
-(1 row)
+ time_parent_empty                                               | c    | {time}     | -     | ("time" IS NULL)
+(2 rows)
 
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_2_4_chunk');
                            Constraint                            | Type |  Columns   | Index |                                           Expr                                           
@@ -229,11 +233,12 @@ RENAME CONSTRAINT new_name TO new_name2;
 ALTER TABLE IF EXISTS hyper_unique_with_looooooooooooooooooooooooooooooooooooong_name
 RENAME CONSTRAINT  hyper_unique_with_looooooooooooooooooooooooooooo_sensor_1_check TO check_2;
 SELECT * FROM test.show_constraints('hyper_unique_with_looooooooooooooooooooooooooooooooooooong_name');
- Constraint | Type |  Columns   |   Index   |            Expr            
-------------+------+------------+-----------+----------------------------
- check_2    | c    | {sensor_1} | -         | (sensor_1 > (10)::numeric)
- new_name2  | u    | {time}     | new_name2 | 
-(2 rows)
+    Constraint     | Type |  Columns   |   Index   |            Expr            
+-------------------+------+------------+-----------+----------------------------
+ check_2           | c    | {sensor_1} | -         | (sensor_1 > (10)::numeric)
+ new_name2         | u    | {time}     | new_name2 | 
+ time_parent_empty | c    | {time}     | -         | ("time" IS NULL)
+(3 rows)
 
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_2_4_chunk');
    Constraint   | Type |  Columns   |                 Index                  |                                           Expr                                           

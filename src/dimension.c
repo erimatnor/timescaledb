@@ -1,11 +1,13 @@
 #include <postgres.h>
 #include <catalog/pg_type.h>
+#include <catalog/pg_constraint_fn.h>
 #include <access/relscan.h>
 #include <commands/tablecmds.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
 #include <utils/builtins.h>
 #include <utils/timestamp.h>
+#include <nodes/makefuncs.h>
 #include <funcapi.h>
 #include <miscadmin.h>
 #ifdef _WIN32
@@ -705,6 +707,44 @@ dimension_add_not_null_on_column(Oid table_relid, char *colname)
 	AlterTableInternal(table_relid, list_make1(&cmd), false);
 }
 
+static char *
+make_is_null_constraint_name(const char *colname)
+{
+	return psprintf("%s_%s", colname, "empty");
+}
+
+static void
+dimension_add_null_on_column_with_no_inherit(Oid table_relid, char *colname)
+{
+	ColumnRef colref = {
+		.type = T_ColumnRef,
+		.fields = list_make1(makeString(colname)),
+	};
+	NullTest nulltest = {
+		.xpr.type = T_NullTest,
+		.nulltesttype = IS_NULL,
+		.arg = (Expr *) &colref,
+	};
+	Constraint constr = {
+		.type = T_Constraint,
+		.contype = CONSTR_CHECK,
+		//.conname = ChooseConstraintName(colname, NULL, "empty", get_rel_namespace(table_relid), NIL),
+		.conname = make_is_null_constraint_name(colname),
+		.raw_expr = (Node *) &nulltest,
+		.is_no_inherit = true,
+		.skip_validation = true,
+	};
+	AlterTableCmd cmd = {
+		.type = T_AlterTableCmd,
+		.subtype = AT_AddConstraint,
+		.name = colname,
+		.def = (Node *) &constr,
+		.missing_ok = false,
+	};
+
+	AlterTableInternal(table_relid, list_make1(&cmd), false);
+}
+
 static void
 dimension_update(FunctionCallInfo fcinfo,
 				 Oid table_relid,
@@ -906,9 +946,15 @@ dimension_validate_info(DimensionInfo *info)
 	}
 	else
 	{
+		Oid is_null_constrid =
+			get_relation_constraint_oid(info->ht->main_table_relid,
+										make_is_null_constraint_name(NameStr(*info->colname)),
+										true);
+
 		/* Open ("time") dimension */
 		info->type = DIMENSION_TYPE_OPEN;
 		info->set_not_null = !not_null_is_set;
+		info->set_is_null = !OidIsValid(is_null_constrid);
 		info->interval = dimension_interval_to_internal(NameStr(*info->colname),
 														info->coltype,
 														info->interval_type,
@@ -923,6 +969,8 @@ dimension_add_from_info(DimensionInfo *info)
 		dimension_add_not_null_on_column(info->table_relid, NameStr(*info->colname));
 
 	Assert(info->ht != NULL);
+
+	dimension_add_null_on_column_with_no_inherit(info->table_relid, NameStr(*info->colname));
 
 	dimension_insert(info->ht->fd.id, info->colname, info->coltype,
 					 info->num_slices, info->partitioning_func, info->interval);

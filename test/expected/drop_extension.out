@@ -44,32 +44,4 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 NOTICE:  extension "timescaledb" already exists, skipping
 -- Make the table a hypertable again
 SELECT create_hypertable('drop_test', 'time', 'device', 2);
- create_hypertable 
--------------------
- 
-(1 row)
-
-SELECT * FROM _timescaledb_catalog.hypertable;
- id | schema_name | table_name | associated_schema_name | associated_table_prefix | num_dimensions 
-----+-------------+------------+------------------------+-------------------------+----------------
-  1 | public      | drop_test  | _timescaledb_internal  | _hyper_1                |              2
-(1 row)
-
-INSERT INTO drop_test VALUES('Mon Mar 20 09:18:19.100462 2017', 22.1, 'dev1');
-SELECT * FROM drop_test;
-              time               | temp | device 
----------------------------------+------+--------
- Mon Mar 20 09:18:19.100462 2017 | 22.1 | dev1
-(1 row)
-
---test drops thru cascades of other objects
-\c single :ROLE_SUPERUSER
-drop schema public cascade;
-NOTICE:  drop cascades to 3 other objects
-\dn
-  List of schemas
- Name |   Owner    
-------+------------
- test | super_user
-(1 row)
-
+ERROR:  constraint "time_parent_empty" for relation "drop_test" already exists

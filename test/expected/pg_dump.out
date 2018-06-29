@@ -105,10 +105,12 @@ SELECT * FROM test.show_indexes('_timescaledb_internal._hyper_1_1_chunk');
 (8 rows)
 
 SELECT * FROM test.show_constraints('"test_schema"."two_Partitions"');
-            Constraint             | Type |             Columns             |                     Index                     | Expr 
------------------------------------+------+---------------------------------+-----------------------------------------------+------
+            Constraint             | Type |             Columns             |                     Index                     |          Expr          
+-----------------------------------+------+---------------------------------+-----------------------------------------------+------------------------
+ device_id_parent_empty            | c    | {device_id}                     | -                                             | (device_id IS NULL)
+ timeCustom_parent_empty           | c    | {timeCustom}                    | -                                             | ("timeCustom" IS NULL)
  timecustom_device_id_series_2_key | u    | {timeCustom,device_id,series_2} | test_schema.timecustom_device_id_series_2_key | 
-(1 row)
+(3 rows)
 
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_1_1_chunk');
               Constraint               | Type |             Columns             |                             Index                             |                                                 Expr                                                 
@@ -292,10 +294,12 @@ SELECT * FROM test.show_indexes('_timescaledb_internal._hyper_1_1_chunk');
 (8 rows)
 
 SELECT * FROM test.show_constraints('"test_schema"."two_Partitions"');
-            Constraint             | Type |             Columns             |                     Index                     | Expr 
------------------------------------+------+---------------------------------+-----------------------------------------------+------
+            Constraint             | Type |             Columns             |                     Index                     |          Expr          
+-----------------------------------+------+---------------------------------+-----------------------------------------------+------------------------
+ device_id_parent_empty            | c    | {device_id}                     | -                                             | (device_id IS NULL)
+ timeCustom_parent_empty           | c    | {timeCustom}                    | -                                             | ("timeCustom" IS NULL)
  timecustom_device_id_series_2_key | u    | {timeCustom,device_id,series_2} | test_schema.timecustom_device_id_series_2_key | 
-(1 row)
+(3 rows)
 
 SELECT * FROM test.show_constraints('_timescaledb_internal._hyper_1_1_chunk');
               Constraint               | Type |             Columns             |                             Index                             |                                                 Expr                                                 
@@ -411,16 +415,4 @@ SELECT * FROM _timescaledb_catalog.chunk_constraint;
 ALTER TABLE "test_schema"."two_Partitions" ADD COLUMN series_3 integer;
 INSERT INTO "test_schema"."two_Partitions"("timeCustom", device_id, series_0, series_1, series_3) VALUES
 (1357894000000000000, 'dev5', 1.5, 2, 4);
---query for the extension tables/sequences that will not be dumped by pg_dump (should be empty except for views)
-SELECT objid::regclass
-FROM pg_catalog.pg_depend
-WHERE   refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass AND
-        refobjid = (select oid from pg_extension where extname='timescaledb') AND
-        deptype = 'e' AND
-        classid='pg_catalog.pg_class'::pg_catalog.regclass
-        AND objid NOT IN (select unnest(extconfig) from pg_extension where extname='timescaledb')
-                 objid                  
-----------------------------------------
- _timescaledb_catalog.tablespace_id_seq
-(1 row)
-
+ERROR:  new row for relation "two_Partitions" violates check constraint "device_id_parent_empty"

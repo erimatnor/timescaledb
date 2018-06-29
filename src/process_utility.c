@@ -846,6 +846,11 @@ verify_constraint_hypertable(Hypertable *ht, Node *constr_node)
 	{
 		Constraint *constr = (Constraint *) constr_node;
 
+		if (constr->is_no_inherit)
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_OPERATION_NOT_SUPPORTED),
+					 errmsg("NO INHERIT option not supported on hypertables: %s", constr->conname)));
+
 		contype = constr->contype;
 		keys = (contype == CONSTR_EXCLUSION) ? constr->exclusions : constr->keys;
 		indexname = constr->indexname;

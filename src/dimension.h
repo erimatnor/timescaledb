@@ -85,6 +85,7 @@ typedef struct DimensionInfo
 	bool		if_not_exists;
 	bool		skip;
 	bool		set_not_null;
+	bool        set_is_null;
 	bool		num_slices_is_set;
 	Hypertable *ht;
 } DimensionInfo;
