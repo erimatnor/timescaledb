@@ -1,4 +1,10 @@
 set(CMAKE_C_FLAGS_DEBUG "-DUSE_ASSERT_CHECKING=1")
+INCLUDE (FindOpenSSL)
+file(STRINGS ${PG_INCLUDEDIR}/pg_config.h USE_OPENSSL REGEX "define USE_OPENSSL ")
+
+if (OPENSSL_FOUND AND USE_OPENSSL)
+	include_directories ( ${OPENSSL_INCLUDE_DIR} )
+endif (OPENSSL_FOUND AND USE_OPENSSL)
 
 if (UNIX)
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L${PG_LIBDIR}")
@@ -123,6 +129,10 @@ set(SOURCES
   utils.c
   version.c)
 
+if (NOT PROJECT_INSTALL_METHOD)
+  set(PROJECT_INSTALL_METHOD source)
+endif (NOT PROJECT_INSTALL_METHOD)
+
 configure_file(version.h.in version.h)
 set(GITCOMMIT_H ${CMAKE_CURRENT_BINARY_DIR}/gitcommit.h)
 
@@ -171,6 +181,15 @@ if (PGINDENT)
 endif (PGINDENT)
 
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${TEST_SOURCES} ${HEADERS} ${GITCOMMIT_H})
+if (OPENSSL_FOUND AND USE_OPENSSL)
+	target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
+endif (OPENSSL_FOUND AND USE_OPENSSL)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+add_subdirectory(net)
+ if(CMAKE_BUILD_TYPE MATCHES Debug)
+	add_subdirectory(../test/src "${CMAKE_CURRENT_BINARY_DIR}/test/src")
+endif(CMAKE_BUILD_TYPE MATCHES Debug)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}

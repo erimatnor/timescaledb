@@ -57,9 +57,13 @@ set(TEST_FILES
   vacuum.sql
   version.sql)
 
+file(STRINGS ${PG_INCLUDEDIR}/pg_config.h USE_OPENSSL REGEX "define USE_OPENSSL ")
+
+
 IF(CMAKE_BUILD_TYPE MATCHES Debug)
   list(APPEND TEST_FILES
     loader.sql symbol_conflict.sql)
+  list(APPEND TEST_FILES test_net.sql)
 ENDIF(CMAKE_BUILD_TYPE MATCHES Debug)
 
 IF (${PG_VERSION_MAJOR} GREATER "9")
