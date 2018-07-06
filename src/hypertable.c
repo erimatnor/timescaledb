@@ -1180,8 +1180,8 @@ hypertable_create(PG_FUNCTION_ARGS)
 	if (create_default_indexes)
 		indexing_create_default_indexes(ht);
 
-	if (guc_frontend)
-		hypertable_make_foreign(ht);
+	//if (guc_frontend)
+		//hypertable_make_foreign(ht);
 
 	retval = create_hypertable_datum(fcinfo, ht);
 	cache_release(hcache);

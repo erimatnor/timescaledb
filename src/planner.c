@@ -462,9 +462,11 @@ timescaledb_get_relation_info_hook(PlannerInfo *root,
 
 		if (ht->servers != NIL)
 		{
-			/* Distributed hypertable */
-			rel->fdwroutine = GetFdwRoutineByRelId(rte->relid);
-			rel->fdw_private = rel->fdwroutine->PlanForeignModify(root,
+			/* Distributed hypertable. Setting fdwroutine will make PostgreSQL
+			 * initialize the fdw_private in createplan.c when it is creating
+			 * the ModifyTablePlan for this relation. */
+			//rel->fdwroutine = GetFdwRoutineByRelId(rte->relid);
+			//rel->fdw_private = rel->fdwroutine->PlanForeignModify(root, rel->
 		}
 
 		cache_release(hcache);

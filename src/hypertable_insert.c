@@ -105,6 +105,7 @@ Plan *
 hypertable_insert_plan_create(Hypertable *ht, ModifyTable *mt)
 {
 	CustomScan *cscan = makeNode(CustomScan);
+	ResultRelInfo *rri;
 
 	cscan->methods = &hypertable_insert_plan_methods;
 	cscan->custom_plans = list_make1(mt);
@@ -118,7 +119,13 @@ hypertable_insert_plan_create(Hypertable *ht, ModifyTable *mt)
 	cscan->scan.plan.plan_width = mt->plan.plan_width;
 	cscan->scan.plan.targetlist = mt->plan.targetlist;
 	cscan->custom_scan_tlist = NIL;
-	cscan->custom_private = list_make1(
+
+
+	if (list_length(mt->fdwPrivLists) > 0)
+	{
+		elog(NOTICE, "Hypertable ModifyTable plan has private FDW data. list length %d", list_length(mt->fdwPrivLists));
+	}
+	//cscan->custom_private = list_make1(
 
 
 	return &cscan->scan.plan;

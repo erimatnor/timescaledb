@@ -27,7 +27,7 @@ chunk_dispatch_create(Hypertable *ht, EState *estate)
 	/* Setup fdw state in case this is a distributed table */
 	if (ht->servers != NIL)
 	{
-		cd->fdw_state =
+		//	cd->fdw_state =
 	}
 
 	return cd;
