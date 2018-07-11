@@ -28,6 +28,7 @@
 #include "dimension_vector.h"
 #include "partitioning.h"
 #include "hypertable.h"
+#include "hypertable_server.h"
 #include "hypercube.h"
 #include "scanner.h"
 #include "process_utility.h"
@@ -49,7 +50,7 @@ parent_relid(Oid relationId)
 	ScanKeyData skey;
 	Oid			parent = InvalidOid;
 	HeapTuple	tuple;
-
+	
 	catalog = heap_open(InheritsRelationId, AccessShareLock);
 	ScanKeyInit(&skey, Anum_pg_inherits_inhrelid, BTEqualStrategyNumber,
 				F_OIDEQ, ObjectIdGetDatum(relationId));
@@ -392,7 +393,7 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 		.base.tablespacename = hypertable_select_tablespace_name(ht, chunk),
 		.base.options = get_reloptions(ht->main_table_relid),
 	};
-	char relkind = get_rel_relkind(ht->main_table_relid);
+	char relkind = ht->servers == NIL ? RELKIND_RELATION : RELKIND_FOREIGN_TABLE;
 	Oid			uid,
 				saved_uid;
 
@@ -423,13 +424,18 @@ chunk_create_table(Chunk *chunk, Hypertable *ht)
 
 	if (relkind == RELKIND_FOREIGN_TABLE)
 	{
+		HypertableServer *hs;
+
+		elog(NOTICE, "Chunk is a foreign table");
+
 		if (list_length(ht->servers) == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
 					 (errmsg("hypertable has no associated servers"))));
 
+		hs = linitial(ht->servers);
 		stmt.base.type = T_CreateForeignServerStmt;
-		stmt.servername = linitial(ht->servers);
+		stmt.servername = NameStr(hs->fd.server_name);
 		CreateForeignTable(&stmt, objaddr.objectId);
 	}
 

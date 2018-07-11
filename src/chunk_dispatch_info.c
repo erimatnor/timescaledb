@@ -9,16 +9,8 @@ chunk_dispatch_info_copy(struct ExtensibleNode *newnode,
 {
 	ChunkDispatchInfo *newinfo = (ChunkDispatchInfo *) newnode;
 	const ChunkDispatchInfo *oldinfo = (const ChunkDispatchInfo *) oldnode;
-	Size sql_len = oldinfo->deparsed_sql != NULL ? strlen(oldinfo->deparsed_sql) + 1 : 0;
 
 	newinfo->hypertable_relid = oldinfo->hypertable_relid;
-	newinfo->deparsed_sql = NULL;
-
-	if (sql_len > 0)
-	{
-		newinfo->deparsed_sql = palloc(sql_len);
-		StrNCpy(newinfo->deparsed_sql, oldinfo->deparsed_sql, sql_len);
-	}
 }
 
 static bool
@@ -75,13 +67,15 @@ static ExtensibleNodeMethods chunk_dispatch_info_methods = {
 };
 
 ChunkDispatchInfo *
-chunk_dispatch_info_create(Oid hypertable_relid, Query *parse)
+chunk_dispatch_info_create(Oid hypertable_relid, void *fwd_priv)
 {
 	ChunkDispatchInfo *info = (ChunkDispatchInfo *) newNode(sizeof(ChunkDispatchInfo),
 															T_ExtensibleNode);
 
 	info->enode.extnodename = chunk_dispatch_info_methods.extnodename;
 	info->hypertable_relid = hypertable_relid;
+	info->hypertable_fwd_priv = fwd_priv;
+
 	return info;
 }
 

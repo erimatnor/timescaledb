@@ -128,7 +128,7 @@ enum
 enum Anum_hypertable_server
 {
 	Anum_hypertable_server_hypertable_id = 1,
-	Anum_hypertable_server_server_hypertable_id = 1,
+	Anum_hypertable_server_server_hypertable_id,
 	Anum_hypertable_server_server_name,
 	_Anum_hypertable_server_max,
 };

@@ -1805,6 +1805,9 @@ postgresExecForeignInsert(EState *estate,
 	ListCell *lc;
 	bool first_conn = true;
 
+
+	elog(NOTICE, "Foreign insert on %s",  get_rel_name(resultRelInfo->ri_RelationDesc->rd_id));
+
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
 		prepare_foreign_modify(fmstate);

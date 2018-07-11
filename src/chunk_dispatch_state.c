@@ -70,7 +70,17 @@ chunk_dispatch_exec(CustomScanState *node)
 
 		/* Save the main table's (hypertable's) ResultRelInfo */
 		if (NULL == dispatch->hypertable_result_rel_info)
+		{
 			dispatch->hypertable_result_rel_info = estate->es_result_relation_info;
+			/* Disable the FdwRoutine. We do foreign inserts on chunks instead. */
+			dispatch->hypertable_result_rel_info->ri_FdwRoutine = NULL;
+
+			if (dispatch->hypertable_result_rel_info->ri_FdwState == NULL)
+			{
+				elog(NOTICE, "Hypertable has not FDW state");
+
+			}
+		}
 
 		/*
 		 * Copy over the index to use in the returning list.
@@ -105,7 +115,7 @@ chunk_dispatch_exec(CustomScanState *node)
 		 */
 		estate->es_result_relation_info = cis->result_relation_info;
 
-		timescaledb_fdw_update_modify_state(cis->result_relation_info, estate);
+		//timescaledb_fdw_update_modify_state(cis->result_relation_info, estate);
 
 		MemoryContextSwitchTo(old);
 

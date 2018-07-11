@@ -960,6 +960,25 @@ hypertable_make_foreign(Hypertable *ht)
 
 }
 
+static void
+hypertable_make_distributed(Hypertable *ht)
+{
+	ListCell *lc;
+	List *hypertable_servers = NIL;
+
+	foreach(lc, server_get_list())
+	{
+		const char *server_name = lfirst(lc);
+		HypertableServer *hs = palloc0(sizeof(HypertableServer));
+
+		hs->fd.hypertable_id = ht->fd.id;
+		namestrcpy(&hs->fd.server_name, server_name);
+		hypertable_servers = lappend(hypertable_servers, hs);
+	}
+
+	hypertable_server_insert_multi(hypertable_servers);
+}
+
 static Datum
 create_hypertable_datum(FunctionCallInfo fcinfo, Hypertable *ht)
 {
@@ -1180,8 +1199,8 @@ hypertable_create(PG_FUNCTION_ARGS)
 	if (create_default_indexes)
 		indexing_create_default_indexes(ht);
 
-	//if (guc_frontend)
-		//hypertable_make_foreign(ht);
+	if (guc_frontend)
+		hypertable_make_distributed(ht);
 
 	retval = create_hypertable_datum(fcinfo, ht);
 	cache_release(hcache);

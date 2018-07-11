@@ -121,10 +121,11 @@ build_customscan_targetlist(Relation rel, List *targetlist)
  * node.
  */
 CustomScan *
-chunk_dispatch_plan_create(Plan *subplan, Index hypertable_rti, Oid hypertable_relid, Query *parse)
+chunk_dispatch_plan_create(ModifyTable *mt, Plan *subplan, Index hypertable_rti, Oid hypertable_relid)
 {
 	CustomScan *cscan = makeNode(CustomScan);
-	ChunkDispatchInfo *info = chunk_dispatch_info_create(hypertable_relid, parse);
+	ChunkDispatchInfo *info = chunk_dispatch_info_create(hypertable_relid,
+														 mt->fdwPrivLists != NIL ? linitial(mt->fdwPrivLists) : NULL);
 	Relation	rel;
 
 	cscan->custom_private = list_make1(info);

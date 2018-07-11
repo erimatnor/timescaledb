@@ -36,6 +36,7 @@
 #include "chunk_dispatch_plan.h"
 #include "planner_utils.h"
 #include "hypertable_insert.h"
+#include "hypertable_server.h"
 #include "constraint_aware_append.h"
 #include "partitioning.h"
 #include "dimension_slice.h"
@@ -154,12 +155,14 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 					 * We replace the plan with our custom chunk dispatch
 					 * plan.
 					 */
-					*subplan_ptr = chunk_dispatch_plan_create(subplan, rti, rte->relid, ctx->parse);
+					*subplan_ptr = chunk_dispatch_plan_create(mt, subplan, rti, rte->relid);
 				}
 			}
 
 			if (ht != NULL)
+			{
 				*planptr = hypertable_insert_plan_create(ht, mt);
+			}
 		}
 	}
 }
@@ -323,6 +326,36 @@ is_append_parent(RelOptInfo *rel, RangeTblEntry *rte)
 }
 
 static void
+timescaledb_create_upper_paths(PlannerInfo *root,
+							   UpperRelationKind stage,
+							   RelOptInfo *input_rel,
+							   RelOptInfo *output_rel)
+{
+	Hypertable *ht;
+
+
+	if (prev_create_upper_paths_hook != NULL)
+		(*prev_create_upper_paths_hook) (root, stage, input_rel, output_rel);
+
+	if (IS_SIMPLE_REL(input_rel))
+	{
+		Cache	   *hcache = hypertable_cache_pin();
+		RangeTblEntry *rte = root->simple_rte_array[input_rel->relid]; //rt_fetch(input_rel->relid, root->parse->rtable);
+
+		ht = hypertable_cache_get_entry(hcache, rte->relid);
+
+		elog(NOTICE, "Found %s in upper_rel_pathlist", get_rel_name(rte->relid));
+
+
+		if (NULL != ht)
+		{
+			elog(NOTICE, "Found hypertable %s in upper", get_rel_name(rte->relid));
+		}
+		cache_release(hcache);
+	}
+}
+
+static void
 timescaledb_set_rel_pathlist(PlannerInfo *root,
 							 RelOptInfo *rel,
 							 Index rti,
@@ -337,12 +370,36 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 	if (!extension_is_loaded() || IS_DUMMY_REL(rel) || !OidIsValid(rte->relid))
 		return;
 
-	/* quick abort if only optimizing hypertables */
-	if (!guc_optimize_non_hypertables && !(is_append_parent(rel, rte) || is_append_child(rel, rte)))
-		return;
-
 	hcache = hypertable_cache_pin();
 	ht = hypertable_cache_get_entry(hcache, rte->relid);
+
+	if (ht != NULL &&
+		root->parse->resultRelation != 0)
+	{
+
+		if (ht->servers == NIL)
+		{
+			elog(NOTICE, "No hypertable servers");
+
+		} else {
+		/* Distributed hypertable. Setting fdwroutine will make PostgreSQL
+		 * initialize the fdw_private in createplan.c when it is creating
+		 * the ModifyTablePlan for this relation. */
+		HypertableServer *hs = linitial(ht->servers);
+		ForeignServer *server  = GetForeignServerByName(NameStr(hs->fd.server_name), false);
+		rel->fdwroutine = GetFdwRoutineByServerId(server->serverid);
+
+		elog(NOTICE, "Setting fdwroutine to %p", rel->fdwroutine);
+		//rel->fdw_private = rel->fdwroutine->PlanForeignModify(root, rel->
+		}
+	}
+
+	/* quick abort if only optimizing hypertables */
+	if (!guc_optimize_non_hypertables && !(is_append_parent(rel, rte) || is_append_child(rel, rte)))
+	{
+		cache_release(hcache);
+		return;
+	}
 
 	if (!should_optimize_query(ht))
 		goto out_release;
@@ -383,15 +440,15 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 	}
 
 	if (
-
 	/*
 	 * Right now this optimization applies only to hypertables (ht used
 	 * below). Can be relaxed later to apply to reg tables but needs testing
 	 */
 		ht != NULL &&
 		is_append_parent(rel, rte) &&
-	/* Do not optimize result relations (INSERT, UPDATE, DELETE) */
-		0 == root->parse->resultRelation)
+
+		/* Do not optimize result relations (INSERT, UPDATE, DELETE) */
+		root->parse->resultRelation == 0)
 	{
 		ListCell   *lc;
 
@@ -402,12 +459,12 @@ timescaledb_set_rel_pathlist(PlannerInfo *root,
 
 			switch (nodeTag(path))
 			{
-				case T_AppendPath:
+			case T_AppendPath:
 				case T_MergeAppendPath:
 					if (should_optimize_append(path))
 						*pathptr = constraint_aware_append_path_create(root, ht, path);
-				default:
-					break;
+			default:
+				break;
 			}
 		}
 	}
@@ -460,14 +517,7 @@ timescaledb_get_relation_info_hook(PlannerInfo *root,
 									  inhparent,
 									  rel);
 
-		if (ht->servers != NIL)
-		{
-			/* Distributed hypertable. Setting fdwroutine will make PostgreSQL
-			 * initialize the fdw_private in createplan.c when it is creating
-			 * the ModifyTablePlan for this relation. */
-			//rel->fdwroutine = GetFdwRoutineByRelId(rte->relid);
-			//rel->fdw_private = rel->fdwroutine->PlanForeignModify(root, rel->
-		}
+		elog(NOTICE, "get_relation_info: %s", get_rel_name(relation_objectid));
 
 		cache_release(hcache);
 	}
@@ -547,8 +597,12 @@ _planner_init(void)
 {
 	prev_planner_hook = planner_hook;
 	planner_hook = timescaledb_planner;
+
 	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
 	set_rel_pathlist_hook = timescaledb_set_rel_pathlist;
+
+	prev_create_upper_paths_hook = create_upper_paths_hook;
+	create_upper_paths_hook = timescaledb_create_upper_paths;
 
 	prev_get_relation_info_hook = get_relation_info_hook;
 	get_relation_info_hook = timescaledb_get_relation_info_hook;
@@ -561,6 +615,7 @@ _planner_fini(void)
 {
 	planner_hook = prev_planner_hook;
 	set_rel_pathlist_hook = prev_set_rel_pathlist_hook;
+	create_upper_paths_hook = prev_create_upper_paths_hook;
 	get_relation_info_hook = prev_get_relation_info_hook;
 	create_upper_paths_hook = prev_create_upper_paths_hook;
 }

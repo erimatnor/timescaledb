@@ -202,14 +202,18 @@ create_chunk_result_relation_info(ChunkDispatch *dispatch, Relation rel, Index r
 	rri->ri_projectReturning = rri_orig->ri_projectReturning;
 	rri->ri_onConflictSetProj = rri_orig->ri_onConflictSetProj;
 	rri->ri_onConflictSetWhere = rri_orig->ri_onConflictSetWhere;
+	rri->ri_FdwState = NIL;
 
-	/*
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE &&
+		rri_orig->ri_FdwState != NULL)
 	{
+		elog(NOTICE, "Setting fdw state for chunk %s", get_rel_name(rel->rd_id));
 		rri->ri_FdwRoutine = GetFdwRoutineForRelation(rel, true);
+		rri->ri_FdwState = rri_orig->ri_FdwState;
 		rri->ri_usesFdwDirectModify = false;
-		rri->ri_FdwState = dispatch->fdw_state;
-		}*/
+	} else if (rri_orig->ri_FdwState == NULL)
+		elog(NOTICE, "Hypertable FdwState is NULL");
+
 
 	create_chunk_rri_constraint_expr(rri, rel);
 
