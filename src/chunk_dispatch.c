@@ -12,7 +12,7 @@
 #include "guc.h"
 
 ChunkDispatch *
-chunk_dispatch_create(Hypertable *ht, EState *estate)
+chunk_dispatch_create(Hypertable *ht, EState *estate, int eflags)
 {
 	ChunkDispatch *cd = palloc0(sizeof(ChunkDispatch));
 

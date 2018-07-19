@@ -6,6 +6,8 @@ find_library(LIBPQ_LIB
 
 if (NOT LIBPQ_LIB)
   message(FATAL_ERROR "Unable to find 'libpq'")
+else ()
+  include_directories(${CMAKE_CURRENT_BINARY_DIR} ${PG_INCLUDEDIR})
 endif ()
 
 if (UNIX)

@@ -20,8 +20,8 @@ typedef struct ChunkDispatch
 	Hypertable *hypertable;
 	SubspaceStore *cache;
 	EState	   *estate;
-	ModifyTable *mt; /* The ModifyTable plan of the parent Hypertable */
-
+	int eflags;
+	ModifyTableState *mtstate;
 	/*
 	 * Keep a pointer to the original (hypertable's) ResultRelInfo since we
 	 * will reset the pointer in EState as we lookup new chunks.
@@ -41,7 +41,7 @@ typedef struct ChunkDispatch
 typedef struct Point Point;
 typedef struct ChunkInsertState ChunkInsertState;
 
-ChunkDispatch *chunk_dispatch_create(Hypertable *ht, EState *estate);
+ChunkDispatch *chunk_dispatch_create(Hypertable *ht, EState *estate, int eflags);
 void		chunk_dispatch_destroy(ChunkDispatch *dispatch);
 ChunkInsertState *chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *p);
 

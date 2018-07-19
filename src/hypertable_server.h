@@ -5,6 +5,7 @@
 
 typedef struct HypertableServer {
 	FormData_hypertable_server fd;
+	Oid foreign_server_oid;
 } HypertableServer;
 
 extern List *hypertable_server_scan(int32 hypertable_id);

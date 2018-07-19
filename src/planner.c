@@ -36,6 +36,7 @@
 #include "chunk_dispatch_plan.h"
 #include "planner_utils.h"
 #include "hypertable_insert.h"
+#include "hypertable_server.h"
 #include "constraint_aware_append.h"
 #include "partitioning.h"
 #include "dimension_slice.h"
@@ -123,7 +124,7 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 
 		if (mt->operation == CMD_INSERT)
 		{
-			bool		hypertable_found = false;
+			Hypertable *ht = NULL;
 			ListCell   *lc_plan,
 					   *lc_rel;
 
@@ -136,7 +137,8 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 			{
 				Index		rti = lfirst_int(lc_rel);
 				RangeTblEntry *rte = rt_fetch(rti, ctx->rtable);
-				Hypertable *ht = hypertable_cache_get_entry(ctx->hcache, rte->relid);
+
+				ht = hypertable_cache_get_entry(ctx->hcache, rte->relid);
 
 				if (ht != NULL)
 				{
@@ -154,13 +156,15 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 					 * We replace the plan with our custom chunk dispatch
 					 * plan.
 					 */
-					*subplan_ptr = chunk_dispatch_plan_create(subplan, rti, rte->relid, ctx->parse);
-					hypertable_found = true;
+					*subplan_ptr = chunk_dispatch_plan_create(mt, subplan, rti, rte->relid);
 				}
 			}
 
-			if (hypertable_found)
-				*planptr = hypertable_insert_plan_create(mt);
+			/* Now create the wrapping hypertable insert plan. Note that this
+			 * has to be done after we've created all the chunk dispatch plans
+			 * above. Hence, this is outside the forboth loop */
+			if (NULL != ht)
+				*planptr = hypertable_insert_plan_create(ht, mt);
 		}
 	}
 }
@@ -526,20 +530,25 @@ timescale_create_upper_paths_hook(PlannerInfo *root,
 	if (output_rel != NULL && output_rel->pathlist != NIL && IsA(linitial(output_rel->pathlist), ModifyTablePath))
 	{
 		ModifyTablePath *mt = linitial(output_rel->pathlist);
-		RangeTblEntry *rte = planner_rt_fetch(linitial_int(mt->resultRelations), root);
-		Cache *htcache = hypertable_cache_pin();
-		Hypertable *ht = hypertable_cache_get_entry(htcache, rte->relid);
 
-		if (NULL != ht)
+		if (mt->operation == CMD_INSERT)
 		{
-			Oid fdwoid = get_foreign_data_wrapper_oid("timescaledb", false);
+			RangeTblEntry *rte = planner_rt_fetch(linitial_int(mt->resultRelations), root);
+			Cache *htcache = hypertable_cache_pin();
+			Hypertable *ht = hypertable_cache_get_entry(htcache, rte->relid);
 
-			elog(NOTICE, "Found modifytable %s fdwroutine %p", get_rel_name(ht->main_table_relid), output_rel->fdwroutine);
-			output_rel->fdwroutine = GetFdwRoutine(fdwoid);
-			elog(NOTICE, "Found modifytable %s fdwroutine %p", get_rel_name(ht->main_table_relid), output_rel->fdwroutine);
+			if (NULL != ht && ht->servers != NIL)
+			{
+				HypertableServer *server = linitial(ht->servers);
+
+				/* We set the fdwroutine here to make PostgreSQL planner create
+				 * the private foreign state for the hypertable. This includes
+				 * the deparsed query for the INSERT statement */
+				output_rel->fdwroutine = GetFdwRoutineByServerId(server->foreign_server_oid);
+			}
+
+			cache_release(htcache);
 		}
-
-		cache_release(htcache);
 	}
 
 	if (guc_disable_optimizations ||

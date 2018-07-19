@@ -19,7 +19,7 @@
 #include "nodes/relation.h"
 #include "utils/relcache.h"
 
-#include "libpq-fe.h"
+#include <libpq-fe.h>
 
 /*
  * FDW-specific planner information kept in RelOptInfo.fdw_private for a

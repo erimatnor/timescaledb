@@ -34,8 +34,8 @@ chunk_dispatch_begin(CustomScanState *node, EState *estate, int eflags)
 		elog(ERROR, "no hypertable for relid %d", state->hypertable_relid);
 	}
 	ps = ExecInitNode(state->subplan, estate, eflags);
+	state->dispatch = chunk_dispatch_create(ht, estate, eflags);
 	state->hypertable_cache = hypertable_cache;
-	state->dispatch = chunk_dispatch_create(ht, estate);
 	node->custom_ps = list_make1(ps);
 }
 
@@ -70,26 +70,24 @@ chunk_dispatch_exec(CustomScanState *node)
 
 		/* Save the main table's (hypertable's) ResultRelInfo */
 		if (NULL == dispatch->hypertable_result_rel_info)
-		{
 			dispatch->hypertable_result_rel_info = estate->es_result_relation_info;
-			/* Disable the FdwRoutine. We do foreign inserts on chunks instead. */
-			dispatch->hypertable_result_rel_info->ri_FdwRoutine = NULL;
-
-			if (dispatch->hypertable_result_rel_info->ri_FdwState == NULL)
-			{
-				elog(NOTICE, "Hypertable has not FDW state");
-
-			}
-		}
 
 		/*
 		 * Copy over the index to use in the returning list.
 		 */
 		dispatch->returning_index = state->parent->mt_whichplan;
 
-
 		/* Find or create the insert state matching the point */
 		cis = chunk_dispatch_get_chunk_insert_state(dispatch, point);
+
+		if (dispatch->hypertable_result_rel_info->ri_FdwState == NULL)
+		{
+			elog(NOTICE, "Hypertable has no FDW state");
+		}
+		else
+		{
+			elog(NOTICE, "Hypertable has FDW state");
+		}
 
 		/*
 		 * Update the arbiter indexes for ON CONFLICT statements so that they
@@ -114,8 +112,6 @@ chunk_dispatch_exec(CustomScanState *node)
 		 * chunk.
 		 */
 		estate->es_result_relation_info = cis->result_relation_info;
-
-		//timescaledb_fdw_update_modify_state(cis->result_relation_info, estate);
 
 		MemoryContextSwitchTo(old);
 
@@ -171,7 +167,7 @@ chunk_dispatch_state_set_parent(ChunkDispatchState *state, ModifyTableState *par
 	ModifyTable *mt_plan;
 
 	state->parent = parent;
-	state->dispatch->mt = (ModifyTable *) parent->ps.plan;
+	state->dispatch->mtstate = parent;
 	state->dispatch->arbiter_indexes = parent->mt_arbiterindexes;
 	state->dispatch->on_conflict = parent->mt_onconflict;
 	state->dispatch->cmd_type = parent->operation;

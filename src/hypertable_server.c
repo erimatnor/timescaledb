@@ -1,4 +1,6 @@
+#include <postgres.h>
 #include <utils/fmgroids.h>
+#include <foreign/foreign.h>
 
 #include "hypertable_server.h"
 #include "scanner.h"
@@ -76,8 +78,10 @@ hypertable_server_tuple_found(TupleInfo *ti, void *data)
 	List **servers = data;
 	Form_hypertable_server form = (Form_hypertable_server) GETSTRUCT(ti->tuple);
 	HypertableServer *hypertable_server = palloc(sizeof(HypertableServer));
+	ForeignServer *foreign_server = GetForeignServerByName(NameStr(form->server_name), false);
 
 	memcpy(&hypertable_server->fd, form, sizeof(FormData_hypertable_server));
+	hypertable_server->foreign_server_oid = foreign_server->serverid;
 	*servers = lappend(*servers, hypertable_server);
 
 	return true;

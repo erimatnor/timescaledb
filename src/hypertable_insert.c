@@ -10,6 +10,7 @@
 #include "hypertable_insert.h"
 #include "chunk_dispatch_info.h"
 #include "chunk_dispatch_state.h"
+#include "hypertable_server.h"
 
 /*
  * HypertableInsert (with corresponding executor node) is a plan node that
@@ -23,12 +24,16 @@
  * the ModifyTableState node whenever it inserts into a new chunk.
  */
 
-
 static void
 hypertable_insert_begin(CustomScanState *node, EState *estate, int eflags)
 {
 	HypertableInsertState *state = (HypertableInsertState *) node;
-	PlanState  *ps = ExecInitNode(&state->mt->plan, estate, eflags);
+	ResultRelInfo *hypertable_result_relinfo;
+	PlanState  *ps;
+
+	hypertable_result_relinfo = estate->es_result_relations + state->mt->resultRelIndex;
+
+	ps = ExecInitNode(&state->mt->plan, estate, eflags);
 
 	node->custom_ps = list_make1(ps);
 
@@ -105,6 +110,7 @@ Plan *
 hypertable_insert_plan_create(Hypertable *ht, ModifyTable *mt)
 {
 	CustomScan *cscan = makeNode(CustomScan);
+	ListCell *lc;
 
 	cscan->methods = &hypertable_insert_plan_methods;
 	cscan->custom_plans = list_make1(mt);
@@ -119,10 +125,17 @@ hypertable_insert_plan_create(Hypertable *ht, ModifyTable *mt)
 	cscan->scan.plan.targetlist = mt->plan.targetlist;
 	cscan->custom_scan_tlist = NIL;
 
+	foreach(lc, ht->servers)
+	{
+		HypertableServer *server = lfirst(lc);
+		cscan->custom_private = lappend_oid(cscan->custom_private, server->foreign_server_oid);
+	}
 
 	if (list_length(mt->fdwPrivLists) > 0)
 	{
 		elog(NOTICE, "Hypertable ModifyTable plan has private FDW data. list length %d", list_length(mt->fdwPrivLists));
+	} else {
+		elog(NOTICE, "ModifyTable has no private FDW data");
 	}
 
 	return &cscan->scan.plan;

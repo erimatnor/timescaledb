@@ -966,6 +966,8 @@ hypertable_make_distributed(Hypertable *ht)
 	ListCell *lc;
 	List *hypertable_servers = NIL;
 
+	elog(NOTICE, "Making distributed hypertable");
+
 	foreach(lc, server_get_list())
 	{
 		const char *server_name = lfirst(lc);
