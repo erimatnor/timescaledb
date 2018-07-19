@@ -19,6 +19,8 @@ mock_read(int offset, char *buffer, int bytes_to_read, const char *message_to_re
 	strncpy(buffer, message_to_read_from + offset, num_bytes);
 	return num_bytes;
 }*/
+#define MAX_RESULT_SIZE	2048
+
 TS_FUNCTION_INFO_V1(test_conn);
 
 Datum
@@ -30,28 +32,31 @@ test_conn(PG_FUNCTION_ARGS)
 	char		response[MAX_RESULT_SIZE];
 	Connection *conn;
 
-	// Test connection_init/destroy
-	conn = connection_init();
+	/* Test connection_init/destroy */
+	conn = connection_create_plain();
 	connection_destroy(conn);
 
-	// Check pass NULL won't crash
+	/* Check pass NULL won't crash */
 	connection_destroy(NULL);
 
-	// Check that delays on the socket are properly handled
-	conn = connection_init();
-	// This is a brittle assert function because we might not necessarily have
-	// connectivity on the server running this test?
-	Assert(conn->ops->connect(conn, host, port, response) >=  0);
+	/* Check that delays on the socket are properly handled */
+	conn = connection_create_plain();
+	/* This is a brittle assert function because we might not necessarily have */
+	/* connectivity on the server running this test? */
+	Assert(connection_connect(conn, host, port) >= 0);
 
-	conn->ops->read(conn, response, 1); // should timeout
-	conn->ops->close(conn);
+	connection_read(conn, response, 1);
+	//should timeout
+		connection_close(conn);
 
-	// Now test ssl_ops!
-	connection_set_ops(conn, &ssl_ops);
-	Assert(conn->ops->connect(conn, host, ssl_port, response) >= 0);
-	conn->ops->read(conn, response, 1); 
-	conn->ops->close(conn);
-	
+	/* Now test ssl_ops! */
 	connection_destroy(conn);
-	PG_RETURN_NULL();	
+	conn = connection_create_ssl();
+
+	Assert(connection_connect(conn, host, ssl_port) >= 0);
+	connection_read(conn, response, 1);
+	connection_close(conn);
+
+	connection_destroy(conn);
+	PG_RETURN_NULL();
 }

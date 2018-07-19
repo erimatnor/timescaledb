@@ -36,8 +36,8 @@ extern void _process_utility_fini(void);
 extern void _event_trigger_init(void);
 extern void _event_trigger_fini(void);
 
-extern void _connection_library_init(void);
-extern void _connection_library_fini(void);
+extern void _connection_init(void);
+extern void _connection_fini(void);
 
 extern void PGDLLEXPORT _PG_init(void);
 extern void PGDLLEXPORT _PG_fini(void);
@@ -59,7 +59,7 @@ _PG_init(void)
 	_event_trigger_init();
 	_process_utility_init();
 	_guc_init();
-	_connection_library_init();
+	_connection_init();
 }
 
 void
@@ -77,5 +77,5 @@ _PG_fini(void)
 	_hypertable_cache_fini();
 	_cache_fini();
 	_chunk_dispatch_info_fini();
-	_connection_library_fini();
+	_connection_fini();
 }

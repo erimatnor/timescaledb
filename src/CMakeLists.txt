@@ -3,7 +3,7 @@ INCLUDE (FindOpenSSL)
 file(STRINGS ${PG_INCLUDEDIR}/pg_config.h USE_OPENSSL REGEX "define USE_OPENSSL ")
 
 if (OPENSSL_FOUND AND USE_OPENSSL)
-	include_directories ( ${OPENSSL_INCLUDE_DIR} )
+    include_directories ( ${OPENSSL_INCLUDE_DIR} )
 endif (OPENSSL_FOUND AND USE_OPENSSL)
 
 if (UNIX)
@@ -174,7 +174,7 @@ endif (PGINDENT)
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${HEADERS} ${GITCOMMIT_H})
 
 if (OPENSSL_FOUND AND USE_OPENSSL)
-	target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
+    target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
 endif (OPENSSL_FOUND AND USE_OPENSSL)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

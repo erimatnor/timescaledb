@@ -7,35 +7,24 @@
 #include <openssl/err.h>
 #endif
 
-#define MAX_RESULT_SIZE	2048
-
-typedef struct Connection Connection;
-
-typedef struct ConnOps
-{
-	int			(*connect) (Connection *conn, char *host, int port, char *response);
-	void		(*close) (Connection *conn);
-	/* int (*write_request)(Connection *conn, char *request); */
-	int			(*write) ();
-	int			(*read) ();
-} ConnOps;
+typedef struct ConnOps ConnOps;
 
 typedef struct Connection
 {
-    int sock;
-#ifdef USE_OPENSSL
-    SSL_CTX *ssl_ctx;
-	SSL *ssl;
-#endif
-	ConnOps *ops;
+	int			sock;
+	ConnOps    *ops;
+	unsigned long errcode;
 } Connection;
 
-extern ConnOps ssl_ops;
+extern Connection *connection_create_ssl(void);
+extern Connection *connection_create_plain(void);
+extern int	connection_connect(Connection *conn, const char *host, int port);
+extern ssize_t connection_read(Connection *conn, char *buf, size_t buflen);
+extern ssize_t connection_write(Connection *conn, const char *buf, size_t writelen);
+extern void connection_close(Connection *conn);
+extern void connection_destroy(Connection *conn);
+extern const char *connection_err_msg(Connection *conn);
 
-Connection *connection_init(void);
-void connection_destroy(Connection *conn);
-void connection_set_ops(Connection *conn, ConnOps *ops);
-
-// Called in init.c
-extern void _connection_library_init(void);
-extern void _connection_library_fini(void);
+/*  Called in init.c */
+extern void _connection_init(void);
+extern void _connection_fini(void);
