@@ -46,8 +46,8 @@ test_conn(PG_FUNCTION_ARGS)
 	Assert(connection_connect(conn, host, port) >= 0);
 
 	connection_read(conn, response, 1);
-	//should timeout
-		connection_close(conn);
+	/* should timeout */
+	connection_close(conn);
 
 	/* Now test ssl_ops! */
 	connection_destroy(conn);

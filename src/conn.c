@@ -9,7 +9,7 @@
 typedef struct ConnOps
 {
 	int			(*connect) (Connection *conn, const char *host, int port);
-	void		(*close) (Connection *conn);
+	int			(*close) (Connection *conn);
 	ssize_t		(*write) (Connection *conn, const char *buf, size_t writelen);
 	ssize_t		(*read) (Connection *conn, char *buf, size_t readlen);
 	const char *(*err_msg) (Connection *conn);
@@ -78,10 +78,10 @@ plain_read(Connection *conn, char *buf, size_t buflen)
 	return read(conn->sock, buf, buflen);
 }
 
-static void
+static int
 plain_close(Connection *conn)
 {
-	close(conn->sock);
+	return close(conn->sock);
 }
 
 static const char *
@@ -219,7 +219,7 @@ ssl_read(Connection *conn, char *buf, size_t buflen)
 	return SSL_read(((SSLConnection *) conn)->ssl, buf, buflen);
 }
 
-static void
+static int
 ssl_close(Connection *conn)
 {
 	SSLConnection *sslconn = (SSLConnection *) conn;
@@ -236,7 +236,7 @@ ssl_close(Connection *conn)
 		sslconn->ssl_ctx = NULL;
 	}
 
-	plain_close(conn);
+	return plain_close(conn);
 }
 
 static const char *
@@ -268,6 +268,7 @@ connection_create_ssl()
 			 errhint("Enable SSL support when compiling the extension.")));
 #endif
 }
+
 
 /* Public API */
 
@@ -318,11 +319,13 @@ connection_read(Connection *conn, char *buf, size_t buflen)
 	return offset;
 }
 
-void
+int
 connection_close(Connection *conn)
 {
 	if (NULL != conn->ops)
-		conn->ops->close(conn);
+		return conn->ops->close(conn);
+
+	return 0;
 }
 
 void
@@ -347,8 +350,8 @@ _connection_init(void)
 {
 #ifdef USE_OPENSSL
 	SSL_library_init();
-	//Always returns 1
-		SSL_load_error_strings();
+	/* Always returns 1 */
+	SSL_load_error_strings();
 #endif
 }
 
@@ -359,3 +362,186 @@ _connection_fini(void)
 	ERR_free_strings();
 #endif
 }
+
+
+#if defined(ENABLE_MOCK_CONN)
+
+/*
+ * States for the mocked connection.
+ */
+typedef enum MockConnState
+{
+	MOCK_CONN_INIT,
+	MOCK_CONN_CONNECTED,
+	MOCK_CONN_DATA_SENT,
+	MOCK_CONN_ERROR,
+} MockConnState;
+
+#define MAX_MSG_LEN 2048
+
+/*
+ * Mocked connection.
+ *
+ * Provides a send and recv buffer.
+ */
+typedef struct MockConnection
+{
+	Connection	conn;
+	MockConnState state;
+	size_t		sendbuf_written;
+	size_t		recvbuf_written;
+	size_t		recvbuf_read;
+	char		sendbuf[MAX_MSG_LEN];
+	char		recvbuf[MAX_MSG_LEN];
+} MockConnection;
+
+static int
+mock_connect(Connection *conn, const char *host, int port)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	if (mock->state >= MOCK_CONN_CONNECTED)
+	{
+		conn->errcode = EISCONN;
+		return -1;
+	}
+
+	mock->state = MOCK_CONN_CONNECTED;
+
+	return 0;
+}
+
+static int
+mock_close(Connection *conn)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	if (mock->state < MOCK_CONN_CONNECTED)
+	{
+		conn->errcode = EBADF;
+		return -1;
+	}
+
+	mock->state = MOCK_CONN_INIT;
+	mock->sendbuf_written = 0;
+	mock->recvbuf_written = 0;
+	mock->recvbuf_read = 0;
+
+	return 0;
+}
+
+static ssize_t
+mock_write(Connection *conn, const char *buf, size_t writelen)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	switch (mock->state)
+	{
+		case MOCK_CONN_CONNECTED:
+			if (writelen > MAX_MSG_LEN)
+			{
+				conn->errcode = ENOBUFS;
+				return -1;
+			}
+			mock->state = MOCK_CONN_DATA_SENT;
+
+			/* Only "send" half the buffer the first write */
+			mock->sendbuf_written = writelen / 2;
+			memcpy(mock->sendbuf, buf, mock->sendbuf_written);
+
+			return mock->sendbuf_written;
+		case MOCK_CONN_DATA_SENT:
+			/* Send the rest or buffer full */
+			if (writelen > (MAX_MSG_LEN - mock->sendbuf_written))
+			{
+				conn->errcode = ENOBUFS;
+				return -1;
+			}
+
+			memcpy(mock->sendbuf + mock->sendbuf_written, buf, writelen);
+			return writelen;
+		case MOCK_CONN_ERROR:
+			return -1;
+		default:
+			conn->errcode = ECONNRESET;
+			mock->state = MOCK_CONN_ERROR;
+			return -1;
+	}
+
+	return writelen;
+}
+
+static ssize_t
+mock_read(Connection *conn, char *buf, size_t readlen)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	switch (mock->state)
+	{
+		case MOCK_CONN_CONNECTED:
+			conn->errcode = EAGAIN;
+			return -1;
+		case MOCK_CONN_DATA_SENT:
+			if (readlen > (mock->recvbuf_written - mock->recvbuf_read))
+			{
+				/* Pretend non-blocking mode */
+				conn->errcode = EWOULDBLOCK;
+				return -1;
+			}
+
+			memcpy(buf, mock->recvbuf + mock->recvbuf_read, readlen);
+			mock->recvbuf_read += readlen;
+			return readlen;
+		case MOCK_CONN_ERROR:
+			return -1;
+		default:
+			conn->errcode = ECONNRESET;
+			mock->state = MOCK_CONN_ERROR;
+			return -1;
+	}
+
+	return 0;
+}
+
+static ConnOps mock_ops = {
+	.connect = mock_connect,
+	.close = mock_close,
+	.write = mock_write,
+	.read = mock_read,
+	.err_msg = plain_err_msg,
+};
+
+ssize_t
+connection_mock_set_recv_data(Connection *conn, const char *data, size_t datalen)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	if (datalen > MAX_MSG_LEN)
+		return -1;
+
+	memcpy(mock->recvbuf, data, datalen);
+
+	mock->recvbuf_written = datalen;
+	mock->recvbuf_read = 0;
+
+	return datalen;
+}
+
+const char *
+connection_mock_get_sent_data(Connection *conn, size_t *datalen)
+{
+	MockConnection *mock = (MockConnection *) conn;
+
+	if (NULL != datalen)
+		*datalen = mock->sendbuf_written;
+
+	return mock->sendbuf;
+}
+
+Connection *
+connection_create_mock()
+{
+	return connection_create(sizeof(MockConnection), &mock_ops);
+}
+
+#endif							/* ENABLE_MOCK_CONN */
