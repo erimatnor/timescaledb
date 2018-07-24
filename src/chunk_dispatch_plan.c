@@ -121,7 +121,7 @@ build_customscan_targetlist(Relation rel, List *targetlist)
  * node.
  */
 CustomScan *
-chunk_dispatch_plan_create(ModifyTable *mt, Plan *subplan, Index hypertable_rti, Oid hypertable_relid)
+chunk_dispatch_plan_create_old(ModifyTable *mt, Plan *subplan, Index hypertable_rti, Oid hypertable_relid)
 {
 	CustomScan *cscan = makeNode(CustomScan);
 	ChunkDispatchInfo *info = chunk_dispatch_info_create(hypertable_relid,
@@ -157,4 +157,73 @@ chunk_dispatch_plan_create(ModifyTable *mt, Plan *subplan, Index hypertable_rti,
 	ChangeVarNodes((Node *) cscan->custom_scan_tlist, INDEX_VAR, hypertable_rti, 0);
 
 	return cscan;
+}
+
+static Plan *
+chunk_dispatch_plan_create(PlannerInfo *root,
+						   RelOptInfo *relopt,
+						   struct CustomPath *best_path,
+						   List *tlist,
+						   List *clauses,
+						   List *custom_plans)
+{
+	ChunkDispatchPath *cdpath = (ChunkDispatchPath *) best_path;
+	CustomScan *cscan = makeNode(CustomScan);
+	ChunkDispatchInfo *info = chunk_dispatch_info_create(cdpath->hypertable_relid,
+														 /* mt->fdwPrivLists != NIL ? linitial(mt->fdwPrivLists) : */ NULL);
+	Plan *subplan = linitial(custom_plans);
+
+	Relation	rel;
+
+	cscan->custom_private = list_make1(info);
+	cscan->methods = &chunk_dispatch_plan_methods;
+	cscan->custom_plans = custom_plans;
+	cscan->scan.scanrelid = 0;	/* Indicate this is not a real relation we are
+								 * scanning */
+
+	/* Copy costs from the original plan */
+	cscan->scan.plan.startup_cost = subplan->startup_cost;
+	cscan->scan.plan.total_cost = subplan->total_cost;
+	cscan->scan.plan.plan_rows = subplan->plan_rows;
+	cscan->scan.plan.plan_width = subplan->plan_width;
+
+	/*
+	 * Create a modified target list for the CustomScan based on the subplan's
+	 * original target list
+	 */
+	//rel = relation_open(cdpath->hypertable_relid, AccessShareLock);
+	//cscan->scan.plan.targetlist =  build_customscan_targetlist(rel, tlist);
+	//RelationClose(rel);
+	cscan->scan.plan.targetlist = tlist;
+	/*
+	 * We need to set a custom_scan_tlist for EXPLAIN (verbose). But this
+	 * target list needs to reference the proper rangetable entry so we must
+	 * replace all INDEX_VAR attnos with the hypertable's rangetable index.
+	 */
+	cscan->custom_scan_tlist = copyObject(tlist); //copyObject(cscan->scan.plan.targetlist);
+	ChangeVarNodes((Node *) cscan->custom_scan_tlist, INDEX_VAR, cdpath->hypertable_rti, 0);
+
+	return &cscan->scan.plan;
+}
+
+static CustomPathMethods chunk_dispatch_path_methods = {
+	.CustomName = "ChunkDispatchPath",
+	.PlanCustomPath = chunk_dispatch_plan_create,
+};
+
+Path *
+chunk_dispatch_path_create(ModifyTablePath *mtpath, Path *subpath, Index hypertable_rti, Oid hypertable_relid)
+{
+	ChunkDispatchPath *path = (ChunkDispatchPath *) palloc0(sizeof(ChunkDispatchPath));
+
+	memcpy(&path->cpath.path, subpath, sizeof(Path));
+	path->cpath.path.type = T_CustomPath;
+	path->cpath.path.pathtype = T_CustomScan;
+	path->cpath.methods = &chunk_dispatch_path_methods;
+	path->cpath.custom_paths = list_make1(subpath);
+	path->mtpath = mtpath;
+	path->hypertable_rti = hypertable_rti;
+	path->hypertable_relid = hypertable_relid;
+
+	return &path->cpath.path;
 }

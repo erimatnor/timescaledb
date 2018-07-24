@@ -207,11 +207,14 @@ create_chunk_result_relation_info(ChunkDispatch *dispatch, Relation rel, Index r
 	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 	{
 		ModifyTable *mt = (ModifyTable *) dispatch->mtstate->ps.plan;
+		List	   *fdw_private = (List *) list_nth(mt->fdwPrivLists, 0);
 
-		elog(NOTICE, "Setting fdw state for chunk %s", get_rel_name(rel->rd_id));
+		elog(NOTICE, "Setting fdw state for chunk %s length(fdw_private)=%u",
+			 get_rel_name(rel->rd_id), list_length(fdw_private));
+
 		rri->ri_FdwRoutine = GetFdwRoutineForRelation(rel, true);
 		rri->ri_usesFdwDirectModify = false;
-		rri->ri_FdwRoutine->BeginForeignModify(dispatch->mtstate, rri, mt->fdwPrivLists, 0, dispatch->eflags);
+		rri->ri_FdwRoutine->BeginForeignModify(dispatch->mtstate, rri, fdw_private, 0, dispatch->eflags);
 	}
 
 	create_chunk_rri_constraint_expr(rri, rel);

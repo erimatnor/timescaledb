@@ -1562,7 +1562,7 @@ postgresPlanForeignModify(PlannerInfo *root,
 
 	initStringInfo(&sql);
 
-	elog(NOTICE, "Planning foreign modify");
+	elog(NOTICE, "Planning foreign modify for %s", get_rel_name(rte->relid));
 	/*
 	 * Core code already has some lock on each rel being planned, so we can
 	 * use NoLock here.

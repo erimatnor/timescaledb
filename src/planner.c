@@ -133,6 +133,7 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 			 * simultaneously loop over subplans and resultRelations, although
 			 * for INSERTs we expect only one of each.
 			 */
+			/*
 			forboth(lc_plan, mt->plans, lc_rel, mt->resultRelations)
 			{
 				Index		rti = lfirst_int(lc_rel);
@@ -152,19 +153,15 @@ modifytable_plan_walker(Plan **planptr, void *pctx)
 								 errmsg("hypertables do not support ON CONFLICT statements that reference constraints"),
 								 errhint("Use column names to infer indexes instead.")));
 
-					/*
-					 * We replace the plan with our custom chunk dispatch
-					 * plan.
-					 */
 					*subplan_ptr = chunk_dispatch_plan_create(mt, subplan, rti, rte->relid);
 				}
-			}
+			}*/
 
 			/* Now create the wrapping hypertable insert plan. Note that this
 			 * has to be done after we've created all the chunk dispatch plans
 			 * above. Hence, this is outside the forboth loop */
-			if (NULL != ht)
-				*planptr = hypertable_insert_plan_create(ht, mt);
+			//if (NULL != ht)
+			//	*planptr = hypertable_insert_plan_create2(ht, mt);
 		}
 	}
 }
@@ -257,6 +254,7 @@ timescaledb_planner(Query *parse, int cursor_opts, ParamListInfo bound_params)
 		/* Call the standard planner */
 		plan_stmt = standard_planner(parse, cursor_opts, bound_params);
 	}
+
 
 	if (extension_is_loaded())
 	{
@@ -527,28 +525,39 @@ timescale_create_upper_paths_hook(PlannerInfo *root,
 	if (!extension_is_loaded())
 		return;
 
-	if (output_rel != NULL && output_rel->pathlist != NIL && IsA(linitial(output_rel->pathlist), ModifyTablePath))
+	/* Check for INSERTs on a hypertable */
+	if (output_rel != NULL && output_rel->pathlist != NIL)
 	{
-		ModifyTablePath *mt = linitial(output_rel->pathlist);
+		Cache *htcache = hypertable_cache_pin();
+		ListCell *lc;
 
-		if (mt->operation == CMD_INSERT)
+		foreach(lc, output_rel->pathlist)
 		{
-			RangeTblEntry *rte = planner_rt_fetch(linitial_int(mt->resultRelations), root);
-			Cache *htcache = hypertable_cache_pin();
-			Hypertable *ht = hypertable_cache_get_entry(htcache, rte->relid);
+			ModifyTablePath *mt = lfirst(lc);
+			RangeTblEntry *rte;
+			Hypertable *ht;
+
+			if (!IsA(mt, ModifyTablePath) || mt->operation != CMD_INSERT)
+				continue;
+
+			rte = planner_rt_fetch(linitial_int(mt->resultRelations), root);
+			ht = hypertable_cache_get_entry(htcache, rte->relid);
 
 			if (NULL != ht && ht->servers != NIL)
 			{
 				HypertableServer *server = linitial(ht->servers);
+				Path *hipath = hypertable_insert_path_create(root, mt);
 
 				/* We set the fdwroutine here to make PostgreSQL planner create
 				 * the private foreign state for the hypertable. This includes
 				 * the deparsed query for the INSERT statement */
-				output_rel->fdwroutine = GetFdwRoutineByServerId(server->foreign_server_oid);
-			}
+				elog(NOTICE, "Setting fdwroutine for %s", get_rel_name(rte->relid));
 
-			cache_release(htcache);
+				output_rel->fdwroutine = GetFdwRoutineByServerId(server->foreign_server_oid);
+				//output_rel->pathlist = list_make1(hipath);
+			}
 		}
+		cache_release(htcache);
 	}
 
 	if (guc_disable_optimizations ||
