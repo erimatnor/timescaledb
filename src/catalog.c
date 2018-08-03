@@ -29,6 +29,7 @@ static const char *catalog_table_names[_MAX_CATALOG_TABLES + 1] = {
 	[CHUNK_CONSTRAINT] = CHUNK_CONSTRAINT_TABLE_NAME,
 	[CHUNK_INDEX] = CHUNK_INDEX_TABLE_NAME,
 	[TABLESPACE] = TABLESPACE_TABLE_NAME,
+	[INSTALLATION_METADATA] = INSTALLATION_METADATA_TABLE_NAME,
 	[_MAX_CATALOG_TABLES] = "invalid table",
 };
 
@@ -87,6 +88,12 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 		.names = (char *[]) {
 			[TABLESPACE_PKEY_IDX] = "tablespace_pkey",
 			[TABLESPACE_HYPERTABLE_ID_TABLESPACE_NAME_IDX] = "tablespace_hypertable_id_tablespace_name_key",
+		}
+	},
+	[INSTALLATION_METADATA] = {
+		.length = _MAX_INSTALLATION_METADATA_INDEX,
+		.names = (char *[]) {
+			[INSTALLATION_METADATA_PKEY_IDX] = "installation_metadata_pkey",
 		}
 	}
 };

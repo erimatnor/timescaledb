@@ -30,6 +30,7 @@ typedef enum CatalogTable
 	CHUNK_CONSTRAINT,
 	CHUNK_INDEX,
 	TABLESPACE,
+	INSTALLATION_METADATA,
 	_MAX_CATALOG_TABLES,
 } CatalogTable;
 
@@ -467,6 +468,50 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 	NameData	tablespace_name;
 }			FormData_tablespace_hypertable_id_tablespace_name_idx;
 
+/******************************
+ *
+ * installation_metadata table definitions
+ *
+ ******************************/
+
+#define INSTALLATION_METADATA_TABLE_NAME 		"installation_metadata"
+#define INSTALLATION_METADATA_UUID_KEY_NAME			"uuid"
+#define INSTALLATION_METADATA_EXPORTED_UUID_KEY_NAME	"exported_uuid"
+#define INSTALLATION_METADATA_TIMESTAMP_KEY_NAME		"install_timestamp"
+
+enum Anum_installation_metadata
+{
+	Anum_installation_metadata_key = 1,
+	Anum_installation_metadata_value,
+	_Anum_installation_metadata_max,
+};
+
+#define Natts_installation_metadata \
+	(_Anum_installation_metadata_max - 1)
+
+typedef struct FormData_installation_metadata
+{
+	NameData	key;
+	text	   *value;
+} FormData_installation_metadata;
+
+typedef FormData_installation_metadata *Form_installation_metadata;
+
+/* installation_metadata primary index attribute numbers */
+enum Anum_installation_metadata_pkey_idx
+{
+	Anum_installation_metadata_pkey_idx_id = 1,
+	_Anum_installation_metadata_pkey_max,
+};
+
+#define Natts_installation_metadata_pkey_idx \
+	(_Anum_installation_metadata_pkey_max - 1)
+
+enum
+{
+	INSTALLATION_METADATA_PKEY_IDX = 0,
+	_MAX_INSTALLATION_METADATA_INDEX,
+};
 
 #define MAX(a, b) \
 	((long)(a) > (long)(b) ? (a) : (b))
@@ -478,7 +523,8 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
 				MAX(_MAX_CHUNK_CONSTRAINT_INDEX,		\
 					MAX(_MAX_CHUNK_INDEX_INDEX,			\
 						MAX(_MAX_TABLESPACE_INDEX,		\
-							_MAX_CHUNK_INDEX))))))
+						    MAX(_MAX_INSTALLATION_METADATA_INDEX,		\
+							_MAX_CHUNK_INDEX)))))))
 
 typedef enum CacheType
 {

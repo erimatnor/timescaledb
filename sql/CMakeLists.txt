@@ -1,3 +1,6 @@
+# Set version in the NOTICE file
+configure_file(notice.sql.in notice.sql)
+
 set(INSTALL_FILE ${PROJECT_NAME}--${PROJECT_VERSION_MOD}.sql)
 
 # Source files that define the schemas and tables for our metadata
@@ -13,6 +16,11 @@ set(CATALOG_SOURCE_FILES
 set(IMMUTABLE_API_SOURCE_FILES
   aggregates.sql
 )
+
+set(NOTICE_FILE
+  ${CMAKE_CURRENT_BINARY_DIR}/notice.sql
+)
+
 # The rest of the source files defining mostly functions
 set(SOURCE_FILES
   hypertable.sql
@@ -31,6 +39,7 @@ set(SOURCE_FILES
   size_utils.sql
   histogram.sql
   cache.sql
+  installation_metadata.sql
 )
 
 # These files should be pre-pended to update scripts so that they are
@@ -117,7 +126,7 @@ endfunction()
 
 # Generate the extension file used with CREATE EXTENSION
 cat_files(
-  "${CATALOG_SOURCE_FILES_VERSIONED};${SOURCE_FILES_VERSIONED};${IMMUTABLE_API_SOURCE_FILES_VERSIONED}"
+  "${CATALOG_SOURCE_FILES_VERSIONED};${SOURCE_FILES_VERSIONED};${IMMUTABLE_API_SOURCE_FILES_VERSIONED};${NOTICE_FILE}"
   ${CMAKE_CURRENT_BINARY_DIR}/${INSTALL_FILE}
 )
 add_custom_target(sqlfile ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${INSTALL_FILE})

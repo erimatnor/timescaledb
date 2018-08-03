@@ -146,5 +146,13 @@ CREATE INDEX IF NOT EXISTS chunk_index_hypertable_id_hypertable_index_name_idx
 ON _timescaledb_catalog.chunk_index(hypertable_id, hypertable_index_name);
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.chunk_index', '');
 
+CREATE TABLE IF NOT EXISTS _timescaledb_catalog.installation_metadata (
+	key     NAME NOT NULL PRIMARY KEY,
+	value   TEXT NOT NULL
+);
+SELECT
+pg_catalog.pg_extension_config_dump('_timescaledb_catalog.installation_metadata', $$WHERE key='exported_uuid'$$);
+
 -- Set table permissions
 GRANT SELECT ON ALL TABLES IN SCHEMA _timescaledb_catalog TO PUBLIC;
+
