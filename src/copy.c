@@ -41,11 +41,6 @@
  *
  */
 
-typedef struct CopyChunkState CopyChunkState;
-
-typedef bool (*CopyFromFunc) (CopyChunkState *ccstate, ExprContext *econtext,
-							  Datum *values, bool *nulls, Oid *tuple_oid);
-
 typedef struct CopyChunkState
 {
 	Relation	rel;
@@ -58,8 +53,14 @@ typedef struct CopyChunkState
 		HeapScanDesc scandesc;
 		void	   *data;
 	}			fromctx;
+	int64		num_tuples;
 } CopyChunkState;
 
+void *
+copy_chunk_state_private_data(CopyChunkState *state)
+{
+	return state->fromctx.data;
+}
 
 static CopyChunkState *
 copy_chunk_state_create(Hypertable *ht, Relation rel, CopyFromFunc from_func, void *fromctx)
@@ -633,21 +634,50 @@ next_copy_from_table_to_chunks(CopyChunkState *ccstate, ExprContext *econtext,
 	return true;
 }
 
+static int64
+timescaledb_copy_to_relation(Hypertable *ht, Relation rel, CopyFromFunc next_tuple_func, void *priv)
+{
+	CopyChunkState *ccstate;
+	List	   *range_table = NIL;
+	List	   *attnums = NIL;
+	int			i;
+
+	for (i = 0; i < rel->rd_att->natts; i++)
+		attnums = lappend_int(attnums, rel->rd_att->attrs[i]->attnum);
+
+	copy_security_check(rel, attnums);
+	ccstate = copy_chunk_state_create(ht, rel, next_tuple_func, priv);
+
+	return timescaledb_CopyFrom(ccstate, range_table, ht);
+}
+
+int64
+timescaledb_copy_to(Hypertable *ht, CopyFromFunc next_tuple_func, void *priv, LOCKMODE lockmode)
+{
+	Relation	rel;
+	int64		num_processed;
+
+	if (lockmode < RowExclusiveLock)
+		elog(ERROR, "invalid lock mode for writing to relation \"%s\"",
+			 get_rel_name(ht->main_table_relid));
+
+	rel = heap_open(ht->main_table_relid, lockmode);
+	num_processed = timescaledb_copy_to_relation(ht, rel, next_tuple_func, priv);
+	heap_close(rel, lockmode);
+
+	return num_processed;
+}
+
 /*
  * Move data from the given hypertable's main table to chunks.
  *
  * The data moving is essentially a COPY from the main table to the chunks
  * followed by a TRUNCATE on the main table.
  */
-void
+int64
 timescaledb_move_from_table_to_chunks(Hypertable *ht, LOCKMODE lockmode)
 {
 	Relation	rel;
-	CopyChunkState *ccstate;
-	HeapScanDesc scandesc;
-	Snapshot	snapshot;
-	List	   *attnums = NIL;
-	List	   *range_table = NIL;
 	RangeVar	rv = {
 		.schemaname = NameStr(ht->fd.schema_name),
 		.relname = NameStr(ht->fd.table_name),
@@ -663,21 +693,21 @@ timescaledb_move_from_table_to_chunks(Hypertable *ht, LOCKMODE lockmode)
 		.relations = list_make1(&rv),
 		.behavior = DROP_RESTRICT,
 	};
-	int			i;
+	HeapScanDesc scandesc;
+	Snapshot	snapshot;
+	int64		num_processed;
 
-	rel = heap_open(ht->main_table_relid, lockmode);
-
-	for (i = 0; i < rel->rd_att->natts; i++)
-		attnums = lappend_int(attnums, rel->rd_att->attrs[i]->attnum);
-
-	copy_security_check(rel, attnums);
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	rel = heap_open(ht->main_table_relid, lockmode);
 	scandesc = heap_beginscan(rel, snapshot, 0, NULL);
-	ccstate = copy_chunk_state_create(ht, rel, next_copy_from_table_to_chunks, scandesc);
-	timescaledb_CopyFrom(ccstate, range_table, ht);
+
+	num_processed = timescaledb_copy_to_relation(ht, rel, next_copy_from_table_to_chunks, scandesc);
+
 	heap_endscan(scandesc);
-	UnregisterSnapshot(snapshot);
 	heap_close(rel, lockmode);
+	UnregisterSnapshot(snapshot);
 
 	ExecuteTruncate(&stmt);
+
+	return num_processed;
 }
