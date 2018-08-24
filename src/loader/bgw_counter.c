@@ -17,15 +17,13 @@
 int			guc_max_background_workers = 8;
 
 /*
- * We need a bit of shared state here to deal with keeping track of
- * the total number of background workers we've launched across the instance
- * since we don't want to exceed some configured value.
- * We considered, briefly, the possibility of using pg_sema for this,
- * unfortunately it does not appear to be accessible to code outside of postgres
- * core in any meaningful way. So we're not using that.
+ * We need a bit of shared state here to deal with keeping track of the total
+ * number of background workers we've launched across the instance since we
+ * don't want to exceed some configured value.  We considered, briefly, the
+ * possibility of using pg_sema for this, unfortunately it does not appear to
+ * be accessible to code outside of postgres core in any meaningful way. So
+ * we're not using that.
  */
-
-
 typedef struct CounterState
 {
 	/*
@@ -71,7 +69,10 @@ bgw_counter_setup_gucs(void)
 							NULL);
 }
 
-/* this gets called by the loader (and therefore the postmaster) at shared_preload_libraries time*/
+/*
+ * This gets called by the loader (and therefore the postmaster) at
+ * shared_preload_libraries time
+ */
 extern void
 bgw_counter_shmem_alloc(void)
 {

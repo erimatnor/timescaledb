@@ -44,22 +44,20 @@
 #define BGW_LAUNCHER_RESTART_TIME 60
 #endif
 
-
-
-
 /*
- * Main bgw launcher for the cluster. Run through the TimescaleDB loader, so needs to have a
- * small footprint as any interactions it has will need to remain backwards compatible for
- * the foreseeable future.
+ * Main bgw launcher for the cluster.
  *
- * Notes: multiple databases in an instance (PG cluster) can have TimescaleDB installed. They are not necessarily
- * the same version of TimescaleDB (though they could be)
- * Shared memory is allocated and background workers are registered at shared_preload_libraries time
- * We do not know what databases exist, nor which databases TimescaleDB is installed in (if any) at
+ * Run through the TimescaleDB loader, so needs to have a small footprint as
+ * any interactions it has will need to remain backwards compatible for the
+ * foreseeable future.
+ *
+ * Notes: multiple databases in an instance (PG cluster) can have TimescaleDB
+ * installed. They are not necessarily the same version of TimescaleDB (though
+ * they could be) Shared memory is allocated and background workers are
+ * registered at shared_preload_libraries time We do not know what databases
+ * exist, nor which databases TimescaleDB is installed in (if any) at
  * shared_preload_libraries time.
  */
-
-
 typedef struct DbHashEntry
 {
 	Oid			db_oid;			/* key for the hash table, must be first */
@@ -69,15 +67,17 @@ typedef struct DbHashEntry
 
 
 /*
- * Aliasing a few things in bgWorker.h so that we exit correctly on postmaster death so we don't have to duplicate code
- * basically telling it we shouldn't call exit hooks cause we want to bail out quickly - similar to how
- * the quickdie function works when we receive a sigquit. This should work similarly because postmaster death is a similar
- * severity of issue.
- * Additionally, we're wrapping these calls to make sure we never have a NULL handle, if we have a null handle, we return  normal things.
- * I have left the capitalization in their format to make clear the relationship to the functions in bgworker.h and that
- * these are just passthroughs and should maintain the same behavior unless BGWH_POSTMASTER_DIED is returned.
+ * Aliasing a few things in bgWorker.h so that we exit correctly on postmaster
+ * death so we don't have to duplicate code basically telling it we shouldn't
+ * call exit hooks cause we want to bail out quickly - similar to how the
+ * quickdie function works when we receive a sigquit. This should work
+ * similarly because postmaster death is a similar severity of issue.
+ * Additionally, we're wrapping these calls to make sure we never have a NULL
+ * handle, if we have a null handle, we return normal things.  I have left the
+ * capitalization in their format to make clear the relationship to the
+ * functions in bgworker.h and that these are just passthroughs and should
+ * maintain the same behavior unless BGWH_POSTMASTER_DIED is returned.
  */
-
 static void
 bgw_on_postmaster_death(void)
 {
@@ -97,10 +97,11 @@ report_bgw_limit_exceeded(void)
 }
 
 /*
-* This error is thrown on failure to register a background worker with the postmaster. This should be highly unusual and
-* only happen when we run out of background worker slots. In which case, it is okay to shut everything down and hope that things
-* are better when we restart
-*/
+ * This error is thrown on failure to register a background worker with the
+ * postmaster. This should be highly unusual and only happen when we run out of
+ * background worker slots. In which case, it is okay to shut everything down
+ * and hope that things are better when we restart
+ */
 static void
 report_error_on_worker_register_failure(void)
 {
@@ -203,8 +204,11 @@ bgw_cluster_launcher_register(void)
 
 
 /*
- * Register a background worker that calls the main TimescaleDB background worker launcher library (i.e. loader) and uses the scheduler entrypoint function.
- * The scheduler entrypoint will deal with starting a new worker, and waiting on any txns that it needs to, if we pass along a vxid in the bgw_extra field of the BgWorker.
+ * Register a background worker that calls the main TimescaleDB background
+ * worker launcher library (i.e. loader) and uses the scheduler entrypoint
+ * function.  The scheduler entrypoint will deal with starting a new worker,
+ * and waiting on any txns that it needs to, if we pass along a vxid in the
+ * bgw_extra field of the BgWorker.
  */
 static bool
 register_entrypoint_for_db(Oid db_id, VirtualTransactionId vxid, BackgroundWorkerHandle **handle)
@@ -228,11 +232,14 @@ register_entrypoint_for_db(Oid db_id, VirtualTransactionId vxid, BackgroundWorke
 
 
 /*
- * Model this on autovacuum.c -> get_database_list
- * Note that we are not doing all the things around memory context that they do, because
- * the hashtable we're using to store db entries is automatically created in its own memory context (a child of TopMemoryContext)
- * This can get called at two different times 1) when the cluster launcher starts and is looking for dbs
- * and 2) if it restarts due to a postmaster signal.
+ * Model this on autovacuum.c -> get_database_list.
+ *
+ * Note that we are not doing
+ * all the things around memory context that they do, because the hashtable
+ * we're using to store db entries is automatically created in its own memory
+ * context (a child of TopMemoryContext) This can get called at two different
+ * times 1) when the cluster launcher starts and is looking for dbs and 2) if
+ * it restarts due to a postmaster signal.
  */
 static HTAB *
 populate_database_htab(void)

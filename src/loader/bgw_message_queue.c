@@ -65,14 +65,16 @@ queue_init(void)
 
 }
 
-/* This gets called when shared memory is initialized in a backend (shmem_startup_hook) */
+/* This gets called when shared memory is initialized in a backend
+ * (shmem_startup_hook) */
 extern void
 bgw_message_queue_shmem_startup(void)
 {
 	queue_init();
 }
 
-/* This is called in the loader during server startup to allocate a shared memory segment*/
+/* This is called in the loader during server startup to allocate a shared
+ * memory segment*/
 extern void
 bgw_message_queue_alloc(void)
 {
@@ -80,12 +82,14 @@ bgw_message_queue_alloc(void)
 	RequestNamedLWLockTranche(BGW_MQ_TRANCHE_NAME, 1);
 }
 
-/* Notes on managing the queue/locking:
- * We decided that for this application, simplicity of locking scheme was more important than
- * being very good about concurrency as the frequency of these messages will be low and the
- * number of messages on this queue should be low, given that they mostly happen when we update
- * the extension. Therefore we decided to simply take an exclusive lock whenever we were modifying
- * anything in the shared memory segment to avoid collisions.
+/*
+ * Notes on managing the queue/locking: We decided that for this application,
+ * simplicity of locking scheme was more important than being very good about
+ * concurrency as the frequency of these messages will be low and the number
+ * of messages on this queue should be low, given that they mostly happen when
+ * we update the extension. Therefore we decided to simply take an exclusive
+ * lock whenever we were modifying anything in the shared memory segment to
+ * avoid collisions.
  */
 static pid_t
 queue_get_reader(MessageQueue *queue)
@@ -167,7 +171,7 @@ queue_remove(MessageQueue *queue)
 	return message;
 }
 
-/*Construct a message*/
+/* Construct a message */
 static BgwMessage *
 bgw_message_create(BgwMessageType message_type, Oid db_oid)
 {
@@ -187,8 +191,10 @@ bgw_message_create(BgwMessageType message_type, Oid db_oid)
 	return message;
 }
 
-/* Our own version of shm_mq_wait_for_attach that waits with a timeout so that should our counterparty die before attaching,
- * we don't end up hanging.*/
+/*
+ * Our own version of shm_mq_wait_for_attach that waits with a timeout so that
+ * should our counterparty die before attaching, we don't end up hanging.
+ */
 static shm_mq_result
 ts_shm_mq_wait_for_attach(MessageQueue *queue, shm_mq_handle *ack_queue_handle)
 {
@@ -399,7 +405,10 @@ bgw_message_send_ack(BgwMessage *message, bool success)
 	pfree(message);
 }
 
-/* This gets called before shmem exit in the launcher (even if we're exiting in error, but not if we're exiting due to possible shmem corruption)*/
+/*
+ * This gets called before shmem exit in the launcher (even if we're exiting
+ * in error, but not if we're exiting due to possible shmem corruption)
+ */
 static void
 queue_shmem_cleanup(MessageQueue *queue)
 {

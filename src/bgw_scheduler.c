@@ -1,11 +1,8 @@
 /*
  * Contains code for the db_launcher background worker as well as the child workers
  * spawned to run various tasks.
- *
- *
 */
 #include <postgres.h>
-
 
 /* BGW includes below */
 /* These are always necessary for a bgworker */
@@ -31,13 +28,16 @@
 
 
 /*
- * NOTE:
- * We will throw an error if we have gotten a sigterm due to the default signal handler for a bgworker (in bgworker.c)
- * We don't block signals and set up our signal handler, because we would like this to be the default behavior.
- * Instead of exiting at the end of our loop, this will pull us out of any waits or loops we happen to be in. We will also run our cleanup function
- * set in the before_shmem_exit -> this is where we will terminate any child workers we have started.
- * In the case of postmaster death, we run on_exit_reset (and should in any workers as well) and just get the hell out of there. Trying to communicate with other workers
- * will now be impossible because the postmaster doesn't exist and it mediated that communication.
+ * NOTE: We will throw an error if we have gotten a sigterm due to the default
+ * signal handler for a bgworker (in bgworker.c) We don't block signals and
+ * set up our signal handler, because we would like this to be the default
+ * behavior.  Instead of exiting at the end of our loop, this will pull us out
+ * of any waits or loops we happen to be in. We will also run our cleanup
+ * function set in the before_shmem_exit -> this is where we will terminate
+ * any child workers we have started.  In the case of postmaster death, we run
+ * on_exit_reset (and should in any workers as well) and just get the hell out
+ * of there. Trying to communicate with other workers will now be impossible
+ * because the postmaster doesn't exist and it mediated that communication.
  */
 static inline void
 bgw_on_postmaster_death(void)
@@ -49,7 +49,8 @@ bgw_on_postmaster_death(void)
 			 errmsg("postmaster exited while timescale bgw was working")));
 }
 
-/*Note that this is a boilerplate/mock for now just so we can test the launcher code*/
+/* Note that this is a boilerplate/mock for now just so we can test the
+ * launcher code */
 extern Datum
 bgw_db_scheduler_main(PG_FUNCTION_ARGS)
 {
@@ -57,7 +58,8 @@ bgw_db_scheduler_main(PG_FUNCTION_ARGS)
 
 	/* TODO: SETUP BEFORE_SHMEM_EXIT_CALLBACK */
 
-	ereport(LOG, (errmsg("Versioned Worker started for Database id = %d with pid %d", MyDatabaseId, MyProcPid)));
+	ereport(LOG, (errmsg("Versioned Worker started for Database id = %d with pid %d",
+						 MyDatabaseId, MyProcPid)));
 	CHECK_FOR_INTERRUPTS();
 
 	while (true)

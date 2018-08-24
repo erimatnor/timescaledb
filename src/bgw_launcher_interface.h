@@ -1,5 +1,6 @@
 #ifndef TIMESCALEDB_BGW_LAUNCHER_INTERFACE_H
 #define TIMESCALEDB_BGW_LAUNCHER_INTERFACE_H
+
 #include <postgres.h>
 
 extern bool bgw_worker_reserve(void);
