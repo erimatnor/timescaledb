@@ -49,8 +49,6 @@ bgw_on_postmaster_death(void)
 			 errmsg("postmaster exited while timescale bgw was working")));
 }
 
-
-
 /*Note that this is a boilerplate/mock for now just so we can test the launcher code*/
 extern Datum
 bgw_db_scheduler_main(PG_FUNCTION_ARGS)
@@ -82,5 +80,4 @@ bgw_db_scheduler_main(PG_FUNCTION_ARGS)
 			bgw_on_postmaster_death();
 		CHECK_FOR_INTERRUPTS();
 	}
-
-};
+}

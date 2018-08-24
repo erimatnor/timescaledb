@@ -65,7 +65,7 @@ typedef struct DbHashEntry
 	Oid			db_oid;			/* key for the hash table, must be first */
 	BackgroundWorkerHandle *db_scheduler_handle;	/* needed to shut down
 													 * properly */
-}			DbHashEntry;
+} DbHashEntry;
 
 
 /*
@@ -88,7 +88,9 @@ bgw_on_postmaster_death(void)
 			 errmsg("postmaster exited while TimescaleDB background worker launcher launcher was working")));
 }
 
-static void report_bgw_limit_exceeded(void){
+static void
+report_bgw_limit_exceeded(void)
+{
 	ereport(LOG, (errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				  errmsg("TimescaleDB background worker limit of %d exceeded", guc_max_background_workers),
 				  errhint("Consider increasing timescaledb.max_background_workers")));
@@ -99,7 +101,9 @@ static void report_bgw_limit_exceeded(void){
 * only happen when we run out of background worker slots. In which case, it is okay to shut everything down and hope that things
 * are better when we restart
 */
-static void report_error_on_worker_register_failure(void){
+static void
+report_error_on_worker_register_failure(void)
+{
 	ereport(ERROR, (errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 					errmsg("No available background worker slots."),
 					errhint("TimescaleDB background worker launcher shutting down. It will be restarted by the postmaster.")));
@@ -238,8 +242,8 @@ populate_database_htab(void)
 	HeapTuple	tup;
 	HTAB	   *db_htab = NULL;
 	HASHCTL		info = {
-			.keysize = sizeof(Oid),
-			.entrysize = sizeof(DbHashEntry)
+		.keysize = sizeof(Oid),
+		.entrysize = sizeof(DbHashEntry)
 	};
 
 	/*
@@ -374,8 +378,9 @@ message_start_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vx
 
 	/*
 	 * This should be idempotent, so if we find the background worker and it's
-	 * not stopped, we should just continue. If we have a worker that stopped but hasn't been cleaned up yet,
-	 * simply restart the worker without incrementing cause we've already incremented
+	 * not stopped, we should just continue. If we have a worker that stopped
+	 * but hasn't been cleaned up yet, simply restart the worker without
+	 * incrementing cause we've already incremented
 	 */
 	if (!found)
 	{
@@ -401,7 +406,7 @@ message_start_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vx
 }
 
 static void
-message_stop_action(HTAB *db_htab, BgwMessage * message)
+message_stop_action(HTAB *db_htab, BgwMessage *message)
 {
 	DbHashEntry *db_he;
 	bool		found;
@@ -424,7 +429,7 @@ message_stop_action(HTAB *db_htab, BgwMessage * message)
  * We don't want a race condition where some other db steals the scheduler of the other by requesting a worker at the wrong time.
 */
 static void
-message_restart_action(HTAB *db_htab, BgwMessage * message, VirtualTransactionId vxid)
+message_restart_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vxid)
 {
 	DbHashEntry *db_he;
 	bool		found;
@@ -437,7 +442,7 @@ message_restart_action(HTAB *db_htab, BgwMessage * message, VirtualTransactionId
 		terminate_background_worker(db_he->db_scheduler_handle);
 		wait_for_background_worker_shutdown(db_he->db_scheduler_handle);
 	}
-	else if (!bgw_total_workers_increment()) /* we still need to increment
+	else if (!bgw_total_workers_increment())	/* we still need to increment
 												 * if we haven't found an
 												 * entry */
 	{
@@ -450,7 +455,7 @@ message_restart_action(HTAB *db_htab, BgwMessage * message, VirtualTransactionId
 	{
 		ereport(LOG, (errmsg("TimescaleDB background worker could not be started")));
 		bgw_total_workers_decrement();	/* couldn't register the worker,
-											 * decrement and return false */
+										 * decrement and return false */
 		hash_search(db_htab, &message->db_oid, HASH_REMOVE, &found);
 		bgw_message_send_ack(message, ACK_FAILURE);
 		return;

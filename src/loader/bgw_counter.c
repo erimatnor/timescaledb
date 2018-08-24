@@ -34,10 +34,10 @@ typedef struct CounterState
 	 */
 	slock_t		mutex;			/* controls modification of total_workers */
 	int			total_workers;
-}			CounterState;
+} CounterState;
 
 
-static CounterState * ct = NULL;
+static CounterState *ct = NULL;
 
 static void
 bgw_counter_state_init()
@@ -106,6 +106,7 @@ bgw_total_workers_increment()
 	SpinLockRelease(&ct->mutex);
 	return incremented;
 }
+
 extern void
 bgw_total_workers_decrement()
 {

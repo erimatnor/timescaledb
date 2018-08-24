@@ -39,16 +39,16 @@ typedef struct MessageQueue
 	uint8		read_upto;
 	uint8		num_elements;
 	BgwMessage	buffer[BGW_MQ_MAX_MESSAGES];
-}			MessageQueue;
+} MessageQueue;
 
 typedef enum QueueResponseType
 {
 	MESSAGE_SENT = 0,
 	QUEUE_FULL,
 	READER_DETACHED
-}			QueueResponseType;
+} QueueResponseType;
 
-static MessageQueue * mq = NULL;
+static MessageQueue *mq = NULL;
 
 static void
 queue_init(void)
@@ -88,10 +88,10 @@ bgw_message_queue_alloc(void)
  * anything in the shared memory segment to avoid collisions.
  */
 static pid_t
-queue_get_reader(MessageQueue * queue)
+queue_get_reader(MessageQueue *queue)
 {
 	pid_t		reader;
-	volatile	MessageQueue *vq = queue;
+	volatile MessageQueue *vq = queue;
 
 	SpinLockAcquire(&vq->mutex);
 	reader = vq->reader_pid;
@@ -100,9 +100,9 @@ queue_get_reader(MessageQueue * queue)
 }
 
 static void
-queue_set_reader(MessageQueue * queue)
+queue_set_reader(MessageQueue *queue)
 {
-	volatile	MessageQueue *vq = queue;
+	volatile MessageQueue *vq = queue;
 
 	if (queue_get_reader(queue) == InvalidPid)
 	{
@@ -116,9 +116,9 @@ queue_set_reader(MessageQueue * queue)
 }
 
 static void
-queue_reset_reader(MessageQueue * queue)
+queue_reset_reader(MessageQueue *queue)
 {
-	volatile	MessageQueue *vq = queue;
+	volatile MessageQueue *vq = queue;
 
 	SpinLockAcquire(&vq->mutex);
 	vq->reader_pid = InvalidPid;
@@ -127,7 +127,7 @@ queue_reset_reader(MessageQueue * queue)
 
 /* Add a message to the queue - we can do this if the queue is not full */
 static QueueResponseType
-queue_add(MessageQueue * queue, BgwMessage * message)
+queue_add(MessageQueue *queue, BgwMessage *message)
 {
 	QueueResponseType message_result = QUEUE_FULL;
 
@@ -148,7 +148,7 @@ queue_add(MessageQueue * queue, BgwMessage * message)
 }
 
 static BgwMessage *
-queue_remove(MessageQueue * queue)
+queue_remove(MessageQueue *queue)
 {
 	BgwMessage *message = NULL;
 
@@ -190,7 +190,7 @@ bgw_message_create(BgwMessageType message_type, Oid db_oid)
 /* Our own version of shm_mq_wait_for_attach that waits with a timeout so that should our counterparty die before attaching,
  * we don't end up hanging.*/
 static shm_mq_result
-ts_shm_mq_wait_for_attach(MessageQueue * queue, shm_mq_handle *ack_queue_handle)
+ts_shm_mq_wait_for_attach(MessageQueue *queue, shm_mq_handle *ack_queue_handle)
 {
 	int			n;
 	PGPROC	   *reader_proc;
@@ -218,7 +218,7 @@ ts_shm_mq_wait_for_attach(MessageQueue * queue, shm_mq_handle *ack_queue_handle)
 }
 
 static bool
-enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_handle *ack_queue_handle)
+enqueue_message_wait_for_ack(MessageQueue *queue, BgwMessage *message, shm_mq_handle *ack_queue_handle)
 {
 	Size		bytes_received = 0;
 	QueueResponseType send_result;
@@ -226,6 +226,7 @@ enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_
 	shm_mq_result mq_res;
 	bool		ack_received = false;
 	int			n;
+
 	/*
 	 * We don't want the process restarting workers to really distinguish the
 	 * reasons workers might or might not be restarted, and we don't really
@@ -241,7 +242,7 @@ enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_
 	if (mq_res != SHM_MQ_SUCCESS)
 		return false;
 
-	/* Get a response, non-blocking, with retries*/
+	/* Get a response, non-blocking, with retries */
 	for (n = 1; n <= BGW_ACK_RETRIES; n++)
 	{
 		mq_res = shm_mq_receive(ack_queue_handle, &bytes_received, (void **) &data, true);
@@ -251,7 +252,7 @@ enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_
 #if PG96
 		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL);
 #else
-		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT , BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
 #endif
 		ResetLatch(MyLatch);
 		CHECK_FOR_INTERRUPTS();
@@ -314,7 +315,7 @@ typedef enum MessageAckSent
 	DSM_SEGMENT_UNAVAILABLE,
 	QUEUE_NOT_ATTACHED,
 	SEND_FAILURE
-}	MessageAckSent;
+} MessageAckSent;
 
 static const char *message_ack_sent_err[] = {
 	[ACK_SENT] = "Sent ack successfully",
@@ -340,17 +341,17 @@ send_ack(dsm_segment *seg, bool success)
 	if (ack_queue_handle == NULL)
 		return QUEUE_NOT_ATTACHED;
 
-	/* Send the message off, non blocking, with retries*/
+	/* Send the message off, non blocking, with retries */
 	for (n = 1; n <= BGW_ACK_RETRIES; n++)
 	{
 		ack_res = shm_mq_send(ack_queue_handle, sizeof(bool), &success, true);
 		if (ack_res != SHM_MQ_WOULD_BLOCK)
 			break;
-		ereport(DEBUG1,(errmsg("TimescaleDB ack message send failure, retrying")));
+		ereport(DEBUG1, (errmsg("TimescaleDB ack message send failure, retrying")));
 #if PG96
 		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL);
 #else
-		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT , BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
 #endif
 		ResetLatch(MyLatch);
 		CHECK_FOR_INTERRUPTS();
@@ -366,7 +367,7 @@ send_ack(dsm_segment *seg, bool success)
  * consumes message and deallocates
  */
 extern void
-bgw_message_send_ack(BgwMessage * message, bool success)
+bgw_message_send_ack(BgwMessage *message, bool success)
 {
 	dsm_segment *seg;
 
@@ -385,10 +386,11 @@ bgw_message_send_ack(BgwMessage * message, bool success)
 	if (seg != NULL)
 	{
 		MessageAckSent ack_res;
+
 		ack_res = send_ack(seg, success);
 		if (ack_res != ACK_SENT)
 			ereport(LOG, (errmsg("TimescaleDB background worker launcher unable to send ack to backend pid %d", message->sender_pid),
-						  errhint("Message: %s",message_ack_sent_err[ack_res])));
+						  errhint("Message: %s", message_ack_sent_err[ack_res])));
 		dsm_detach(seg);
 	}
 #if PG96
@@ -399,7 +401,7 @@ bgw_message_send_ack(BgwMessage * message, bool success)
 
 /* This gets called before shmem exit in the launcher (even if we're exiting in error, but not if we're exiting due to possible shmem corruption)*/
 static void
-queue_shmem_cleanup(MessageQueue * queue)
+queue_shmem_cleanup(MessageQueue *queue)
 {
 	if (queue->reader_pid != MyProcPid)
 		ereport(ERROR, (errmsg("cannot read if not reader for TimescaleDB background worker message queue")));
