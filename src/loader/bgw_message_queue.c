@@ -14,14 +14,18 @@
 
 #include "bgw_message_queue.h"
 
+#define BGW_MQ_MAX_MESSAGES 16
 #define BGW_MQ_NAME "ts_bgw_message_queue"
 #define BGW_MQ_TRANCHE_NAME "ts_bgw_mq_tranche"
 
 #define BGW_MQ_NUM_WAITS 100
 #define BGW_MQ_WAIT_INTERVAL 1000L
 
-#define BGW_MQ_MAX_MESSAGES 16
+#define BGW_ACK_RETRIES 20
+#define BGW_ACK_WAIT_INTERVAL 100L
 #define BGW_ACK_QUEUE_SIZE (MAXALIGN(shm_mq_minimum_size + sizeof(int)))
+
+
 
 /* We're using a relatively simple implementation of a circular queue similar to:
  * http://opendatastructures.org/ods-python/2_3_ArrayQueue_Array_Based_.html */
@@ -202,9 +206,9 @@ ts_shm_mq_wait_for_attach(MessageQueue * queue, shm_mq_handle *ack_queue_handle)
 			return SHM_MQ_DETACHED; /* Reader died after we enqueued our
 									 * message */
 #if PG96
-		WaitLatch(MyLatch, WL_LATCH_SET, BGW_MQ_WAIT_INTERVAL);
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_MQ_WAIT_INTERVAL);
 #else
-		WaitLatch(MyLatch, WL_LATCH_SET, BGW_MQ_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_MQ_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
 #endif
 
 		ResetLatch(MyLatch);
@@ -221,7 +225,7 @@ enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_
 	bool	   *data = NULL;
 	shm_mq_result mq_res;
 	bool		ack_received = false;
-
+	int			n;
 	/*
 	 * We don't want the process restarting workers to really distinguish the
 	 * reasons workers might or might not be restarted, and we don't really
@@ -237,7 +241,22 @@ enqueue_message_wait_for_ack(MessageQueue * queue, BgwMessage * message, shm_mq_
 	if (mq_res != SHM_MQ_SUCCESS)
 		return false;
 
-	mq_res = shm_mq_receive(ack_queue_handle, &bytes_received, (void **) &data, true);
+	/* Get a response, non-blocking, with retries*/
+	for (n = 1; n <= BGW_ACK_RETRIES; n++)
+	{
+		mq_res = shm_mq_receive(ack_queue_handle, &bytes_received, (void **) &data, true);
+		if (mq_res != SHM_MQ_WOULD_BLOCK)
+			break;
+		ereport(DEBUG1, (errmsg("TimescaleDB ack message receive failure, retrying")));
+#if PG96
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL);
+#else
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT , BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
+#endif
+		ResetLatch(MyLatch);
+		CHECK_FOR_INTERRUPTS();
+	}
+
 	if (mq_res != SHM_MQ_SUCCESS)
 		return false;
 
@@ -289,31 +308,57 @@ bgw_message_queue_set_reader(void)
 	queue_set_reader(mq);
 }
 
-static bool
+typedef enum MessageAckSent
+{
+	ACK_SENT = 0,
+	DSM_SEGMENT_UNAVAILABLE,
+	QUEUE_NOT_ATTACHED,
+	SEND_FAILURE
+}	MessageAckSent;
+
+static const char *message_ack_sent_err[] = {
+	[ACK_SENT] = "Sent ack successfully",
+	[DSM_SEGMENT_UNAVAILABLE] = "DSM Segment unavailable",
+	[QUEUE_NOT_ATTACHED] = "Ack queue unable to attach",
+	[SEND_FAILURE] = "Unable to send ack on queue"
+};
+
+static MessageAckSent
 send_ack(dsm_segment *seg, bool success)
 {
 	shm_mq	   *ack_queue;
 	shm_mq_handle *ack_queue_handle;
 	shm_mq_result ack_res;
+	int			n;
 
 	ack_queue = dsm_segment_address(seg);
 	if (ack_queue == NULL)
-		return false;
+		return DSM_SEGMENT_UNAVAILABLE;
 
 	shm_mq_set_sender(ack_queue, MyProc);
 	ack_queue_handle = shm_mq_attach(ack_queue, seg, NULL);
 	if (ack_queue_handle == NULL)
-		return false;
+		return QUEUE_NOT_ATTACHED;
 
-	/*
-	 * Send the message off, don't bother retrying and don't block, just
-	 * return false if we didn't succeed
-	 */
-	ack_res = shm_mq_send(ack_queue_handle, sizeof(bool), &success, true);
+	/* Send the message off, non blocking, with retries*/
+	for (n = 1; n <= BGW_ACK_RETRIES; n++)
+	{
+		ack_res = shm_mq_send(ack_queue_handle, sizeof(bool), &success, true);
+		if (ack_res != SHM_MQ_WOULD_BLOCK)
+			break;
+		ereport(DEBUG1,(errmsg("TimescaleDB ack message send failure, retrying")));
+#if PG96
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, BGW_ACK_WAIT_INTERVAL);
+#else
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT , BGW_ACK_WAIT_INTERVAL, WAIT_EVENT_MQ_INTERNAL);
+#endif
+		ResetLatch(MyLatch);
+		CHECK_FOR_INTERRUPTS();
+	}
 	if (ack_res != SHM_MQ_SUCCESS)
-		return false;
+		return SEND_FAILURE;
 
-	return true;
+	return ACK_SENT;
 }
 
 /*
@@ -339,8 +384,11 @@ bgw_message_send_ack(BgwMessage * message, bool success)
 	seg = dsm_attach(message->ack_dsm_handle);
 	if (seg != NULL)
 	{
-		if (!send_ack(seg, success))
-			ereport(LOG, (errmsg("TimescaleDB background worker launcher unable to send ack to backend pid %d", message->sender_pid)));
+		MessageAckSent ack_res;
+		ack_res = send_ack(seg, success);
+		if (ack_res != ACK_SENT)
+			ereport(LOG, (errmsg("TimescaleDB background worker launcher unable to send ack to backend pid %d", message->sender_pid),
+						  errhint("Message: %s",message_ack_sent_err[ack_res])));
 		dsm_detach(seg);
 	}
 #if PG96
