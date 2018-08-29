@@ -1,6 +1,9 @@
 #ifndef TIMESCALEDB_HTTP_H
 #define TIMESCALEDB_HTTP_H
 
+#include <unistd.h>
+#include <stdbool.h>
+
 #define HTTP_HOST	"Host"
 #define HTTP_CONTENT_LENGTH	"Content-Length"
 #define HTTP_CONTENT_TYPE	"Content-Type"
@@ -60,9 +63,9 @@ void		http_response_state_destroy(HttpResponseState *state);
 bool		http_response_state_is_done(HttpResponseState *state);
 bool		http_response_state_valid_status(HttpResponseState *state);
 char	   *http_response_state_next_buffer(HttpResponseState *state);
-int			http_response_state_buffer_remaining(HttpResponseState *state);
+size_t		http_response_state_buffer_remaining(HttpResponseState *state);
 char	   *http_response_state_body_start(HttpResponseState *state);
-int			http_response_state_content_length(HttpResponseState *state);
+size_t		http_response_state_content_length(HttpResponseState *state);
 int			http_response_state_status_code(HttpResponseState *state);
 HttpHeader *http_response_state_headers(HttpResponseState *state);
 

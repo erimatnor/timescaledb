@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <postgres.h>
 #include <lib/stringinfo.h>
@@ -31,15 +30,15 @@ typedef struct HttpResponseState
 	MemoryContext context;
 	char		raw_buffer[MAX_RAW_BUFFER_SIZE];
 	/* The next read should copy data into the buffer starting here */
-	int			offset;
-	int			parse_offset;
-	int			cur_header_name_len;
-	int			cur_header_value_len;
+	off_t		offset;
+	off_t		parse_offset;
+	size_t		cur_header_name_len;
+	size_t		cur_header_value_len;
 	char	   *cur_header_name;
 	char	   *cur_header_value;
 	HttpHeader *headers;
 	int			status_code;
-	int			content_length;
+	size_t		content_length;
 	char	   *body_start;
 	HttpParseState state;
 } HttpResponseState;
@@ -75,7 +74,7 @@ http_response_state_destroy(HttpResponseState *state)
 
 bool
 http_response_state_valid_status(HttpResponseState *state)
-{	
+{
 	/* If the status code hasn't been parsed yet, return */
 	if (state->status_code == -1)
 		return true;
@@ -91,9 +90,10 @@ http_response_state_is_done(HttpResponseState *state)
 	return (state->state == HTTP_STATE_DONE);
 }
 
-int
+size_t
 http_response_state_buffer_remaining(HttpResponseState *state)
 {
+	Assert((MAX_RAW_BUFFER_SIZE - state->offset) >= 0);
 	return MAX_RAW_BUFFER_SIZE - state->offset;
 }
 
@@ -115,7 +115,7 @@ http_response_state_status_code(HttpResponseState *state)
 	return state->status_code;
 }
 
-int
+size_t
 http_response_state_content_length(HttpResponseState *state)
 {
 	return state->content_length;
@@ -131,9 +131,9 @@ static void
 http_parse_status(HttpResponseState *state, char next)
 {
 	char		version[128];
-	char		message[128];
-	int			temp_status;
 	char		raw_buf[state->parse_offset + 1];
+
+	memset(version, '\0', sizeof(version));
 
 	switch (next)
 	{
@@ -146,15 +146,10 @@ http_parse_status(HttpResponseState *state, char next)
 			 */
 			memcpy(raw_buf, state->raw_buffer, state->parse_offset);
 			raw_buf[state->parse_offset] = '\0';
-			if (sscanf(raw_buf, "%s %d %s", version, &temp_status, message) == 3)
-			{
-				state->status_code = temp_status;
+			state->state = HTTP_STATE_ERROR;
+
+			if (sscanf(raw_buf, "%127s %d %*s", version, &state->status_code) == 2)
 				state->state = HTTP_STATE_INTERM;
-			}
-			else
-			{
-				state->state = HTTP_STATE_ERROR;
-			}
 			break;
 		case NEW_LINE:
 			state->state = HTTP_STATE_ERROR;
@@ -295,9 +290,9 @@ http_parse_almost_done(HttpResponseState *state, char next)
 bool
 http_response_state_parse(HttpResponseState *state, int bytes)
 {
-	state->offset += bytes;
 	if (state->offset > MAX_RAW_BUFFER_SIZE)
 		state->offset = MAX_RAW_BUFFER_SIZE;
+
 	/* Each state function will do the state AND transition */
 	while (state->parse_offset < state->offset)
 	{
