@@ -109,7 +109,7 @@ static ConnOps plain_ops = {
 static Connection *
 connection_internal_create(size_t size, ConnOps *ops)
 {
-	Connection *conn = malloc(size);
+	Connection *conn = palloc(size);
 
 	if (NULL == conn)
 		return NULL;
@@ -406,7 +406,7 @@ connection_destroy(Connection *conn)
 
 	connection_close(conn);
 	conn->ops = NULL;
-	free(conn);
+	pfree(conn);
 }
 
 void
