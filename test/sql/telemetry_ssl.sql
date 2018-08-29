@@ -45,8 +45,8 @@ $BODY$
 LANGUAGE 'plpgsql';
 
 select * from mocker(
-		E'HTTP/1.1 200 OK\r\n'
-		'Content-Type: application/json; charset=utf-8\r\n'
+        E'HTTP/1.1 200 OK\r\n'
+        'Content-Type: application/json; charset=utf-8\r\n'
         'Date: Thu, 12 Jul 2018 18:33:04 GMT\r\n'
         'ETag: W/\"e-upYEWCL+q6R/++2nWHz5b76hBgo\"\r\n'
         'Server: nginx\r\n'
@@ -55,27 +55,27 @@ select * from mocker(
         'Connection: Close\r\n\r\n'
         '{\"status\":200}');
 select * from mocker(
-		E'HTTP/1.1 201 OK\r\n'
-		'Content-Type: application/json; charset=utf-8\r\n'
+        E'HTTP/1.1 201 OK\r\n'
+        'Content-Type: application/json; charset=utf-8\r\n'
         'Vary: Accept-Encoding\r\n'
         'Content-Length: 14\r\n'
         'Connection: Close\r\n\r\n'
         '{\"status\":201}');
 
 \set ON_ERROR_STOP 0
-\set test_string E'HTTP/1.1 404 Not Found\r\nContent-Length: 14\r\nConnection: Close\r\n\r\n{\"status\":404}';
+\set test_string 'HTTP/1.1 404 Not Found\r\nContent-Length: 14\r\nConnection: Close\r\n\r\n{\"status\":404}';
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
-\set test_string E'Content-Length: 14\r\nConnection: Close\r\n\r\n{\"status\":404}';
+\set test_string 'Content-Length: 14\r\nConnection: Close\r\n\r\n{\"status\":404}';
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
-\set test_string E'HTTP/1.1 404 Not Found\r\nContent-Length: 14\r\nConnection: Close\r\n{\"status\":404}';
+\set test_string 'HTTP/1.1 404 Not Found\r\nContent-Length: 14\r\nConnection: Close\r\n{\"status\":404}';
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');
 SELECT _timescaledb_internal.test_status_mock(:'test_string');

@@ -10,13 +10,11 @@
 #include "version.h"
 #include "net/conn.h"
 #include "net/http.h"
+#include "net/uri.h"
 #include "utils.h"
 
-#define HTTPS_PORT	443
-
-char *get_guc_endpoint_hostname(void);
-int get_guc_endpoint_port(void);
-HttpRequest *build_version_request(void);
+HttpRequest *build_version_request(const char *host, const char *path);
+Connection *telemetry_connect(URI *uri);
 
 /*
  *	This function is intended as the main function for a BGW.

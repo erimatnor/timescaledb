@@ -113,7 +113,7 @@ _guc_init(void)
 							   "URI for telemetry endpoint",
 							   "URI for telemetry endpoint",
 							   &guc_telemetry_endpoint,
-							   "https://telemetry.timescale.com",
+							   "https://telemetry.timescale.com/v1/metrics",
 							   PGC_INTERNAL,
 							   0,
 							   NULL,

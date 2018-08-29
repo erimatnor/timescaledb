@@ -1,5 +1,3 @@
-set(CMAKE_C_FLAGS_DEBUG "-DUSE_ASSERT_CHECKING=1")
-
 # Check if PostgreSQL has OpenSSL enabled
 file(STRINGS ${PG_INCLUDEDIR}/pg_config.h PG_USE_OPENSSL REGEX "#define USE_OPENSSL [01]")
 string(REGEX REPLACE "#define USE_OPENSSL ([01])" "\\1" USE_OPENSSL ${PG_USE_OPENSSL})

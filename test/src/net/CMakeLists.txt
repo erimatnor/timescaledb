@@ -1,4 +1,5 @@
 set(SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/uri.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/test_conn.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/test_http.c"
   )

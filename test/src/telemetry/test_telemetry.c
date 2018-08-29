@@ -3,7 +3,11 @@
 
 #include "telemetry/telemetry.h"
 #include "net/utils.h"
+#if DEBUG
+#include "net/conn_mock.h"
+#endif
 
+#define HTTPS_PORT	443
 #define TEST_ENDPOINT	"postman-echo.com"
 
 TS_FUNCTION_INFO_V1(test_status);
@@ -11,7 +15,7 @@ TS_FUNCTION_INFO_V1(test_status_ssl);
 TS_FUNCTION_INFO_V1(test_status_mock);
 TS_FUNCTION_INFO_V1(test_telemetry);
 
-#ifdef DEBUG
+#if DEBUG
 static char *test_string;
 #endif
 
@@ -39,11 +43,11 @@ static Datum test_factory(ConnectionType type, int status, char *host, int port)
 	if (ret < 0)
 		goto cleanup_conn;
 
-#ifdef DEBUG
+#if DEBUG
 	if (type == CONNECTION_MOCK)
-		connection_mock_set_recv_buf(conn, test_string, strlen(test_string));	
+		connection_mock_set_recv_buf(conn, test_string, strlen(test_string));
 #endif
-	
+
 	response = send_and_recv_http(conn, build_request(status));
 cleanup_conn:
 	connection_close(conn);
@@ -68,15 +72,15 @@ test_status(PG_FUNCTION_ARGS)
 	return test_factory(CONNECTION_PLAIN, status, TEST_ENDPOINT, port);
 }
 
-#ifdef DEBUG
-// Test mock_ops
+#if DEBUG
+/* Test mock_ops */
 Datum
 test_status_mock(PG_FUNCTION_ARGS)
 {
 	int			port = 80;
 	text  *arg1 = PG_GETARG_TEXT_P(0);
 	test_string = text_to_cstring(arg1);
-	
+
 	return test_factory(CONNECTION_MOCK, 123, TEST_ENDPOINT, port);
 }
 #endif
@@ -86,14 +90,23 @@ test_telemetry(PG_FUNCTION_ARGS)
 {
 	int ret;
 	char *response;
-	Connection *conn = connection_create(CONNECTION_SSL);
+	Connection *conn;
+	URI *uri = uri_parse(guc_telemetry_endpoint, NULL);
+
+	Assert(NULL != uri);
+
+	conn = telemetry_connect(uri);
+
 	if (conn == NULL)
 		PG_RETURN_NULL();
-	ret = connection_connect(conn, get_guc_endpoint_hostname(),	get_guc_endpoint_port());
+
+	ret = connection_connect(conn, uri_host(uri), uri_port(uri));
+
 	if (ret < 0)
 		goto cleanup_conn;
 
-	response = send_and_recv_http(conn, build_version_request());
+	response = send_and_recv_http(conn, build_version_request(uri_host(uri), uri_path(uri)));
+
 	// Just verify that it's some sort of valid JSON
 	Assert(strtok(response, ":") != NULL);
 cleanup_conn:

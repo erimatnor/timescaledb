@@ -18,6 +18,7 @@
 #include "uuid.h"
 #include "hypertable.h"
 #include "net/utils.h"
+#include "net/uri.h"
 
 #ifndef WIN32
 #include <sys/utsname.h>
@@ -47,37 +48,9 @@
 
 #define PG_PROMETHEUS	"pg_prometheus"
 #define POSTGIS			"postgis"
+
 static const char *related_extensions[] = { PG_PROMETHEUS, POSTGIS };
-
 static const char *version_delimiter[3] = { ".", ".", ""};
-
-char *get_guc_endpoint_hostname() {
-	char *endpoint = palloc(strlen(guc_telemetry_endpoint) + 1);
-	strncpy(endpoint, guc_telemetry_endpoint, strlen(guc_telemetry_endpoint));
-	endpoint[strlen(guc_telemetry_endpoint)] = '\0';
-
-	char *protocol = strtok(endpoint, "/");
-	char *hostname = strtok(NULL, "/");
-
-	if (protocol == NULL || hostname == NULL) 
-		return NULL;
-	return hostname;
-}
-
-int get_guc_endpoint_port() {
-	char *endpoint = palloc(strlen(guc_telemetry_endpoint) + 1);
-	strncpy(endpoint, guc_telemetry_endpoint, strlen(guc_telemetry_endpoint));
-	endpoint[strlen(guc_telemetry_endpoint)] = '\0';
-
-	char *protocol = strtok(endpoint, ":");
-	if (protocol == NULL)
-		return -1;
-	if (strcmp(protocol, "http"))
-		return 80;
-	else if (strcmp(protocol, "https"))
-		return 443;
-	return -1;
-}
 
 /*
  * Parse the JSON response from the TS endpoint. There should be a field
@@ -85,16 +58,15 @@ int get_guc_endpoint_port() {
  * version, and notify the user if it is behind.
  */
 static void
-process_response(char *endpoint_response)
+process_response(const char *endpoint_response)
 {
 	int i;
 	char *curr_sub_version;
 	long curr_sub_version_long;
-	long local_version[3] = {
+	const long local_version[3] = {
 		strtol(TIMESCALEDB_MAJOR_VERSION, NULL, 10),
 		strtol(TIMESCALEDB_MINOR_VERSION, NULL, 10),
 		strtol(TIMESCALEDB_PATCH_VERSION, NULL, 10) };
-
 	char	   *version_string = text_to_cstring(DatumGetTextPP(
 		DirectFunctionCall2(json_object_field_text,
 		CStringGetTextDatum(endpoint_response),
@@ -102,38 +74,38 @@ process_response(char *endpoint_response)
 
 	if (version_string == NULL)
 		elog(ERROR, "could not get TimescaleDB version from server response");
-	else
-	{
-		/*
-		 * Now parse the version string. We expect format to be XX.XX.XX, and
-		 * if not, we error out
-		 */
-		for (i = 0; i < 3; i++) {
-			curr_sub_version = strtok(i == 0 ? version_string : NULL, version_delimiter[i]);
-			if (curr_sub_version == NULL)
-				elog(ERROR, "ill-formatted TimescaleDB version from server response");
 
-			curr_sub_version_long = strtol(curr_sub_version, NULL, 10);
+	/*
+	 * Now parse the version string. We expect format to be XX.XX.XX, and
+	 * if not, we error out
+	 */
+	for (i = 0; i < 3; i++) {
+		curr_sub_version = strtok(i == 0 ? version_string : NULL, version_delimiter[i]);
 
-			if (local_version[i] < curr_sub_version_long)
-			{
-				ereport(LOG, (errmsg("you are not running the most up-to-date version of TimescaleDB."),
-						errhint("The most up-to-date version is %s, your version is %s", version_string, TIMESCALEDB_VERSION_MOD)));
-				return;
-			}
-			if (local_version[i] > curr_sub_version_long)
-				break;
+		if (curr_sub_version == NULL)
+			elog(ERROR, "ill-formatted TimescaleDB version from server response");
+
+		curr_sub_version_long = strtol(curr_sub_version, NULL, 10);
+
+		if (local_version[i] < curr_sub_version_long)
+		{
+			ereport(LOG, (errmsg("you are not running the most up-to-date version of TimescaleDB."),
+						  errhint("The most up-to-date version is %s, your version is %s",
+								  version_string, TIMESCALEDB_VERSION_MOD)));
+			return;
 		}
-		/* Put the successful version check in a lower logging level to avoid clogging logs. */
-		elog(NOTICE, "you are running the most up-to-date version of TimescaleDB.");
+		if (local_version[i] > curr_sub_version_long)
+			break;
 	}
+	/* Put the successful version check in a lower logging level to avoid clogging logs. */
+	elog(NOTICE, "you are running the most up-to-date version of TimescaleDB.");
 }
 
 static char *
 get_num_hypertables()
 {
 	StringInfo buf = makeStringInfo();
-	
+
 	appendStringInfo(buf, "%d", number_of_hypertables());
 	return buf->data;
 }
@@ -141,12 +113,12 @@ get_num_hypertables()
 static char *
 get_database_size()
 {
-	StringInfoData buf;
-	int64		data_size = DatumGetInt64(DirectFunctionCall1(pg_database_size_oid, ObjectIdGetDatum(MyDatabaseId)));
+	StringInfo buf = makeStringInfo();
+	int64		data_size = DatumGetInt64(DirectFunctionCall1(pg_database_size_oid,
+															  ObjectIdGetDatum(MyDatabaseId)));
 
-	initStringInfo(&buf);
-	appendStringInfo(&buf, "" INT64_FORMAT "", data_size);
-	return buf.data;
+	appendStringInfo(buf, "" INT64_FORMAT "", data_size);
+	return buf->data;
 }
 
 static void
@@ -175,6 +147,7 @@ static void
 add_related_extensions(JsonbParseState *state)
 {
 	int i;
+
 	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
 
 	for (i = 0; i < sizeof(related_extensions) / sizeof(char *); i++) {
@@ -199,9 +172,9 @@ build_version_body(void)
 	Jsonb	   *jb;
 	StringInfo	jtext;
 	JsonbParseState *parseState = NULL;
-	
+
 	pushJsonbValue(&parseState, WJB_BEGIN_OBJECT, NULL);
-	jsonb_add_pair(parseState, REQ_DB_UUID, 
+	jsonb_add_pair(parseState, REQ_DB_UUID,
 		DatumGetCString(DirectFunctionCall1(uuid_out, UUIDPGetDatum(get_uuid()))));
 	jsonb_add_pair(parseState, REQ_EXPORTED_DB_UUID,
 		DatumGetCString(DirectFunctionCall1(uuid_out, UUIDPGetDatum(get_exported_uuid()))));
@@ -238,7 +211,7 @@ build_version_body(void)
 }
 
 HttpRequest *
-build_version_request(void)
+build_version_request(const char *host, const char *path)
 {
 	char		body_len_string[5];
 	HttpRequest *req;
@@ -249,14 +222,20 @@ build_version_request(void)
 	/* Fill in HTTP request */
 	req = http_request_create(HTTP_POST);
 
-	http_request_set_uri(req, TIMESCALE_URI);
+	http_request_set_uri(req, path);
 	http_request_set_version(req, HTTP_10);
 	http_request_set_header(req, HTTP_CONTENT_TYPE, TIMESCALE_TYPE);
 	http_request_set_header(req, HTTP_CONTENT_LENGTH, body_len_string);
-	http_request_set_header(req, HTTP_HOST, get_guc_endpoint_hostname());
+	http_request_set_header(req, HTTP_HOST, host);
 	http_request_set_body(req, jtext->data, jtext->len);
 
 	return req;
+}
+
+Connection *
+telemetry_connect(URI *uri)
+{
+	return connection_create(uri->scheme == URI_SCHEME_HTTP ? CONNECTION_PLAIN : CONNECTION_SSL);
 }
 
 void
@@ -265,22 +244,28 @@ telemetry_main()
 	int			ret;
 	char	   *response;
 	Connection *conn;
+	URI *uri = uri_parse(guc_telemetry_endpoint, NULL);
 
-	if (!telemetry_on())
+	if (NULL == uri || !telemetry_on())
 		return;
 
-	conn = connection_create(CONNECTION_SSL);
+	conn = connection_create(uri->scheme == URI_SCHEME_HTTP ? CONNECTION_PLAIN : CONNECTION_SSL);
+
 	if (conn == NULL)
-		elog(ERROR, "could not create an SSL connection");
-	ret = connection_connect(conn, get_guc_endpoint_hostname(), HTTPS_PORT);
+		elog(ERROR, "could not create telemetry connection");
+
+	ret = connection_connect(conn, uri_host(uri), uri_port(uri));
+
 	if (ret < 0)
-		elog(ERROR, "could not make a connection to %s:%d", guc_telemetry_endpoint, HTTPS_PORT);
-		
-	response = send_and_recv_http(conn, build_version_request());
+		elog(ERROR, "could not make a connection to %s://%s:%d%s",
+			 uri_scheme(uri), uri_host(uri), uri_port(uri), uri_path(uri));
+
+	response = send_and_recv_http(conn, build_version_request(uri_host(uri), uri_path(uri)));
+
 	/*
-     * Do the version-check. Response is the body of a well-formed HTTP response, since
+	 * Do the version-check. Response is the body of a well-formed HTTP response, since
 	 * otherwise the previous line will throw an error.
-     */
+	 */
 	process_response(response);
 	connection_close(conn);
 	connection_destroy(conn);

@@ -17,7 +17,7 @@ test_conn(PG_FUNCTION_ARGS)
 	Connection *conn;
 	bool		should_fail = false;
 	int			port = 80;
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 	int			ssl_port = 443;
 #endif
 	char	   *host = "postman-echo.com";
@@ -50,7 +50,7 @@ test_conn(PG_FUNCTION_ARGS)
 	connection_close(conn);
 	connection_destroy(conn);
 
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 	/* Now test ssl_ops */
 	conn = connection_create(CONNECTION_SSL);
 	Assert(connection_connect(conn, host, ssl_port) >= 0);
