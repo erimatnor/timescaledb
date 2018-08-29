@@ -98,7 +98,7 @@ void
 http_request_set_uri(HttpRequest *req, char *uri)
 {
 	MemoryContext old = MemoryContextSwitchTo(req->context);
-	int uri_len = strlen(uri);
+	int			uri_len = strlen(uri);
 
 	req->uri = palloc(uri_len + 1);
 	memcpy(req->uri, uri, uri_len);
@@ -117,10 +117,10 @@ void
 http_request_set_header(HttpRequest *req, char *name, char *value)
 {
 	MemoryContext old = MemoryContextSwitchTo(req->context);
-	int name_len = strlen(name);
-	int value_len = strlen(value);
+	int			name_len = strlen(name);
+	int			value_len = strlen(value);
 	HttpHeader *new_header =
-		http_header_create(name, name_len, value, value_len, req->headers);
+	http_header_create(name, name_len, value, value_len, req->headers);
 
 	req->headers = new_header;
 	MemoryContextSwitchTo(old);
