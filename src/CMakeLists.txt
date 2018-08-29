@@ -165,27 +165,6 @@ else ()
     VERBATIM)
 endif (WIN32)
 
-find_program(PGINDENT pgindent
-  HINTS ${PG_SOURCE_DIR}
-  PATH_SUFFIXES src/tools/pgindent
-  DOC "Format C code according to PostgreSQL standards")
-
-if (PGINDENT)
-  message(STATUS "Using pgindent ${PGINDENT}")
-else ()
-  message(STATUS "Install pgindent to be able to format C code: https://github.com/postgres/postgres/tree/master/src/tools/pgindent")
-endif (PGINDENT)
-
-# Configuration for running pgindent
-if (PGINDENT)
-  add_custom_command(OUTPUT typedefs.list
-    DEPENDS ${PROJECT_NAME}
-    COMMAND sh ${CMAKE_BINARY_DIR}/scripts/generate_typedefs.sh > typedefs.list)
-  add_custom_target(pgindent
-    COMMAND ${PGINDENT} -typedefs typedefs.list -code-base ${CMAKE_SOURCE_DIR}/src
-    DEPENDS typedefs.list)
-endif (PGINDENT)
-
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${TEST_SOURCES} ${HEADERS} ${GITCOMMIT_H})
 if (OPENSSL_FOUND AND USE_OPENSSL)
     target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
