@@ -15,7 +15,7 @@
 
 TS_FUNCTION_INFO_V1(generate_uuid_external);
 
-/* Generates a v4 UUID. Based on function pg_random_uuid() in the pgcyrpto contrib module. */
+/* Generates a v4 UUID. Based on function pg_random_uuid() in the pgcrypto contrib module. */
 static pg_uuid_t *
 generate_uuid()
 {
@@ -25,13 +25,13 @@ generate_uuid()
 
 	/*
 	 * If pg_backend_random cannot find sources of randomness, then we use the current
-     * timestamp as a "random source". Timestamps are 8 bytes, so we copy this into bytes 9-16 of the UUID.
+	 * timestamp as a "random source". Timestamps are 8 bytes, so we copy this into bytes 9-16 of the UUID.
 	 * If we see all 0s in bytes 0-8 (other than version + variant), we know that there is
-     * something wrong with the RNG on this node.
+	 * something wrong with the RNG on this node.
 	 */
 	if (!rand_success) {
 		ts = GetCurrentTimestamp();
-		memcpy((void *)gen_uuid->data[9], &ts, 8);
+		memcpy(&gen_uuid->data[9], &ts, sizeof(TimestampTz));
 	}
 
 	gen_uuid->data[6] = (gen_uuid->data[6] & 0x0f) | 0x40;	/* "version" field */
@@ -41,7 +41,7 @@ generate_uuid()
 
 Datum
 generate_uuid_external(PG_FUNCTION_ARGS) {
-	return CStringGetTextDatum(DirectFunctionCall1(uuid_out, UUIDPGetDatum(generate_uuid())));
+	return CStringGetTextDatum(DatumGetCString(DirectFunctionCall1(uuid_out, UUIDPGetDatum(generate_uuid()))));
 }
 
 
