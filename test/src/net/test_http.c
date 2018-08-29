@@ -7,7 +7,7 @@
 #include "compat.h"
 #include "net/http.h"
 
-#define MAX_REQUEST_SIZE	4096	
+#define MAX_REQUEST_SIZE	4096
 
 /*  Tests for auxiliary HttpResponseState functions in http_parsing.h */
 
@@ -74,13 +74,13 @@ Datum
 test_http_parsing(PG_FUNCTION_ARGS)
 {
 	int			num_iterations = PG_GETARG_INT32(0);
-	int bytes;
+	int bytes, i, j;
 
 	srand(time(0));
 
-	for (int j = 0; j < num_iterations; j++)
+	for (j = 0; j < num_iterations; j++)
 	{
-		for (int i = 0; i < num_test_strings(); i++)
+		for (i = 0; i < num_test_strings(); i++)
 		{
 			bytes = rand() % (strlen(TEST_RESPONSES[i]) + 1);
 			HttpResponseState *state = http_response_state_create();
@@ -109,9 +109,9 @@ Datum
 test_http_parsing_full(PG_FUNCTION_ARGS)
 {
 	srand(time(0));
-	int bytes;
+	int bytes, i;
 
-	for (int i = 0; i < num_test_strings(); i++)
+	for (i = 0; i < num_test_strings(); i++)
 	{
 		HttpResponseState *state = http_response_state_create();
 		bytes = strlen(TEST_RESPONSES[i]);
@@ -129,7 +129,7 @@ test_http_parsing_full(PG_FUNCTION_ARGS)
 	}
 
 	// Now do the bad responses
-	for (int i = 0; i < 3; i++)
+	for (i = 0; i < 3; i++)
 	{
 		HttpResponseState *state = http_response_state_create();
 		bytes = strlen(BAD_RESPONSES[i]);
@@ -156,7 +156,7 @@ test_http_request_build(PG_FUNCTION_ARGS) {
 	http_request_set_version(req, HTTP_11);
 	http_request_set_header(req, HTTP_CONTENT_LENGTH, "0");
 	http_request_set_header(req, HTTP_HOST, host);
-	
+
 	serialized = http_request_build(req, &request_len);
 
 	Assert(!strncmp(expected_response, serialized, request_len));
@@ -174,8 +174,8 @@ test_http_request_build(PG_FUNCTION_ARGS) {
 
 	serialized = http_request_build(req, &request_len);
 
-	Assert(!strncmp(expected_response, serialized, request_len));	
-	http_request_destroy(req);	
+	Assert(!strncmp(expected_response, serialized, request_len));
+	http_request_destroy(req);
 
 	expected_response = "POST /tmp/status/1234 HTTP/1.1\r\n"
 		"Content-Length: 0\r\nHost: herp.com\r\n\r\n";
@@ -188,7 +188,7 @@ test_http_request_build(PG_FUNCTION_ARGS) {
 
 	serialized = http_request_build(req, &request_len);
 
-	Assert(!strncmp(expected_response, serialized, request_len));	
+	Assert(!strncmp(expected_response, serialized, request_len));
 	http_request_destroy(req);
 
 	// Check that content-length checking works
@@ -200,6 +200,6 @@ test_http_request_build(PG_FUNCTION_ARGS) {
 
 	Assert(!http_request_build(req, &request_len));
 	http_request_destroy(req);
-		
+
 	PG_RETURN_NULL();
 }
