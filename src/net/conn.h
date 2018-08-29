@@ -2,11 +2,6 @@
 #include <stdlib.h>
 #include <pg_config.h>
 
-#ifdef USE_OPENSSL
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#endif
-
 typedef struct ConnOps ConnOps;
 
 typedef enum ConnectionType

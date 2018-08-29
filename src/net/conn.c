@@ -7,6 +7,11 @@
 #include <postgres.h>
 #include <pg_config.h>
 
+#if USE_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
+
 #include "conn.h"
 
 #define DEFAULT_TIMEOUT_SEC	3
@@ -121,7 +126,7 @@ connection_create_plain()
 	return connection_internal_create(sizeof(Connection), &plain_ops);
 }
 
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 
 typedef struct SSLConnection
 {
@@ -244,7 +249,7 @@ static ConnOps ssl_ops = {
 static Connection *
 connection_create_ssl()
 {
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 	return connection_internal_create(sizeof(SSLConnection), &ssl_ops);
 #else
 	ereport(ERROR,
@@ -407,7 +412,7 @@ connection_destroy(Connection *conn)
 void
 _connection_init(void)
 {
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 	SSL_library_init();
 	/* Always returns 1 */
 	SSL_load_error_strings();
@@ -417,7 +422,7 @@ _connection_init(void)
 void
 _connection_fini(void)
 {
-#ifdef USE_OPENSSL
+#if USE_OPENSSL
 	ERR_free_strings();
 #endif
 }
