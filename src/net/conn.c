@@ -9,7 +9,7 @@
 
 #include "conn_internal.h"
 
-static ConnOps *conn_ops[_CONNECTION_MAX] = { NULL };
+static ConnOps *conn_ops[_CONNECTION_MAX] = {NULL};
 
 static const char *conn_names[] = {
 	[CONNECTION_PLAIN] = "PLAIN",
@@ -41,10 +41,10 @@ connection_create(ConnectionType type)
 		elog(ERROR, "connection library: invalid connection type");
 
 	if (NULL == conn_ops[type])
-			ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("connection library: %s connections are not supported", conn_names[type]),
-			 errhint("Enable %s support when compiling the extension.", conn_names[type])));
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("connection library: %s connections are not supported", conn_names[type]),
+				 errhint("Enable %s support when compiling the extension.", conn_names[type])));
 
 	conn = connection_internal_create(type, conn_ops[type]);
 

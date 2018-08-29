@@ -32,8 +32,8 @@ plain_connect(Connection *conn, const char *host, int port)
 		conn->sock = ret;
 
 	/*
-	 * Set send / recv timeout so that write and read don't block forever.
-	 * Set separately so that one of the actions failing doesn't block the other.
+	 * Set send / recv timeout so that write and read don't block forever. Set
+	 * separately so that one of the actions failing doesn't block the other.
 	 */
 	if (setsockopt(conn->sock, SOL_SOCKET, SO_RCVTIMEO, &timeouts, sizeof(struct timeval)) != 0)
 		elog(ERROR, "connection library: could not set recv timeouts on SSL sockets");

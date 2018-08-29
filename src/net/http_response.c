@@ -138,6 +138,7 @@ http_parse_status(HttpResponseState *state, char next)
 	switch (next)
 	{
 		case CARRIAGE_RETURN:
+
 			/*
 			 * Then we are at the end of status and can use sscanf
 			 *
@@ -259,7 +260,7 @@ http_parse_header_value(HttpResponseState *state, char next)
 			state->state = HTTP_STATE_INTERM;
 			break;
 		case NEW_LINE:
-			// \n is not allowed
+			/* \n is not allowed */
 			state->state = HTTP_STATE_ERROR;
 			break;
 		default:
@@ -297,6 +298,7 @@ http_response_state_parse(HttpResponseState *state, int bytes)
 	while (state->parse_offset < state->offset)
 	{
 		char		next = state->raw_buffer[state->parse_offset];
+
 		switch (state->state)
 		{
 			case HTTP_STATE_STATUS:

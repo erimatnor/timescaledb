@@ -44,6 +44,7 @@ void		http_request_destroy(HttpRequest *req);
 /* Assume that uri is null-terminated */
 void		http_request_set_uri(HttpRequest *req, char *uri);
 void		http_request_set_version(HttpRequest *req, HttpRequestVersion version);
+
 /* Assume that name and value are null-terminated */
 void		http_request_set_header(HttpRequest *req, char *name, char *value);
 void		http_request_set_body(HttpRequest *req, char *body, int body_len);
