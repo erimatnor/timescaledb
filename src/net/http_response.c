@@ -10,6 +10,7 @@
 #define CARRIAGE_RETURN	'\r'
 #define NEW_LINE		'\n'
 #define SEP_CHAR		':'
+#define HTTP_VERSION_BUFFER_SIZE 128
 
 extern HttpHeader *http_header_create(const char *name, size_t name_len, const char *value, size_t value_len, HttpHeader *next);
 
@@ -28,7 +29,7 @@ typedef enum HttpParseState
 typedef struct HttpResponseState
 {
 	MemoryContext context;
-	char		version[128];
+	char		version[HTTP_VERSION_BUFFER_SIZE];
 	char		raw_buffer[MAX_RAW_BUFFER_SIZE];
 	/* The next read should copy data into the buffer starting here */
 	off_t		offset;
