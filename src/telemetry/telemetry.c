@@ -9,13 +9,11 @@
 #include <commands/extension.h>
 #include <utils/builtins.h>
 #include <utils/jsonb.h>
-#include <utils/snapmgr.h>
-#include <utils/fmgrprotos.h>
 
 #include "compat.h"
 #include "guc.h"
 #include "telemetry.h"
-#include "uuid.h"
+#include "metadata.h"
 #include "hypertable.h"
 #include "net/utils.h"
 #include "net/uri.h"
@@ -175,10 +173,11 @@ build_version_body(void)
 
 	pushJsonbValue(&parseState, WJB_BEGIN_OBJECT, NULL);
 	jsonb_add_pair(parseState, REQ_DB_UUID,
-		DatumGetCString(DirectFunctionCall1(uuid_out, UUIDPGetDatum(get_uuid()))));
+				   DatumGetCString(DirectFunctionCall1(uuid_out, metadata_get_uuid())));
 	jsonb_add_pair(parseState, REQ_EXPORTED_DB_UUID,
-		DatumGetCString(DirectFunctionCall1(uuid_out, UUIDPGetDatum(get_exported_uuid()))));
-	jsonb_add_pair(parseState, REQ_INSTALL_TIME, get_install_timestamp());
+				   DatumGetCString(DirectFunctionCall1(uuid_out, metadata_get_exported_uuid())));
+	jsonb_add_pair(parseState, REQ_INSTALL_TIME,
+				   DatumGetCString(DirectFunctionCall1(timestamptz_out, metadata_get_install_timestamp())));
 	jsonb_add_pair(parseState, REQ_INSTALL_METHOD, TIMESCALEDB_INSTALL_METHOD);
 
 #ifndef WIN32

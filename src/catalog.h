@@ -474,10 +474,7 @@ typedef struct FormData_tablespace_hypertable_id_tablespace_name_idx
  *
  ******************************/
 
-#define INSTALLATION_METADATA_TABLE_NAME 		"installation_metadata"
-#define INSTALLATION_METADATA_UUID_KEY_NAME			"uuid"
-#define INSTALLATION_METADATA_EXPORTED_UUID_KEY_NAME	"exported_uuid"
-#define INSTALLATION_METADATA_TIMESTAMP_KEY_NAME		"install_timestamp"
+#define INSTALLATION_METADATA_TABLE_NAME		"installation_metadata"
 
 enum Anum_installation_metadata
 {
@@ -523,7 +520,7 @@ enum
 				MAX(_MAX_CHUNK_CONSTRAINT_INDEX,		\
 					MAX(_MAX_CHUNK_INDEX_INDEX,			\
 						MAX(_MAX_TABLESPACE_INDEX,		\
-						    MAX(_MAX_INSTALLATION_METADATA_INDEX,		\
+							MAX(_MAX_INSTALLATION_METADATA_INDEX,		\
 							_MAX_CHUNK_INDEX)))))))
 
 typedef enum CacheType
