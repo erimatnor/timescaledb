@@ -42,12 +42,12 @@ HttpRequest *http_request_create(HttpRequestMethod method);
 void		http_request_destroy(HttpRequest *req);
 
 /* Assume that uri is null-terminated */
-void		http_request_set_uri(HttpRequest *req, char *uri);
+void		http_request_set_uri(HttpRequest *req, const char *uri);
 void		http_request_set_version(HttpRequest *req, HttpRequestVersion version);
 
 /* Assume that name and value are null-terminated */
-void		http_request_set_header(HttpRequest *req, char *name, char *value);
-void		http_request_set_body(HttpRequest *req, char *body, int body_len);
+void		http_request_set_header(HttpRequest *req, const char *name, const char *valuue);
+void		http_request_set_body(HttpRequest *req, const char *body, size_t body_len);
 
 /*  Serialize the request into char *dst. Return the length of request in optional size pointer*/
 const char *http_request_build(HttpRequest *req, size_t *buf_size);
@@ -71,5 +71,5 @@ int			http_response_state_status_code(HttpResponseState *state);
 HttpHeader *http_response_state_headers(HttpResponseState *state);
 
 /*  Returns false if encountered an error during parsing */
-bool		http_response_state_parse(HttpResponseState *state, int bytes);
+bool		http_response_state_parse(HttpResponseState *state, size_t bytes);
 #endif							/* TIMESCALEDB_HTTP_H */

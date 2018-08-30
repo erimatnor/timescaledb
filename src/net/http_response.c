@@ -11,7 +11,7 @@
 #define NEW_LINE		'\n'
 #define SEP_CHAR		':'
 
-extern HttpHeader *http_header_create(char *name, int name_len, char *value, int value_len, HttpHeader *next);
+extern HttpHeader *http_header_create(const char *name, size_t name_len, const char *value, size_t value_len, HttpHeader *next);
 
 typedef enum HttpParseState
 {
@@ -53,8 +53,9 @@ http_response_state_init(HttpResponseState *state)
 HttpResponseState *
 http_response_state_create()
 {
-	MemoryContext context = AllocSetContextCreate(
-												  CurrentMemoryContext, "Http Response", ALLOCSET_DEFAULT_SIZES);
+	MemoryContext context = AllocSetContextCreate(CurrentMemoryContext,
+												  "Http Response",
+												  ALLOCSET_DEFAULT_SIZES);
 	MemoryContext old = MemoryContextSwitchTo(context);
 	HttpResponseState *ret = palloc(sizeof(HttpResponseState));
 
@@ -128,7 +129,7 @@ http_response_state_headers(HttpResponseState *state)
 }
 
 static void
-http_parse_status(HttpResponseState *state, char next)
+http_parse_status(HttpResponseState *state, const char next)
 {
 	char		version[128];
 	char		raw_buf[state->parse_offset + 1];
@@ -162,8 +163,11 @@ http_parse_status(HttpResponseState *state, char next)
 }
 
 static void
-http_response_state_add_header(HttpResponseState *state, char *name, int name_len, char
-							   *value, int value_len)
+http_response_state_add_header(HttpResponseState *state,
+							   const char *name,
+							   size_t name_len,
+							   const char *value,
+							   size_t value_len)
 {
 	MemoryContext old = MemoryContextSwitchTo(state->context);
 	HttpHeader *new_header = http_header_create(name, name_len, value, value_len,
@@ -175,7 +179,7 @@ http_response_state_add_header(HttpResponseState *state, char *name, int name_le
 
 static
 void
-http_parse_interm(HttpResponseState *state, char next)
+http_parse_interm(HttpResponseState *state, const char next)
 {
 	int			temp_length;
 
@@ -212,7 +216,7 @@ http_parse_interm(HttpResponseState *state, char next)
 }
 
 static void
-http_parse_header_name(HttpResponseState *state, char next)
+http_parse_header_name(HttpResponseState *state, const char next)
 {
 	switch (next)
 	{
@@ -251,7 +255,7 @@ http_parse_header_name(HttpResponseState *state, char next)
 
 /*  We do not customize to header_name. Assume all non \r or \n chars are allowed. */
 static void
-http_parse_header_value(HttpResponseState *state, char next)
+http_parse_header_value(HttpResponseState *state, const char next)
 {
 	/* Allow everything except... \r, \n */
 	switch (next)
@@ -270,7 +274,7 @@ http_parse_header_value(HttpResponseState *state, char next)
 }
 
 static void
-http_parse_almost_done(HttpResponseState *state, char next)
+http_parse_almost_done(HttpResponseState *state, const char next)
 {
 	/* Don't do anything, this is intermediate state */
 	switch (next)
@@ -289,7 +293,7 @@ http_parse_almost_done(HttpResponseState *state, char next)
 }
 
 bool
-http_response_state_parse(HttpResponseState *state, int bytes)
+http_response_state_parse(HttpResponseState *state, size_t bytes)
 {
 	if (state->offset > MAX_RAW_BUFFER_SIZE)
 		state->offset = MAX_RAW_BUFFER_SIZE;
