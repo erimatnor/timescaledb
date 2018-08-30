@@ -1,5 +1,5 @@
-#ifndef TIMESCALEDB_HTTP_H
-#define TIMESCALEDB_HTTP_H
+#ifndef TIMESCALEDB_NET_HTTP_H
+#define TIMESCALEDB_NET_HTTP_H
 
 #include <unistd.h>
 #include <stdbool.h>
@@ -72,4 +72,4 @@ HttpHeader *http_response_state_headers(HttpResponseState *state);
 
 /*  Returns false if encountered an error during parsing */
 bool		http_response_state_parse(HttpResponseState *state, size_t bytes);
-#endif							/* TIMESCALEDB_HTTP_H */
+#endif							/* TIMESCALEDB_HTTP_NET_H */

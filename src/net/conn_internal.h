@@ -1,5 +1,5 @@
-#ifndef TIMESCALEDB_CONN_INTERNAL_H
-#define TIMESCALEDB_CONN_INTERNAL_H
+#ifndef TIMESCALEDB_NET_CONN_INTERNAL_H
+#define TIMESCALEDB_NET_CONN_INTERNAL_H
 
 #include "conn.h"
 
@@ -15,4 +15,4 @@ typedef struct ConnOps
 
 extern void connection_register(ConnectionType type, ConnOps *ops);
 
-#endif							/* TIMESCALEDB_CONN_INTERNAL_H */
+#endif							/* TIMESCALEDB_NET_CONN_INTERNAL_H */
