@@ -47,8 +47,8 @@
 #define PG_PROMETHEUS	"pg_prometheus"
 #define POSTGIS			"postgis"
 
-static const char *related_extensions[] = { PG_PROMETHEUS, POSTGIS };
-static const char *version_delimiter[3] = { ".", ".", ""};
+static const char *related_extensions[] = {PG_PROMETHEUS, POSTGIS};
+static const char *version_delimiter[3] = {".", ".", ""};
 
 /*
  * Parse the JSON response from the TS endpoint. There should be a field
@@ -58,26 +58,27 @@ static const char *version_delimiter[3] = { ".", ".", ""};
 static void
 process_response(const char *endpoint_response)
 {
-	int i;
-	char *curr_sub_version;
-	long curr_sub_version_long;
-	const long local_version[3] = {
+	int			i;
+	char	   *curr_sub_version;
+	long		curr_sub_version_long;
+	const long	local_version[3] = {
 		strtol(TIMESCALEDB_MAJOR_VERSION, NULL, 10),
 		strtol(TIMESCALEDB_MINOR_VERSION, NULL, 10),
-		strtol(TIMESCALEDB_PATCH_VERSION, NULL, 10) };
+	strtol(TIMESCALEDB_PATCH_VERSION, NULL, 10)};
 	char	   *version_string = text_to_cstring(DatumGetTextPP(
-		DirectFunctionCall2(json_object_field_text,
-		CStringGetTextDatum(endpoint_response),
-		PointerGetDatum(cstring_to_text(TS_VERSION_JSON_FIELD)))));
+																DirectFunctionCall2(json_object_field_text,
+																					CStringGetTextDatum(endpoint_response),
+																					PointerGetDatum(cstring_to_text(TS_VERSION_JSON_FIELD)))));
 
 	if (version_string == NULL)
 		elog(ERROR, "could not get TimescaleDB version from server response");
 
 	/*
-	 * Now parse the version string. We expect format to be XX.XX.XX, and
-	 * if not, we error out
+	 * Now parse the version string. We expect format to be XX.XX.XX, and if
+	 * not, we error out
 	 */
-	for (i = 0; i < 3; i++) {
+	for (i = 0; i < 3; i++)
+	{
 		curr_sub_version = strtok(i == 0 ? version_string : NULL, version_delimiter[i]);
 
 		if (curr_sub_version == NULL)
@@ -95,14 +96,18 @@ process_response(const char *endpoint_response)
 		if (local_version[i] > curr_sub_version_long)
 			break;
 	}
-	/* Put the successful version check in a lower logging level to avoid clogging logs. */
+
+	/*
+	 * Put the successful version check in a lower logging level to avoid
+	 * clogging logs.
+	 */
 	elog(NOTICE, "you are running the most up-to-date version of TimescaleDB.");
 }
 
 static char *
 get_num_hypertables()
 {
-	StringInfo buf = makeStringInfo();
+	StringInfo	buf = makeStringInfo();
 
 	appendStringInfo(buf, "%d", number_of_hypertables());
 	return buf->data;
@@ -111,7 +116,7 @@ get_num_hypertables()
 static char *
 get_database_size()
 {
-	StringInfo buf = makeStringInfo();
+	StringInfo	buf = makeStringInfo();
 	int64		data_size = DatumGetInt64(DirectFunctionCall1(pg_database_size_oid,
 															  ObjectIdGetDatum(MyDatabaseId)));
 
@@ -144,12 +149,14 @@ jsonb_add_pair(JsonbParseState *state, const char *key, const char *value)
 static void
 add_related_extensions(JsonbParseState *state)
 {
-	int i;
+	int			i;
 
 	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
 
-	for (i = 0; i < sizeof(related_extensions) / sizeof(char *); i++) {
+	for (i = 0; i < sizeof(related_extensions) / sizeof(char *); i++)
+	{
 		const char *ext = related_extensions[i];
+
 		jsonb_add_pair(state, ext, OidIsValid(get_extension_oid(ext, true)) ? "true" : "false");
 	}
 
@@ -243,7 +250,7 @@ telemetry_main()
 	int			ret;
 	char	   *response;
 	Connection *conn;
-	URI *uri = uri_parse(guc_telemetry_endpoint, NULL);
+	URI		   *uri = uri_parse(guc_telemetry_endpoint, NULL);
 
 	if (NULL == uri || !telemetry_on())
 		return;
@@ -262,8 +269,8 @@ telemetry_main()
 	response = send_and_recv_http(conn, build_version_request(uri_host(uri), uri_path(uri)));
 
 	/*
-	 * Do the version-check. Response is the body of a well-formed HTTP response, since
-	 * otherwise the previous line will throw an error.
+	 * Do the version-check. Response is the body of a well-formed HTTP
+	 * response, since otherwise the previous line will throw an error.
 	 */
 	process_response(response);
 	connection_close(conn);

@@ -490,9 +490,9 @@ typedef struct FormData_installation_metadata
 {
 	NameData	key;
 	text	   *value;
-} FormData_installation_metadata;
+}			FormData_installation_metadata;
 
-typedef FormData_installation_metadata *Form_installation_metadata;
+typedef FormData_installation_metadata * Form_installation_metadata;
 
 /* installation_metadata primary index attribute numbers */
 enum Anum_installation_metadata_pkey_idx

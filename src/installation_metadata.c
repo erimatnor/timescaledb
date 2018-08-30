@@ -16,8 +16,8 @@
 static Datum
 convert_value_to_text(Datum value, Oid from_type)
 {
-	bool value_is_varlena;
-	Oid value_out;
+	bool		value_is_varlena;
+	Oid			value_out;
 
 	getTypeOutputInfo(from_type, &value_out, &value_is_varlena);
 
@@ -30,8 +30,8 @@ convert_value_to_text(Datum value, Oid from_type)
 static Datum
 convert_key_to_name(Datum value, Oid from_type)
 {
-	bool value_is_varlena;
-	Oid value_out;
+	bool		value_is_varlena;
+	Oid			value_out;
 
 	getTypeOutputInfo(from_type, &value_out, &value_is_varlena);
 
@@ -44,8 +44,8 @@ convert_key_to_name(Datum value, Oid from_type)
 static Datum
 convert_text_to_value(Datum value, Oid to_type)
 {
-	Oid value_in;
-	Oid value_ioparam;
+	Oid			value_in;
+	Oid			value_ioparam;
 
 	getTypeInputInfo(to_type, &value_in, &value_ioparam);
 
@@ -61,13 +61,14 @@ convert_text_to_value(Datum value, Oid to_type)
 
 typedef struct DatumValue
 {
-	Datum value;
-	Oid  typeid;
-	bool isnull;
+	Datum		value;
+	Oid			typeid;
+	bool		isnull;
 } DatumValue;
 
 static bool
-installation_metadata_tuple_get_value(TupleInfo *ti, void *data) {
+installation_metadata_tuple_get_value(TupleInfo *ti, void *data)
+{
 	DatumValue *dv = data;
 
 	dv->value = heap_getattr(ti->tuple, Anum_installation_metadata_value, ti->desc, &dv->isnull);
@@ -85,15 +86,15 @@ installation_metadata_get_value_internal(Datum metadata_key,
 										 bool *isnull,
 										 LOCKMODE lockmode)
 {
-	Oid key_out;
-	bool key_is_varlena;
+	Oid			key_out;
+	bool		key_is_varlena;
 	ScanKeyData scankey[1];
-	DatumValue dv = {
+	DatumValue	dv = {
 		.typeid = value_type,
 		.isnull = true,
 	};
 	Catalog    *catalog = catalog_get();
-	ScannerCtx scanctx = {
+	ScannerCtx	scanctx = {
 		.table = catalog->tables[INSTALLATION_METADATA].id,
 		.index = CATALOG_INDEX(catalog, INSTALLATION_METADATA, INSTALLATION_METADATA_PKEY_IDX),
 		.nkeys = 1,
@@ -143,12 +144,12 @@ installation_metadata_get_value(Datum metadata_key,
 Datum
 installation_metadata_insert(Datum metadata_key, Oid key_type, Datum metadata_value, Oid value_type)
 {
-	Datum existing_value;
+	Datum		existing_value;
 	Datum		values[Natts_installation_metadata];
 	bool		nulls[Natts_installation_metadata] = {false};
-	bool        isnull = false;
+	bool		isnull = false;
 	Catalog    *catalog = catalog_get();
-	Relation rel;
+	Relation	rel;
 
 	rel = heap_open(catalog->tables[INSTALLATION_METADATA].id, ShareLock);
 

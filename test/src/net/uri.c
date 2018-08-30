@@ -13,11 +13,11 @@ Datum
 test_parse_uri(PG_FUNCTION_ARGS)
 {
 	const text *uritext = PG_GETARG_TEXT_P(0);
-	TupleDesc tupdesc;
-	URI *uri;
-	Datum values[4];
-	bool nulls[4] = { false };
-	HeapTuple tuple;
+	TupleDesc	tupdesc;
+	URI		   *uri;
+	Datum		values[4];
+	bool		nulls[4] = {false};
+	HeapTuple	tuple;
 	const char *errhint = NULL;
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)

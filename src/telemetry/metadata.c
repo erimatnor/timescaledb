@@ -15,8 +15,8 @@
 static Datum
 get_uuid_by_key(const char *key)
 {
-	bool isnull;
-	Datum uuid;
+	bool		isnull;
+	Datum		uuid;
 
 	uuid = installation_metadata_get_value(CStringGetDatum(key), CSTRINGOID, UUIDOID, &isnull);
 
@@ -43,8 +43,8 @@ metadata_get_exported_uuid(void)
 Datum
 metadata_get_install_timestamp(void)
 {
-	bool isnull;
-	Datum timestamp;
+	bool		isnull;
+	Datum		timestamp;
 
 	timestamp = installation_metadata_get_value(CStringGetDatum(INSTALLATION_METADATA_TIMESTAMP_KEY_NAME),
 												CSTRINGOID,

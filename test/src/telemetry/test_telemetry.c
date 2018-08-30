@@ -20,11 +20,15 @@ static char *test_string;
 #endif
 
 static
-HttpRequest *build_request(int status) {
-	char uri[20];
+HttpRequest *
+build_request(int status)
+{
+	char		uri[20];
+
 	snprintf(uri, 20, "/status/%d", status);
 
 	HttpRequest *req = http_request_create(HTTP_GET);
+
 	http_request_set_uri(req, uri);
 	http_request_set_version(req, HTTP_10);
 	http_request_set_header(req, HTTP_HOST, TEST_ENDPOINT);
@@ -32,9 +36,11 @@ HttpRequest *build_request(int status) {
 	return req;
 }
 
-static Datum test_factory(ConnectionType type, int status, char *host, int port) {
-	int ret;
-	char *response = "Problem during test";
+static Datum
+test_factory(ConnectionType type, int status, char *host, int port)
+{
+	int			ret;
+	char	   *response = "Problem during test";
 	Connection *conn = connection_create(type);
 
 	if (conn == NULL)
@@ -55,20 +61,22 @@ cleanup_conn:
 	return CStringGetTextDatum(response);
 }
 
-// Test ssl_ops
+/*  Test ssl_ops */
 Datum
 test_status_ssl(PG_FUNCTION_ARGS)
 {
-	int status = PG_GETARG_INT32(0);
+	int			status = PG_GETARG_INT32(0);
+
 	return test_factory(CONNECTION_SSL, status, TEST_ENDPOINT, HTTPS_PORT);
 }
 
-// Test default_ops
+/*  Test default_ops */
 Datum
 test_status(PG_FUNCTION_ARGS)
 {
 	int			port = 80;
-	int status = PG_GETARG_INT32(0);
+	int			status = PG_GETARG_INT32(0);
+
 	return test_factory(CONNECTION_PLAIN, status, TEST_ENDPOINT, port);
 }
 
@@ -78,7 +86,8 @@ Datum
 test_status_mock(PG_FUNCTION_ARGS)
 {
 	int			port = 80;
-	text  *arg1 = PG_GETARG_TEXT_P(0);
+	text	   *arg1 = PG_GETARG_TEXT_P(0);
+
 	test_string = text_to_cstring(arg1);
 
 	return test_factory(CONNECTION_MOCK, 123, TEST_ENDPOINT, port);
@@ -88,10 +97,10 @@ test_status_mock(PG_FUNCTION_ARGS)
 Datum
 test_telemetry(PG_FUNCTION_ARGS)
 {
-	int ret;
-	char *response;
+	int			ret;
+	char	   *response;
 	Connection *conn;
-	URI *uri = uri_parse(guc_telemetry_endpoint, NULL);
+	URI		   *uri = uri_parse(guc_telemetry_endpoint, NULL);
 
 	Assert(NULL != uri);
 
@@ -107,7 +116,7 @@ test_telemetry(PG_FUNCTION_ARGS)
 
 	response = send_and_recv_http(conn, build_version_request(uri_host(uri), uri_path(uri)));
 
-	// Just verify that it's some sort of valid JSON
+	/* Just verify that it's some sort of valid JSON */
 	Assert(strtok(response, ":") != NULL);
 cleanup_conn:
 	connection_close(conn);

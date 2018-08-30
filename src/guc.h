@@ -6,7 +6,7 @@ typedef enum TelemetryLevel
 {
 	TELEMETRY_OFF,
 	TELEMETRY_BASIC,
-} TelemetryLevel;
+}			TelemetryLevel;
 
 extern bool telemetry_on(void);
 

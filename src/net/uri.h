@@ -10,11 +10,12 @@ typedef enum URIScheme
 
 typedef struct Uri
 {
-	URIScheme scheme;
-	struct {
+	URIScheme	scheme;
+	struct
+	{
 		const char *host;
-		int port;
-	} authority;
+		int			port;
+	}			authority;
 	const char *path;
 } URI;
 
@@ -25,4 +26,4 @@ typedef struct Uri
 extern URI *uri_parse(const char *uri, const char **errhint);
 extern const char *uri_scheme(URI *uri);
 
-#endif /* TIMESCALEDB_NET_URI_H */
+#endif							/* TIMESCALEDB_NET_URI_H */

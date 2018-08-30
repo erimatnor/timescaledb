@@ -14,16 +14,18 @@ pg_uuid_t *
 uuid_create(void)
 {
 	TimestampTz ts;
-	pg_uuid_t	*gen_uuid = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
-	bool rand_success = pg_backend_random((char *) gen_uuid->data, UUID_LEN);
+	pg_uuid_t  *gen_uuid = (pg_uuid_t *) palloc(sizeof(pg_uuid_t));
+	bool		rand_success = pg_backend_random((char *) gen_uuid->data, UUID_LEN);
 
 	/*
-	 * If pg_backend_random cannot find sources of randomness, then we use the current
-	 * timestamp as a "random source". Timestamps are 8 bytes, so we copy this into bytes 9-16 of the UUID.
-	 * If we see all 0s in bytes 0-8 (other than version + variant), we know that there is
-	 * something wrong with the RNG on this instance.
+	 * If pg_backend_random cannot find sources of randomness, then we use the
+	 * current timestamp as a "random source". Timestamps are 8 bytes, so we
+	 * copy this into bytes 9-16 of the UUID. If we see all 0s in bytes 0-8
+	 * (other than version + variant), we know that there is something wrong
+	 * with the RNG on this instance.
 	 */
-	if (!rand_success) {
+	if (!rand_success)
+	{
 		ts = GetCurrentTimestamp();
 		memcpy(&gen_uuid->data[9], &ts, sizeof(TimestampTz));
 	}
