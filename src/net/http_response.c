@@ -16,8 +16,8 @@ extern HttpHeader *http_header_create(const char *name, size_t name_len, const c
 typedef enum HttpParseState
 {
 	HTTP_STATE_STATUS,
-	HTTP_STATE_INTERM, //received a single \ r
-	HTTP_STATE_HEADER_NAME, //received \ r \ n
+	HTTP_STATE_INTERM,			/* received a single \r */
+	HTTP_STATE_HEADER_NAME,		/* received \r\n */
 	HTTP_STATE_HEADER_VALUE,
 	HTTP_STATE_ALMOST_DONE,
 	HTTP_STATE_BODY,
@@ -94,7 +94,7 @@ http_response_state_is_done(HttpResponseState *state)
 size_t
 http_response_state_buffer_remaining(HttpResponseState *state)
 {
-	Assert((MAX_RAW_BUFFER_SIZE - state->offset) >= 0);
+	Assert(state->offset <= MAX_RAW_BUFFER_SIZE);
 	return MAX_RAW_BUFFER_SIZE - state->offset;
 }
 
@@ -295,6 +295,8 @@ http_parse_almost_done(HttpResponseState *state, const char next)
 bool
 http_response_state_parse(HttpResponseState *state, size_t bytes)
 {
+	state->offset += bytes;
+
 	if (state->offset > MAX_RAW_BUFFER_SIZE)
 		state->offset = MAX_RAW_BUFFER_SIZE;
 
@@ -340,9 +342,6 @@ http_response_state_parse(HttpResponseState *state, size_t bytes)
 				return false;
 			case HTTP_STATE_DONE:
 				return true;
-			default:
-				elog(LOG, "unknown HttpParseState enum");
-				return false;
 		}
 	}
 	return true;
