@@ -10,14 +10,15 @@
 #define CARRIAGE_RETURN	'\r'
 #define NEW_LINE		'\n'
 #define SEP_CHAR		':'
+#define HTTP_VERSION_BUFFER_SIZE 128
 
 extern HttpHeader *http_header_create(const char *name, size_t name_len, const char *value, size_t value_len, HttpHeader *next);
 
 typedef enum HttpParseState
 {
 	HTTP_STATE_STATUS,
-	HTTP_STATE_INTERM, //received a single \ r
-	HTTP_STATE_HEADER_NAME, //received \ r \ n
+	HTTP_STATE_INTERM,			/* received a single \r */
+	HTTP_STATE_HEADER_NAME,		/* received \r\n */
 	HTTP_STATE_HEADER_VALUE,
 	HTTP_STATE_ALMOST_DONE,
 	HTTP_STATE_BODY,
@@ -28,6 +29,7 @@ typedef enum HttpParseState
 typedef struct HttpResponseState
 {
 	MemoryContext context;
+	char		version[HTTP_VERSION_BUFFER_SIZE];
 	char		raw_buffer[MAX_RAW_BUFFER_SIZE];
 	/* The next read should copy data into the buffer starting here */
 	off_t		offset;
@@ -94,9 +96,10 @@ http_response_state_is_done(HttpResponseState *state)
 size_t
 http_response_state_buffer_remaining(HttpResponseState *state)
 {
-	Assert((MAX_RAW_BUFFER_SIZE - state->offset) >= 0);
+	Assert(state->offset <= MAX_RAW_BUFFER_SIZE);
 	return MAX_RAW_BUFFER_SIZE - state->offset;
 }
+
 
 char *
 http_response_state_next_buffer(HttpResponseState *state)
@@ -128,13 +131,22 @@ http_response_state_headers(HttpResponseState *state)
 	return state->headers;
 }
 
+static bool
+http_parse_version(HttpResponseState *state)
+{
+	float		version;
+
+	if (sscanf(state->version, "HTTP/%f", &version) == 1)
+		if (version == 1.0f || version == 1.1f)
+			return true;
+
+	return false;
+}
+
 static void
 http_parse_status(HttpResponseState *state, const char next)
 {
-	char		version[128];
 	char		raw_buf[state->parse_offset + 1];
-
-	memset(version, '\0', sizeof(version));
 
 	switch (next)
 	{
@@ -149,9 +161,15 @@ http_parse_status(HttpResponseState *state, const char next)
 			memcpy(raw_buf, state->raw_buffer, state->parse_offset);
 			raw_buf[state->parse_offset] = '\0';
 			state->state = HTTP_STATE_ERROR;
+			memset(state->version, '\0', sizeof(state->version));
 
-			if (sscanf(raw_buf, "%127s %d %*s", version, &state->status_code) == 2)
-				state->state = HTTP_STATE_INTERM;
+			if (sscanf(raw_buf, "%127s %d %*s", state->version, &state->status_code) == 2)
+			{
+				if (http_parse_version(state))
+					state->state = HTTP_STATE_INTERM;
+				else
+					state->state = HTTP_STATE_ERROR;
+			}
 			break;
 		case NEW_LINE:
 			state->state = HTTP_STATE_ERROR;
@@ -295,6 +313,8 @@ http_parse_almost_done(HttpResponseState *state, const char next)
 bool
 http_response_state_parse(HttpResponseState *state, size_t bytes)
 {
+	state->offset += bytes;
+
 	if (state->offset > MAX_RAW_BUFFER_SIZE)
 		state->offset = MAX_RAW_BUFFER_SIZE;
 
@@ -340,9 +360,6 @@ http_response_state_parse(HttpResponseState *state, size_t bytes)
 				return false;
 			case HTTP_STATE_DONE:
 				return true;
-			default:
-				elog(LOG, "unknown HttpParseState enum");
-				return false;
 		}
 	}
 	return true;

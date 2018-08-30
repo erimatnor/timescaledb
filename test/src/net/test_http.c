@@ -84,22 +84,25 @@ test_http_parsing(PG_FUNCTION_ARGS)
 	{
 		for (i = 0; i < num_test_strings(); i++)
 		{
-			bytes = rand() % (strlen(TEST_RESPONSES[i]) + 1);
 			HttpResponseState *state = http_response_state_create();
+			bool		success;
+
+			bytes = rand() % (strlen(TEST_RESPONSES[i]) + 1);
 
 			/* Copy part of the message into the parsing state */
 			memcpy(http_response_state_next_buffer(state), TEST_RESPONSES[i], bytes);
-			/* Now do the parse */
-			Assert(http_response_state_parse(state, bytes));
 
-			if (bytes < strlen(TEST_RESPONSES[i]))
-				Assert(!http_response_state_is_done(state));
-			else
-				Assert(http_response_state_is_done(state));
+			/* Now do the parse */
+			success = http_response_state_parse(state, bytes);
+
+			Assert(success);
+
+			success = http_response_state_is_done(state);
+
+			Assert(bytes < strlen(TEST_RESPONSES[i]) ? !success : success);
 
 			http_response_state_destroy(state);
 		}
-
 	}
 	PG_RETURN_NULL();
 }
@@ -110,9 +113,10 @@ test_http_parsing(PG_FUNCTION_ARGS)
 Datum
 test_http_parsing_full(PG_FUNCTION_ARGS)
 {
-	srand(time(0));
 	int			bytes,
 				i;
+
+	srand(time(0));
 
 	for (i = 0; i < num_test_strings(); i++)
 	{
