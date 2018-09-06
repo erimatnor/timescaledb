@@ -120,3 +120,12 @@ connection_register(ConnectionType type, ConnOps *ops)
 
 	conn_ops[type] = ops;
 }
+
+const char *
+connection_get_and_clear_error(Connection *conn)
+{
+	if (NULL != conn->ops->errmsg)
+		return conn->ops->errmsg(conn);
+
+	return "unknown connection error";
+}

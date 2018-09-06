@@ -16,19 +16,28 @@ typedef struct SSLConnection
 	Connection	conn;
 	SSL_CTX    *ssl_ctx;
 	SSL		   *ssl;
+	unsigned long errcode;
 } SSLConnection;
+
+static void
+ssl_set_error(SSLConnection *conn, int err)
+{
+	conn->errcode = ERR_get_error();
+	conn->conn.err = err;
+}
 
 static int
 ssl_setup(SSLConnection *conn)
 {
 	int			ret;
 
-	conn->ssl_ctx = SSL_CTX_new(SSLv23_method());
+	conn->ssl_ctx = SSL_CTX_new(TLSv1_2_method());
 
 	if (NULL == conn->ssl_ctx)
-		elog(ERROR, "could not create SSL context");
-
-	SSL_CTX_set_options(conn->ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+	{
+		ssl_set_error(conn, -1);
+		return -1;
+	}
 
 	/*
 	 * Because we have a blocking socket, we don't want to be bothered with
@@ -37,23 +46,35 @@ ssl_setup(SSLConnection *conn)
 	SSL_CTX_set_mode(conn->ssl_ctx, SSL_MODE_AUTO_RETRY);
 
 	ERR_clear_error();
+
 	/* Clear the SSL error before next SSL_ * call */
 	conn->ssl = SSL_new(conn->ssl_ctx);
 
 	if (conn->ssl == NULL)
-		elog(ERROR, "could not create SSL connection");
+	{
+		ssl_set_error(conn, -1);
+		return -1;
+	}
 
 	ERR_clear_error();
 
 	ret = SSL_set_fd(conn->ssl, conn->conn.sock);
+
 	if (ret == 0)
-		elog(ERROR, "could not associate socket with SSL connection");
+	{
+		ssl_set_error(conn, -1);
+		return -1;
+	}
 
 	ret = SSL_connect(conn->ssl);
-	if (ret <= 0)
-		elog(ERROR, "could not make SSL connection");
 
-	return 0;
+	if (ret <= 0)
+	{
+		ssl_set_error(conn, ret);
+		ret = -1;
+	}
+
+	return ret;
 }
 
 static int
@@ -67,12 +88,7 @@ ssl_connect(Connection *conn, const char *host, const char *servname, int port)
 	if (ret < 0)
 		return ret;
 
-	ret = ssl_setup((SSLConnection *) conn);
-
-	if (ret < 0)
-		close(conn->sock);
-
-	return ret;
+	return ssl_setup((SSLConnection *) conn);
 }
 
 static ssize_t
@@ -83,7 +99,7 @@ ssl_write(Connection *conn, const char *buf, size_t writelen)
 	int			ret = SSL_write(sslconn->ssl, buf, writelen);
 
 	if (ret < 0)
-		elog(ERROR, "could not SSL_write");
+		ssl_set_error(sslconn, ret);
 
 	return ret;
 }
@@ -96,7 +112,7 @@ ssl_read(Connection *conn, char *buf, size_t buflen)
 	int			ret = SSL_read(sslconn->ssl, buf, buflen);
 
 	if (ret < 0)
-		elog(ERROR, "could not SSL_read");
+		ssl_set_error(sslconn, ret);
 
 	return ret;
 }
@@ -121,6 +137,75 @@ ssl_close(Connection *conn)
 	plain_close(conn);
 }
 
+static const char *
+ssl_errmsg(Connection *conn)
+{
+	SSLConnection *sslconn = (SSLConnection *) conn;
+	const char *reason;
+	static char errbuf[32];
+	int			err = conn->err;
+	unsigned long ecode = sslconn->errcode;
+
+	/* Clear errors */
+	conn->err = 0;
+	sslconn->errcode = 0;
+
+	if (NULL != sslconn->ssl)
+	{
+		switch (SSL_get_error(sslconn->ssl, err))
+		{
+			case SSL_ERROR_NONE:
+			case SSL_ERROR_SSL:
+				break;
+			case SSL_ERROR_ZERO_RETURN:
+				return "SSL error zero return";
+			case SSL_ERROR_WANT_READ:
+				return "SSL error want read";
+			case SSL_ERROR_WANT_WRITE:
+				return "SSL error want write";
+			case SSL_ERROR_WANT_CONNECT:
+				return "SSL error want connect";
+			case SSL_ERROR_WANT_ACCEPT:
+				return "SSL error want accept";
+			case SSL_ERROR_WANT_X509_LOOKUP:
+				return "SSL error want X509 lookup";
+			case SSL_ERROR_SYSCALL:
+				if (ecode == 0)
+				{
+					if (err == 0)
+						return "EOF in SSL operation";
+					else if (err == -1)
+					{
+#ifdef WIN32
+						int			syserr = WSAGetLastError();
+#else
+						int			syserr = errno;
+#endif
+						snprintf(errbuf, sizeof(errbuf), "SSL I/O error: %s", strerror(syserr));
+						return errbuf;
+					}
+					else
+						return "unknown SSL syscall error";
+				}
+				return "SSL error syscall";
+			default:
+				break;
+		}
+	}
+
+	if (ecode == 0)
+		return "no SSL error";
+
+	reason = ERR_reason_error_string(ecode);
+
+	if (NULL != reason)
+		return reason;
+
+	snprintf(errbuf, sizeof(errbuf), "SSL error code %lu", ecode);
+
+	return errbuf;
+}
+
 static ConnOps ssl_ops = {
 	.size = sizeof(SSLConnection),
 	.init = NULL,
@@ -128,6 +213,7 @@ static ConnOps ssl_ops = {
 	.close = ssl_close,
 	.write = ssl_write,
 	.read = ssl_read,
+	.errmsg = ssl_errmsg,
 };
 
 extern void _conn_ssl_init(void);

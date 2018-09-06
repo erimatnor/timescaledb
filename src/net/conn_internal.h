@@ -11,6 +11,7 @@ typedef struct ConnOps
 	void		(*close) (Connection *conn);
 	ssize_t		(*write) (Connection *conn, const char *buf, size_t writelen);
 	ssize_t		(*read) (Connection *conn, char *buf, size_t readlen);
+	const char *(*errmsg) (Connection *conn);
 } ConnOps;
 
 extern void connection_register(ConnectionType type, ConnOps *ops);

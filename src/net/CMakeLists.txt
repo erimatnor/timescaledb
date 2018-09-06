@@ -9,8 +9,6 @@ set(SOURCES
 
 if (USE_OPENSSL)
   list(APPEND SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/conn_ssl.c)
-  target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
-  target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
 endif (USE_OPENSSL)
 
 target_sources(${PROJECT_NAME} PRIVATE ${SOURCES})

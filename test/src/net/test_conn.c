@@ -16,7 +16,7 @@ test_conn(PG_FUNCTION_ARGS)
 {
 	char		response[MAX_RESULT_SIZE];
 	Connection *conn;
-	bool		should_fail = false;
+	int			ret;
 	int			port = 80;
 #ifdef TS_USE_OPENSSL
 	int			ssl_port = 443;
@@ -37,16 +37,9 @@ test_conn(PG_FUNCTION_ARGS)
 	Assert(connection_connect(conn, host, NULL, port) >= 0);
 
 	/* should timeout */
-	PG_TRY();
-	{
-		connection_read(conn, response, 1);
-	}
-	PG_CATCH();
-	{
-		should_fail = true;
-	}
-	PG_END_TRY();
-	Assert(should_fail);
+	ret = connection_read(conn, response, 1);
+
+	Assert(ret < 0);
 
 	connection_close(conn);
 	connection_destroy(conn);
@@ -56,17 +49,9 @@ test_conn(PG_FUNCTION_ARGS)
 	conn = connection_create(CONNECTION_SSL);
 	Assert(connection_connect(conn, host, NULL, ssl_port) >= 0);
 
-	should_fail = false;
-	PG_TRY();
-	{
-		connection_read(conn, response, 1);
-	}
-	PG_CATCH();
-	{
-		should_fail = true;
-	}
-	PG_END_TRY();
-	Assert(should_fail);
+	ret = connection_read(conn, response, 1);
+
+	Assert(ret < 0);
 
 	connection_close(conn);
 	connection_destroy(conn);

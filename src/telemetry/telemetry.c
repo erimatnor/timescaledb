@@ -290,9 +290,11 @@ telemetry_connect(void)
 
 	if (ret < 0)
 	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not make a connection to %s", TELEMETRY_ENDPOINT),
+				 errdetail("%s", connection_get_and_clear_error(conn))));
 		connection_destroy(conn);
-
-		elog(ERROR, "could not make a connection to %s", TELEMETRY_ENDPOINT);
 	}
 
 	return conn;

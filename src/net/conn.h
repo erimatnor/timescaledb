@@ -18,8 +18,13 @@ typedef enum ConnectionType
 typedef struct Connection
 {
 	ConnectionType type;
+#ifdef WIN32
+	SOCKET		sock;
+#else
 	int			sock;
+#endif
 	ConnOps    *ops;
+	int			err;
 } Connection;
 
 extern Connection *connection_create(ConnectionType type);
@@ -28,6 +33,7 @@ extern ssize_t connection_read(Connection *conn, char *buf, size_t buflen);
 extern ssize_t connection_write(Connection *conn, const char *buf, size_t writelen);
 extern void connection_close(Connection *conn);
 extern void connection_destroy(Connection *conn);
+extern const char *connection_get_and_clear_error(Connection *conn);
 
 /*  Called in init.c */
 extern void _connection_init(void);
