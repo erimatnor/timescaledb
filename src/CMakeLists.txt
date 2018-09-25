@@ -73,7 +73,7 @@ else ()
 endif (WIN32)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
-add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H} $<TARGET_OBJECTS:timescaledb-tests>)
+add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H} $<TARGET_OBJECTS:${PROJECT_NAME}-tests>)
 else ()
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H})
 endif ()
