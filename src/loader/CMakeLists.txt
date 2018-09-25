@@ -1,12 +1,3 @@
-set(HEADERS
-  bgw_message_queue.h
-  bgw_counter.h
-  bgw_launcher.h
-  loader.h
-  ../compat.h
-  ../extension_constants.h
-)
-
 set(SOURCES
   loader.c
   bgw_message_queue.c
