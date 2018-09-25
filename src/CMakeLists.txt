@@ -125,16 +125,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
   PREFIX "")
 
-# Include test-specific code in debug builds. Note that we need the
-# "whole archive" option to include all symbols from the tests lib and
-# not just the referenced symbols.
-if (CMAKE_C_COMPILER_ID STREQUAL AppleClang)
-  target_link_libraries(${PROJECT_NAME} -Wl,-force_load debug timescaledb-tests)
-elseif (CMAKE_C_COMPILER_ID STREQUAL MSVC)
-  target_link_libraries(${PROJECT_NAME} debug /WHOLEARCHIVE:timescaledb-tests)
-else ()
-  target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive debug timescaledb-tests -Wl,--no-whole-archive)
-endif ()
+target_link_libraries(${PROJECT_NAME} debug $<TARGET_OBJECTS:timescaledb-tests>)
 
 install(
   TARGETS ${PROJECT_NAME}
