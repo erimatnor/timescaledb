@@ -119,13 +119,15 @@ else ()
     VERBATIM)
 endif (WIN32)
 
+if (CMAKE_BUILD_TYPE MATCHES Debug)
+add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H} $<TARGET_OBJECTS:timescaledb-tests>)
+else ()
 add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H})
+endif ()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
   OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
   PREFIX "")
-
-target_link_libraries(${PROJECT_NAME} debug $<TARGET_OBJECTS:timescaledb-tests>)
 
 install(
   TARGETS ${PROJECT_NAME}
