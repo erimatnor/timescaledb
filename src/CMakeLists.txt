@@ -1,37 +1,3 @@
-if (UNIX)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L${PG_LIBDIR}")
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -L${PG_LIBDIR}")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PG_CFLAGS} -fvisibility=hidden")
-  set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} ${PG_CPPFLAGS}")
-  set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
-endif (UNIX)
-
-if (APPLE)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -multiply_defined suppress")
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -multiply_defined suppress -Wl,-undefined,dynamic_lookup -Wl,-dead_strip_dylibs -bundle_loader ${PG_BINDIR}/postgres")
-elseif (WIN32)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /MANIFEST:NO")
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} /MANIFEST:NO")
-endif (APPLE)
-
-# Only Windows and FreeBSD need the base include/ dir instead of include/server/, and including
-# both causes problems on Ubuntu where they frequently get out of sync
-if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD"))
-    include_directories (${CMAKE_CURRENT_BINARY_DIR} ${PG_INCLUDEDIR} ${PG_INCLUDEDIR_SERVER})
-else ()
-    include_directories (${CMAKE_CURRENT_BINARY_DIR} ${PG_INCLUDEDIR_SERVER})
-endif ()
-
-if (WIN32)
-  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${PG_LIBDIR}/postgres.lib ws2_32.lib Version.lib")
-  set(CMAKE_C_FLAGS "-D_CRT_SECURE_NO_WARNINGS")
-  include_directories(${PG_INCLUDEDIR_SERVER}/port/win32)
-
-if (MSVC)
-  include_directories(${PG_INCLUDEDIR_SERVER}/port/win32_msvc)
-endif (MSVC)
-endif (WIN32)
-
 set(HEADERS
   cache.h
   catalog.h
@@ -126,14 +92,14 @@ set(SOURCES
   utils.c
   version.c)
 
-set(GITCOMMIT_H ${CMAKE_CURRENT_BINARY_DIR}/gitcommit.h)
-
 # Add test source code in Debug builds
 if (CMAKE_BUILD_TYPE MATCHES Debug)
-  set(TEST_SOURCES ../test/src/symbol_conflict.c)
   set(TS_DEBUG 1)
   set(DEBUG 1)
 endif (CMAKE_BUILD_TYPE MATCHES Debug)
+
+include(build-defs.cmake)
+set(GITCOMMIT_H ${CMAKE_CURRENT_BINARY_DIR}/gitcommit.h)
 
 if (WIN32)
   add_custom_command(
@@ -153,20 +119,20 @@ else ()
     VERBATIM)
 endif (WIN32)
 
-add_library(${PROJECT_NAME} MODULE ${SOURCES} ${TEST_SOURCES} ${GITCOMMIT_H})
-
-if(CMAKE_BUILD_TYPE MATCHES Debug)
-  add_subdirectory(../test/src "${CMAKE_CURRENT_BINARY_DIR}/test/src")
-endif(CMAKE_BUILD_TYPE MATCHES Debug)
+add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
-    OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
-    PREFIX "")
+  OUTPUT_NAME ${PROJECT_NAME}-${PROJECT_VERSION_MOD}
+  PREFIX "")
 
-if (CMAKE_BUILD_TYPE MATCHES Debug)
-  # This define generates extension-specific code for symbol conflict testing
-  target_compile_definitions(${PROJECT_NAME} PRIVATE MODULE_NAME=${PROJECT_NAME})
-endif (CMAKE_BUILD_TYPE MATCHES Debug)
+# Include test-specific code in debug builds. Note that we need the
+# "whole archive" option to include all symbols from the tests lib and
+# not just the referenced symbols.
+if (WIN32)
+  target_link_libraries(${PROJECT_NAME} debug /WHOLEARCHIVE:timescaledb-tests)
+else()
+  target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive debug timescaledb-tests -Wl,--no-whole-archive)
+endif (WIN32)
 
 install(
   TARGETS ${PROJECT_NAME}
