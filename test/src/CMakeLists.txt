@@ -16,7 +16,7 @@ add_subdirectory(net)
 add_subdirectory(telemetry)
 
 if (NOT WIN32)
-  # The loader tests currently do not build on Windows due 
+  # The loader tests currently do not build on Windows due
   # to a reference to IsParallelWorker, which is an
   # unexported symbol
   add_subdirectory(loader)
