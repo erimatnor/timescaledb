@@ -75,7 +75,6 @@ TS_FUNCTION_INFO_V1(ts_bgw_db_scheduler_entrypoint);
 typedef enum DbState
 {
 	DB_STATE_INIT = 0,
-	DB_STATE_CREATED,
 	DB_STATE_SCHEDULER_LAUNCHED,
 	DB_STATE_STOPPED,
 } DbState;
@@ -398,11 +397,6 @@ start_db_schedulers(HTAB *db_htab)
 
 		switch (current_entry->state)
 		{
-			case DB_STATE_CREATED:
-				if (!VirtualTransactionIdIsValid(current_entry->vxid) ||
-					!VirtualXactLock(current_entry->vxid, true))
-					break;
-				current_entry->state = DB_STATE_INIT;
 			case DB_STATE_INIT:
 				if (start_db_scheduler(current_entry))
 					nstarted++;
@@ -596,17 +590,6 @@ message_restart_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId 
 	return register_scheduler_handle(vxid, db_he);
 }
 
-/* Add the vxid and dboid to the createdb_entries list */
-static AckResult
-message_register_createdb_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vxid)
-{
-	DbHashEntry *db_he = db_hash_entry_create(db_htab, message->db_oid, &vxid);
-
-	db_he->state = DB_STATE_CREATED;
-
-	return ACK_SUCCESS;
-}
-
 /*
  * Handle 1 message.
  */
@@ -640,14 +623,6 @@ launcher_handle_message(HTAB *db_htab)
 			break;
 		case RESTART:
 			action_result = message_restart_action(db_htab, message, vxid);
-			break;
-		case REGISTER_CREATEDB:
-
-			/*
-			 * These messages come from the object_access_hook that intercepts
-			 * CREATE DATABASE commands.
-			 */
-			action_result = message_register_createdb_action(db_htab, message, vxid);
 			break;
 	}
 

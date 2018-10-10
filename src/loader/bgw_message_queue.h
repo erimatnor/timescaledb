@@ -10,7 +10,6 @@ typedef enum BgwMessageType
 	STOP = 0,
 	START,
 	RESTART,
-	REGISTER_CREATEDB,
 } BgwMessageType;
 
 typedef struct BgwMessage
