@@ -367,6 +367,7 @@ timescale_object_access_hook(ObjectAccessType access,
 			if (classId != DatabaseRelationId)
 				break;
 
+
 			/* Tell the launcher about the new database */
 			if (!bgw_message_send_and_wait(REGISTER_CREATEDB, objectId))
 				ereport(LOG, (errmsg("Could not notify the launcher in timescale_object_access_hook")));

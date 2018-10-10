@@ -39,8 +39,6 @@
 #include "bgw_message_queue.h"
 #include "bgw_launcher.h"
 
-#define BGW_WAIT_MESSAGE_INTERVAL	50L
-
 #define BGW_DB_SCHEDULER_FUNCNAME "ts_bgw_scheduler_main"
 #define BGW_ENTRYPOINT_FUNCNAME "ts_bgw_db_scheduler_entrypoint"
 
@@ -74,19 +72,22 @@ typedef enum AckResult
 TS_FUNCTION_INFO_V1(ts_bgw_cluster_launcher_main);
 TS_FUNCTION_INFO_V1(ts_bgw_db_scheduler_entrypoint);
 
+typedef enum DbState
+{
+	DB_STATE_INIT = 0,
+	DB_STATE_CREATED,
+	DB_STATE_SCHEDULER_LAUNCHED,
+	DB_STATE_STOPPED,
+} DbState;
+
 typedef struct DbHashEntry
 {
 	Oid			db_oid;			/* key for the hash table, must be first */
+	DbState		state;
 	BackgroundWorkerHandle *db_scheduler_handle;	/* needed to shut down
 													 * properly */
-} DbHashEntry;
-
-typedef struct CreatedbEntry
-{
-	Oid			db_oid;			/* Oid of the database being created by this
-								 * vxid */
 	VirtualTransactionId vxid;	/* Txn id of the create database command */
-} CreatedbEntry;
+} DbHashEntry;
 
 static void
 bgw_on_postmaster_death(void)
@@ -263,13 +264,24 @@ init_database_htab(void)
 
 /* Insert a scheduler entry into the hash table. Correctly set entry values. */
 static DbHashEntry *
-db_hash_entry_create(HTAB *db_htab, Oid db_oid)
+db_hash_entry_create(HTAB *db_htab, Oid db_oid, VirtualTransactionId *vxid)
 {
 	DbHashEntry *db_he;
 	bool		found;
 
 	db_he = (DbHashEntry *) hash_search(db_htab, &db_oid, HASH_ENTER, &found);
-	db_he->db_scheduler_handle = NULL;
+
+	if (!found)
+	{
+		db_he->db_scheduler_handle = NULL;
+
+		if (NULL == vxid)
+			SetInvalidVirtualTransactionId(db_he->vxid);
+		else
+			db_he->vxid = *vxid;
+
+		db_he->state = DB_STATE_INIT;
+	}
 
 	return db_he;
 }
@@ -290,12 +302,7 @@ populate_database_htab(HTAB *db_htab)
 	Relation	rel;
 	HeapScanDesc scan;
 	HeapTuple	tup;
-	ListCell   *lc;
-
-	/*
-	 * Used to store OIDs that can be assigned schedulers.
-	 */
-	List	   *db_oids = NIL;
+	int			num_dbs = 0;
 
 	/*
 	 * by this time we should already be connected to the db, and only have
@@ -316,12 +323,16 @@ populate_database_htab(HTAB *db_htab)
 	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
 	{
 		Form_pg_database pgdb = (Form_pg_database) GETSTRUCT(tup);
+		DbHashEntry *db_he;
 
 		if (!pgdb->datallowconn || pgdb->datistemplate)
 			continue;			/* don't bother with dbs that don't allow
 								 * connections or are templates */
 
-		db_oids = lappend_oid(db_oids, HeapTupleGetOid(tup));
+		db_he = db_hash_entry_create(db_htab, HeapTupleGetOid(tup), NULL);
+
+		if (db_he->state == DB_STATE_INIT)
+			num_dbs++;
 	}
 	heap_endscan(scan);
 	heap_close(rel, AccessShareLock);
@@ -335,7 +346,7 @@ populate_database_htab(HTAB *db_htab)
 	 * our workers all at once so that schedulers don't start workers stealing
 	 * other schedulers' spots.
 	 */
-	if (!bgw_total_workers_increment_by(list_length(db_oids)))
+	if (!bgw_total_workers_increment_by(num_dbs))
 	{
 		ereport(LOG, (errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					  errmsg("total databases = %ld TimescaleDB background worker limit %d, so no schedulers allocated", hash_get_num_entries(db_htab), guc_max_background_workers),
@@ -344,18 +355,30 @@ populate_database_htab(HTAB *db_htab)
 	}
 
 	/*
-	 * All schedulers have been correctly accounted for, so go ahead and
-	 * insert all into the actual hash table.
-	 */
-	foreach(lc, db_oids)
-		(void) db_hash_entry_create(db_htab, lfirst_oid(lc));
-
-	/*
 	 * This commit is at the end of this function instead of after heap_close
 	 * above because the db_oids list is allocated on this txn's memory
 	 * context. We cannot free this context until we are done using the list.
 	 */
 	CommitTransactionCommand();
+}
+
+static bool
+start_db_scheduler(DbHashEntry *dbe)
+{
+	bool		worker_registered = false;
+	pid_t		worker_pid;
+
+	worker_registered = register_entrypoint_for_db(dbe->db_oid,
+												   dbe->vxid,
+												   &dbe->db_scheduler_handle);
+
+	if (worker_registered)
+	{
+		wait_for_background_worker_startup(dbe->db_scheduler_handle, &worker_pid);
+		dbe->state = DB_STATE_SCHEDULER_LAUNCHED;
+	}
+
+	return worker_registered;
 }
 
 /* Scan our hash table of dbs and register a worker for each */
@@ -368,31 +391,48 @@ start_db_schedulers(HTAB *db_htab)
 	int			ndatabases = hash_get_num_entries(db_htab);
 
 	hash_seq_init(&hash_seq, db_htab);
+
 	while ((current_entry = hash_seq_search(&hash_seq)) != NULL)
 	{
-		bool		worker_registered = false;
 		pid_t		worker_pid;
-		VirtualTransactionId vxid;
 
-		/* When called at server start, no need to wait on a vxid */
-		SetInvalidVirtualTransactionId(vxid);
-
-		worker_registered = register_entrypoint_for_db(current_entry->db_oid, vxid, &current_entry->db_scheduler_handle);
-		if (!worker_registered)
+		switch (current_entry->state)
 		{
-			hash_seq_term(&hash_seq);
-			ereport(LOG, (errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-						  errmsg("TimescaleDB background worker scheduler for at least one database unable to start"),
-						  errhint("%d schedulers have been started, %d databases remain without scheduler. Increase max_worker_processes and restart the server.", nstarted, (ndatabases - nstarted))));
+			case DB_STATE_CREATED:
+				if (!VirtualTransactionIdIsValid(current_entry->vxid) ||
+					!VirtualXactLock(current_entry->vxid, true))
+					break;
+				current_entry->state = DB_STATE_INIT;
+			case DB_STATE_INIT:
+				if (start_db_scheduler(current_entry))
+					nstarted++;
+				else
+				{
+					/*
+					 * We don't need to decrement as that will be handled by
+					 * the stopped workers check.
+					 */
+					ereport(LOG,
+							(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+							 errmsg("TimescaleDB background worker scheduler for at least one database unable to start"),
+							 errhint("%d schedulers have been started, %d databases remain without scheduler. "
+									 "Increase max_worker_processes and restart the server.",
+									 nstarted, (ndatabases - nstarted))));
 
-			/*
-			 * We don't need to decrement as that will be handled by the
-			 * stopped workers check.
-			 */
-			break;
+					hash_seq_term(&hash_seq);
+					return;
+				}
+				break;
+			case DB_STATE_SCHEDULER_LAUNCHED:
+				if (get_background_worker_pid(current_entry->db_scheduler_handle, &worker_pid) == BGWH_STOPPED)
+				{
+					bgw_total_workers_decrement();
+					current_entry->state = DB_STATE_STOPPED;
+				}
+				break;
+			case DB_STATE_STOPPED:
+				break;
 		}
-		wait_for_background_worker_startup(current_entry->db_scheduler_handle, &worker_pid);
-		nstarted++;
 	}
 }
 
@@ -422,27 +462,6 @@ launcher_pre_shmem_cleanup(int code, Datum arg)
 	bgw_message_queue_shmem_cleanup();
 }
 
-/*Garbage collector cleaning up any stopped schedulers*/
-static void
-stopped_db_schedulers_cleanup(HTAB *db_htab)
-{
-	HASH_SEQ_STATUS hash_seq;
-	DbHashEntry *current_entry;
-	bool		found;
-
-	hash_seq_init(&hash_seq, db_htab);
-	while ((current_entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		pid_t		worker_pid;
-
-		if (get_background_worker_pid(current_entry->db_scheduler_handle, &worker_pid) == BGWH_STOPPED)
-		{
-			hash_search(db_htab, &current_entry->db_oid, HASH_REMOVE, &found);
-			bgw_total_workers_decrement();
-		}
-	}
-}
-
 /* Returns the hashtable entry for a database's scheduler, allocating one if it does not exist. */
 static DbHashEntry *
 allocate_scheduler(HTAB *db_htab, Oid db_oid)
@@ -453,18 +472,25 @@ allocate_scheduler(HTAB *db_htab, Oid db_oid)
 	db_he = hash_search(db_htab, &db_oid, HASH_FIND, &found);
 	if (!found)
 	{
-		/* Reserve a spot for this scheduler with BGW counter */
-		if (!bgw_total_workers_increment())
-		{
-			report_bgw_limit_exceeded();
-			return NULL;
-		}
 
 		/*
 		 * Only insert into the hash table if we successfully get a counter
 		 * spot
 		 */
-		db_he = db_hash_entry_create(db_htab, db_oid);
+		db_he = db_hash_entry_create(db_htab, db_oid, NULL);
+	}
+	else if (db_he->state == DB_STATE_STOPPED)
+		db_he->state = DB_STATE_INIT;
+
+	if (db_he->state == DB_STATE_INIT)
+	{
+		/* Reserve a spot for this scheduler with BGW counter */
+		if (!bgw_total_workers_increment())
+		{
+			report_bgw_limit_exceeded();
+			db_he->state = DB_STATE_STOPPED;
+			return NULL;
+		}
 	}
 
 	return db_he;
@@ -482,6 +508,8 @@ register_scheduler_handle(VirtualTransactionId vxid, DbHashEntry *db_he)
 		return ACK_FAILURE;
 	}
 	wait_for_background_worker_startup(db_he->db_scheduler_handle, &worker_pid);
+	db_he->state = DB_STATE_SCHEDULER_LAUNCHED;
+
 	return ACK_SUCCESS;
 }
 
@@ -499,30 +527,6 @@ start_scheduler(HTAB *db_htab, Oid db_oid, VirtualTransactionId vxid)
 		return register_scheduler_handle(vxid, db_he);
 
 	return ACK_SUCCESS;
-}
-
-static void
-delete_oid_from_createdb_entries(List **createdb_entries, Oid oid_to_delete)
-{
-	ListCell   *lc;
-
-	/*
-	 * We want to remove a cell while iterating through it, so we need to keep
-	 * track of some stuff manually
-	 */
-	ListCell   *prev = NULL;
-	ListCell   *next = NULL;
-
-	for (lc = list_head(*createdb_entries); lc; lc = next)
-	{
-		CreatedbEntry *entry = lfirst(lc);
-
-		next = lnext(lc);
-
-		if (entry->db_oid == oid_to_delete)
-			*createdb_entries = list_delete_cell(*createdb_entries, lc, prev);
-		prev = lc;
-	}
 }
 
 /*
@@ -545,7 +549,7 @@ message_start_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vx
 }
 
 static AckResult
-message_stop_action(HTAB *db_htab, List **createdb_entries, BgwMessage *message)
+message_stop_action(HTAB *db_htab, BgwMessage *message)
 {
 	DbHashEntry *db_he;
 	bool		found;
@@ -557,8 +561,6 @@ message_stop_action(HTAB *db_htab, List **createdb_entries, BgwMessage *message)
 		wait_for_background_worker_shutdown(db_he->db_scheduler_handle);
 	}
 
-	/* Also remove any pending entries in createdb associated with this db_oid */
-	delete_oid_from_createdb_entries(createdb_entries, message->db_oid);
 	return ACK_SUCCESS;
 }
 
@@ -596,14 +598,12 @@ message_restart_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId 
 
 /* Add the vxid and dboid to the createdb_entries list */
 static AckResult
-message_register_createdb_action(HTAB *db_htab, List **createdb_entries, BgwMessage *message, VirtualTransactionId vxid)
+message_register_createdb_action(HTAB *db_htab, BgwMessage *message, VirtualTransactionId vxid)
 {
-	CreatedbEntry *entry = palloc(sizeof(CreatedbEntry));
+	DbHashEntry *db_he = db_hash_entry_create(db_htab, message->db_oid, &vxid);
 
-	entry->db_oid = message->db_oid;
-	entry->vxid = vxid;
+	db_he->state = DB_STATE_CREATED;
 
-	*createdb_entries = lappend(*createdb_entries, entry);
 	return ACK_SUCCESS;
 }
 
@@ -611,7 +611,7 @@ message_register_createdb_action(HTAB *db_htab, List **createdb_entries, BgwMess
  * Handle 1 message.
  */
 static bool
-launcher_handle_message(HTAB *db_htab, List **createdb_entries)
+launcher_handle_message(HTAB *db_htab)
 {
 	BgwMessage *message = bgw_message_receive();
 	PGPROC	   *sender;
@@ -636,7 +636,7 @@ launcher_handle_message(HTAB *db_htab, List **createdb_entries)
 			action_result = message_start_action(db_htab, message, vxid);
 			break;
 		case STOP:
-			action_result = message_stop_action(db_htab, createdb_entries, message);
+			action_result = message_stop_action(db_htab, message);
 			break;
 		case RESTART:
 			action_result = message_restart_action(db_htab, message, vxid);
@@ -647,7 +647,7 @@ launcher_handle_message(HTAB *db_htab, List **createdb_entries)
 			 * These messages come from the object_access_hook that intercepts
 			 * CREATE DATABASE commands.
 			 */
-			action_result = message_register_createdb_action(db_htab, createdb_entries, message, vxid);
+			action_result = message_register_createdb_action(db_htab, message, vxid);
 			break;
 	}
 
@@ -684,48 +684,6 @@ launcher_sigterm(SIGNAL_ARGS)
 	die(postgres_signal_arg);
 }
 
-/* Create a scheduler for any finished vxids */
-static void
-handle_finished_createdb_entries(HTAB *db_htab, List **createdb_entries)
-{
-	ListCell   *lc;
-
-	/*
-	 * We want to remove a cell while iterating through it, so we need to keep
-	 * track of some stuff manually
-	 */
-	ListCell   *prev = NULL;
-	ListCell   *next = NULL;
-
-	for (lc = list_head(*createdb_entries); lc; lc = next)
-	{
-		VirtualTransactionId vxid;
-		AckResult	result;
-		CreatedbEntry *entry = lfirst(lc);
-
-		next = lnext(lc);
-
-		if (VirtualTransactionIdIsValid(entry->vxid))
-		{
-			if (VirtualXactLock(entry->vxid, false))
-			{
-				/*
-				 * If the vxid is no longer running, then start a scheduler
-				 * with the dboid
-				 */
-				SetInvalidVirtualTransactionId(vxid);
-				result = start_scheduler(db_htab, entry->db_oid, vxid);
-				if (result != ACK_SUCCESS)
-					ereport(WARNING, (errmsg("TimscaleDB could not start a background worker scheduler for db_oid: %d", entry->db_oid)));
-
-				/* Delete this entry from the list */
-				*createdb_entries = list_delete_cell(*createdb_entries, lc, prev);
-			}
-		}
-		prev = lc;
-	}
-}
-
 extern Datum
 ts_bgw_cluster_launcher_main(PG_FUNCTION_ARGS)
 {
@@ -735,9 +693,6 @@ ts_bgw_cluster_launcher_main(PG_FUNCTION_ARGS)
 	 * by locks.
 	 */
 	HTAB	   *db_htab;
-
-	/* A list of vxids running CREATE DATABASE that we have to wait on */
-	List	   *createdb_entries = NIL;
 
 	pqsignal(SIGINT, StatementCancelHandler);
 	pqsignal(SIGTERM, launcher_sigterm);
@@ -764,45 +719,31 @@ ts_bgw_cluster_launcher_main(PG_FUNCTION_ARGS)
 
 	bgw_message_queue_set_reader();
 	db_htab = init_database_htab();
-	populate_database_htab(db_htab);
 
 	before_shmem_exit(launcher_pre_shmem_cleanup, PointerGetDatum(db_htab));
-
-	start_db_schedulers(db_htab);
 
 	while (true)
 	{
 		int			wl_rc;
-		long		timeout = -1;
+		long		timeout_ms = 1000L;
 		bool		handled_message = false;
-		int			wakeEvents = WL_LATCH_SET | WL_POSTMASTER_DEATH;
+		int			wakeEvents = WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT;
 
 		CHECK_FOR_INTERRUPTS();
 
-		stopped_db_schedulers_cleanup(db_htab);
-		handled_message = launcher_handle_message(db_htab, &createdb_entries);
-
-		/*
-		 * Immediately try to handle any CREATE DATABASE transaction that
-		 * might have been added in the most recent message.
-		 */
-		handle_finished_createdb_entries(db_htab, &createdb_entries);
+		handled_message = launcher_handle_message(db_htab);
 
 		/* Continue until we run out of messages to handle */
 		if (handled_message)
 			continue;
 
-		/* If we have createdbs to wait on, set a low timeout */
-		if (list_length(createdb_entries) > 0)
-		{
-			timeout = BGW_WAIT_MESSAGE_INTERVAL;
-			wakeEvents |= WL_TIMEOUT;
-		}
+		populate_database_htab(db_htab);
+		start_db_schedulers(db_htab);
 
 #if PG96
-		wl_rc = WaitLatch(MyLatch, wakeEvents, timeout);
+		wl_rc = WaitLatch(MyLatch, wakeEvents, timeout_ms);
 #else
-		wl_rc = WaitLatch(MyLatch, wakeEvents, timeout, PG_WAIT_EXTENSION);
+		wl_rc = WaitLatch(MyLatch, wakeEvents, timeout_ms, PG_WAIT_EXTENSION);
 #endif
 		ResetLatch(MyLatch);
 		if (wl_rc & WL_POSTMASTER_DEATH)
