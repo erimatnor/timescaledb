@@ -19,6 +19,8 @@ TS_FUNCTION_INFO_V1(ts_remove_drop_chunks_policy);
 TS_FUNCTION_INFO_V1(ts_remove_reorder_policy);
 TS_FUNCTION_INFO_V1(ts_alter_job_schedule);
 TS_FUNCTION_INFO_V1(ts_reorder_chunk);
+TS_FUNCTION_INFO_V1(ts_server_add);
+TS_FUNCTION_INFO_V1(ts_server_delete);
 
 Datum
 ts_add_drop_chunks_policy(PG_FUNCTION_ARGS)
@@ -54,6 +56,18 @@ Datum
 ts_reorder_chunk(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(ts_cm_functions->reorder_chunk(fcinfo));
+}
+
+Datum
+ts_server_add(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(ts_cm_functions->add_server(fcinfo));
+}
+
+Datum
+ts_server_delete(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(ts_cm_functions->delete_server(fcinfo));
 }
 
 /*
@@ -177,6 +191,8 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.gapfill_timestamptz_time_bucket = error_no_default_fn_pg_community,
 	.alter_job_schedule = error_no_default_fn_pg_enterprise,
 	.reorder_chunk = error_no_default_fn_pg_community,
+	.add_server = error_no_default_fn_pg_community,
+	.delete_server = error_no_default_fn_pg_community,
 };
 
 TSDLLEXPORT CrossModuleFunctions *ts_cm_functions = &ts_cm_functions_default;

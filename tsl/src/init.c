@@ -19,6 +19,7 @@
 #include "bgw_policy/job.h"
 #include "bgw_policy/reorder_api.h"
 #include "bgw_policy/drop_chunks_api.h"
+#include "server.h"
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
@@ -67,6 +68,8 @@ CrossModuleFunctions tsl_cm_functions = {
 	.gapfill_timestamptz_time_bucket = gapfill_timestamptz_time_bucket,
 	.alter_job_schedule = bgw_policy_alter_job_schedule,
 	.reorder_chunk = tsl_reorder_chunk,
+	.add_server = server_add,
+	.delete_server = server_delete,
 };
 
 TS_FUNCTION_INFO_V1(ts_module_init);

@@ -8,6 +8,7 @@ set(TEST_FILES_DEBUG
     bgw_policy.sql
     bgw_reorder_drop_chunks.sql
     tsl_tables.sql
+    server.sql
 )
 
 set(TEST_TEMPLATES

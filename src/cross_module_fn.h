@@ -51,6 +51,8 @@ typedef struct CrossModuleFunctions
 	PGFunction gapfill_timestamptz_time_bucket;
 	PGFunction alter_job_schedule;
 	PGFunction reorder_chunk;
+	Datum (*add_server)(PG_FUNCTION_ARGS);
+	Datum (*delete_server)(PG_FUNCTION_ARGS);
 } CrossModuleFunctions;
 
 extern TSDLLEXPORT CrossModuleFunctions *ts_cm_functions;

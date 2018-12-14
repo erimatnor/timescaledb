@@ -4,6 +4,7 @@ set(SOURCES
   reorder.c
   telemetry.c
   planner.c
+  server.c
 )
 
 # Add test source code in Debug builds
