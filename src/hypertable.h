@@ -20,6 +20,7 @@
 
 typedef struct SubspaceStore SubspaceStore;
 typedef struct Chunk Chunk;
+typedef struct Hypercube Hypercube;
 
 typedef struct Hypertable
 {
@@ -28,6 +29,12 @@ typedef struct Hypertable
 	Oid chunk_sizing_func;
 	Hyperspace *space;
 	SubspaceStore *chunk_cache;
+
+	/*
+	 * Allows restricting the servers to use for the hypertable. Default is to
+	 * use all available servers.
+	 */
+	List *servers;
 } Hypertable;
 
 /* create_hypertable record attribute numbers */
