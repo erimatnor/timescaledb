@@ -21,6 +21,8 @@ TS_FUNCTION_INFO_V1(ts_alter_job_schedule);
 TS_FUNCTION_INFO_V1(ts_reorder_chunk);
 TS_FUNCTION_INFO_V1(ts_server_add);
 TS_FUNCTION_INFO_V1(ts_server_delete);
+TS_FUNCTION_INFO_V1(ts_timescaledb_fdw_handler);
+TS_FUNCTION_INFO_V1(ts_timescaledb_fdw_validator);
 
 Datum
 ts_add_drop_chunks_policy(PG_FUNCTION_ARGS)
@@ -68,6 +70,18 @@ Datum
 ts_server_delete(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(ts_cm_functions->delete_server(fcinfo));
+}
+
+Datum
+ts_timescaledb_fdw_handler(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(ts_cm_functions->timescaledb_fdw_handler(fcinfo));
+}
+
+Datum
+ts_timescaledb_fdw_validator(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(ts_cm_functions->timescaledb_fdw_validator(fcinfo));
 }
 
 /*
@@ -163,6 +177,12 @@ error_no_default_fn_pg_enterprise(PG_FUNCTION_ARGS)
 	pg_unreachable();
 }
 
+static Datum
+empty_fn(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_VOID();
+}
+
 /*
  * Define cross-module functions' default values:
  * If the submodule isn't activated, using one of the cm functions will throw an
@@ -193,6 +213,8 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.reorder_chunk = error_no_default_fn_pg_community,
 	.add_server = error_no_default_fn_pg_community,
 	.delete_server = error_no_default_fn_pg_community,
+	.timescaledb_fdw_handler = error_no_default_fn_pg_community,
+	.timescaledb_fdw_validator = empty_fn,
 };
 
 TSDLLEXPORT CrossModuleFunctions *ts_cm_functions = &ts_cm_functions_default;

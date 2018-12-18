@@ -9,6 +9,7 @@ set(TEST_FILES_DEBUG
     bgw_reorder_drop_chunks.sql
     tsl_tables.sql
     server.sql
+    timescaledb_fdw.sql
 )
 
 set(TEST_TEMPLATES

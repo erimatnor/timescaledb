@@ -53,6 +53,8 @@ typedef struct CrossModuleFunctions
 	PGFunction reorder_chunk;
 	Datum (*add_server)(PG_FUNCTION_ARGS);
 	Datum (*delete_server)(PG_FUNCTION_ARGS);
+	Datum (*timescaledb_fdw_handler)(PG_FUNCTION_ARGS);
+	Datum (*timescaledb_fdw_validator)(PG_FUNCTION_ARGS);
 } CrossModuleFunctions;
 
 extern TSDLLEXPORT CrossModuleFunctions *ts_cm_functions;
