@@ -35,7 +35,7 @@ CREATE OR REPLACE FUNCTION _timescaledb_internal.calculate_chunk_interval(
         chunk_target_size BIGINT
 ) RETURNS BIGINT AS '@MODULE_PATHNAME@', 'ts_calculate_chunk_interval' LANGUAGE C;
 
--- Function for explicit chunk exclusion. Supply a record and an array 
+-- Function for explicit chunk exclusion. Supply a record and an array
 -- of chunk ids as input.
 -- Intended to be used in WHERE clause.
 -- An example: SELECT * FROM hypertable WHERE _timescaledb_internal.chunks_in(hypertable, ARRAY[1,2]);
@@ -45,3 +45,17 @@ CREATE OR REPLACE FUNCTION _timescaledb_internal.calculate_chunk_interval(
 -- so that the PostgreSQL optimizer does not try to evaluate/reduce it in the planner phase
 CREATE OR REPLACE FUNCTION _timescaledb_internal.chunks_in(record RECORD, chunks INTEGER[]) RETURNS BOOL
 AS '@MODULE_PATHNAME@', 'ts_chunks_in' LANGUAGE C VOLATILE STRICT;
+
+-- Show the definition of a chunk.
+CREATE OR REPLACE FUNCTION _timescaledb_internal.show_chunk(chunk REGCLASS)
+RETURNS TABLE(chunk_id INTEGER, hypertable_id INTEGER, schema_name NAME, table_name NAME, slices JSONB)
+AS '@MODULE_PATHNAME@', 'ts_chunk_show' LANGUAGE C VOLATILE;
+
+-- Create a chunk with the given dimensional constraints (slices) as given in the JSONB.
+CREATE OR REPLACE FUNCTION _timescaledb_internal.create_chunk(
+       hypertable REGCLASS,
+       slices JSONB,
+       schema_name NAME = NULL,
+       table_prefix NAME = NULL)
+RETURNS TABLE(chunk_id INTEGER, hypertable_id INTEGER, schema_name NAME, table_name NAME, slices JSONB, created BOOLEAN)
+AS '@MODULE_PATHNAME@', 'ts_chunk_create' LANGUAGE C VOLATILE;

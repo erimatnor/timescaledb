@@ -746,10 +746,10 @@ ts_hypertable_get_chunk(Hypertable *h, Point *point)
 		chunk = ts_chunk_find(h->space, point);
 
 		if (NULL == chunk)
-			chunk = ts_chunk_create(h,
-									point,
-									NameStr(h->fd.associated_schema_name),
-									NameStr(h->fd.associated_table_prefix));
+			chunk = ts_chunk_create_from_point(h,
+											   point,
+											   NameStr(h->fd.associated_schema_name),
+											   NameStr(h->fd.associated_table_prefix));
 
 		Assert(chunk != NULL);
 

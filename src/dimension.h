@@ -128,8 +128,8 @@ extern Point *ts_hyperspace_calculate_point(Hyperspace *h, HeapTuple tuple, Tupl
 extern Dimension *ts_hyperspace_get_dimension_by_id(Hyperspace *hs, int32 id);
 extern TSDLLEXPORT Dimension *ts_hyperspace_get_dimension(Hyperspace *hs, DimensionType type,
 														  Index n);
-extern Dimension *ts_hyperspace_get_dimension_by_name(Hyperspace *hs, DimensionType type,
-													  const char *name);
+extern TSDLLEXPORT Dimension *
+ts_hyperspace_get_dimension_by_name(Hyperspace *hs, DimensionType type, const char *name);
 extern DimensionVec *ts_dimension_get_slices(Dimension *dim);
 extern int32 ts_dimension_get_hypertable_id(int32 dimension_id);
 extern int ts_dimension_set_type(Dimension *dim, Oid newtype);

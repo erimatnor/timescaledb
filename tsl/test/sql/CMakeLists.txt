@@ -2,6 +2,8 @@ set(TEST_FILES
     edition.sql
     gapfill.sql
     reorder.sql
+    timescaledb_fdw.sql
+    chunk_api.sql
 )
 
 set(TEST_FILES_DEBUG
@@ -9,17 +11,12 @@ set(TEST_FILES_DEBUG
     bgw_reorder_drop_chunks.sql
     tsl_tables.sql
     server.sql
-    timescaledb_fdw.sql
 )
 
 set(TEST_TEMPLATES
   # parallel plans are different between postgres versions
   plan_gapfill.sql.in
   )
-
-if (CMAKE_BUILD_TYPE MATCHES Debug)
-  list(APPEND TEST_FILES ${TEST_FILES_DEBUG})
-endif(CMAKE_BUILD_TYPE MATCHES Debug)
 
 # Regression tests that vary with PostgreSQL version. Generated test
 # files are put in the original source directory since all tests must
@@ -42,9 +39,13 @@ foreach(TEMPLATE_FILE ${TEST_TEMPLATES})
 endforeach(TEMPLATE_FILE)
 
 if (NOT ${PG_VERSION} VERSION_LESS "10")
-  list(APPEND TEST_FILES
+  list(APPEND TEST_FILES_DEBUG
     remote_connection.sql)
 endif ()
+
+if (CMAKE_BUILD_TYPE MATCHES Debug)
+  list(APPEND TEST_FILES ${TEST_FILES_DEBUG})
+endif(CMAKE_BUILD_TYPE MATCHES Debug)
 
 list(SORT TEST_FILES)
 file(REMOVE ${TEST_SCHEDULE})
