@@ -490,7 +490,7 @@ chunk_constraint_dimension_slice_id_tuple_found(TupleInfo *ti, void *data)
 
 	if (!found)
 	{
-		chunk = ts_chunk_create_stub(chunk_id, hs->num_dimensions);
+		chunk = ts_chunk_create_stub(chunk_id, hs->num_dimensions, RELKIND_RELATION);
 		chunk->cube = ts_hypercube_alloc(hs->num_dimensions);
 		entry->chunk = chunk;
 	}
@@ -702,11 +702,11 @@ chunk_constraint_delete_tuple(TupleInfo *ti, void *data)
 		heap_getattr(ti->tuple, Anum_chunk_constraint_constraint_name, ti->desc, &isnull);
 	int32 chunk_id =
 		DatumGetInt32(heap_getattr(ti->tuple, Anum_chunk_constraint_chunk_id, ti->desc, &isnull));
-	Chunk *chunk = ts_chunk_get_by_id(chunk_id, 0, true);
+	Oid chunk_relid = ts_chunk_get_relid(chunk_id, true);
 	ObjectAddress constrobj = {
 		.classId = ConstraintRelationId,
 		.objectId =
-			get_relation_constraint_oid(chunk->table_id, NameStr(*DatumGetName(constrname)), true),
+			get_relation_constraint_oid(chunk_relid, NameStr(*DatumGetName(constrname)), true),
 	};
 	Oid index_relid = get_constraint_index(constrobj.objectId);
 
@@ -722,7 +722,7 @@ chunk_constraint_delete_tuple(TupleInfo *ti, void *data)
 		 * the constraint is dropped.
 		 */
 		if (OidIsValid(index_relid))
-			ts_chunk_index_delete(chunk, index_relid, false);
+			ts_chunk_index_delete(chunk_id, index_relid, false);
 
 		ts_catalog_delete(ti->scanrel, ti->tuple);
 	}

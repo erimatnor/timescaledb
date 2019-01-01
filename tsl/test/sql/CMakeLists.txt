@@ -4,6 +4,7 @@ set(TEST_FILES
     reorder.sql
     timescaledb_fdw.sql
     chunk_api.sql
+    hypertable_distributed.sql
 )
 
 set(TEST_FILES_DEBUG
