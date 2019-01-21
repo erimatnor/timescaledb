@@ -2048,7 +2048,8 @@ create_trigger_chunk(Hypertable *ht, Oid chunk_relid, void *arg)
 	char *relschema = get_namespace_name(get_rel_namespace(chunk_relid));
 	char *relname = get_rel_name(chunk_relid);
 
-	ts_trigger_create_on_chunk(trigger_oid, relschema, relname);
+	if (get_rel_relkind(chunk_relid) == RELKIND_RELATION)
+		ts_trigger_create_on_chunk(trigger_oid, relschema, relname);
 }
 
 static void

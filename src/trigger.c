@@ -136,6 +136,12 @@ ts_trigger_create_all_on_chunk(Hypertable *ht, Chunk *chunk)
 	HeapTuple tuple;
 	Form_pg_class form;
 
+	/* We do not create triggers on foreign table chuunks */
+	if (chunk->relkind == RELKIND_FOREIGN_TABLE)
+		return;
+
+	Assert(chunk->relkind == RELKIND_RELATION);
+
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(ht->main_table_relid));
 
 	if (!HeapTupleIsValid(tuple))
