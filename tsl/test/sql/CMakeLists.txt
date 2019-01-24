@@ -2,16 +2,12 @@ set(TEST_FILES
     edition.sql
     gapfill.sql
     reorder.sql
-    timescaledb_fdw.sql
-    chunk_api.sql
-    hypertable_distributed.sql
 )
 
 set(TEST_FILES_DEBUG
     bgw_policy.sql
     bgw_reorder_drop_chunks.sql
     tsl_tables.sql
-    server.sql
 )
 
 set(TEST_TEMPLATES
@@ -40,12 +36,18 @@ foreach(TEMPLATE_FILE ${TEST_TEMPLATES})
 endforeach(TEMPLATE_FILE)
 
 if (NOT ${PG_VERSION} VERSION_LESS "10")
+  list(APPEND TEST_FILES
+    hypertable_distributed.sql
+    chunk_api.sql
+    timescaledb_fdw.sql
+  )
   list(APPEND TEST_FILES_DEBUG
     remote_connection.sql
     remote_connection_cache.sql
     remote_txn.sql
     remote_txn_id.sql
-    )
+    server.sql
+  )
 endif ()
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
