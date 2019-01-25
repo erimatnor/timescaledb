@@ -13,6 +13,8 @@
 #include <utils/datetime.h>
 #include <access/htup_details.h>
 
+#include "export.h"
+
 extern bool ts_type_is_int8_binary_compatible(Oid sourcetype);
 
 /*
@@ -41,7 +43,8 @@ extern Oid ts_inheritance_parent_relid(Oid relid);
 
 extern bool ts_function_types_equal(Oid left[], Oid right[], int nargs);
 
-extern Oid get_function_oid(char *name, char *schema_name, int nargs, Oid arg_types[]);
+extern TSDLLEXPORT Oid ts_get_function_oid(char *name, char *schema_name, int nargs,
+										   Oid arg_types[]);
 
 extern void *ts_create_struct_from_tuple(HeapTuple tuple, MemoryContext mctx, size_t alloc_size,
 										 size_t copy_size);
