@@ -18,6 +18,7 @@
 
 #include "export.h"
 #include "bgw/job.h"
+#include "compat.h"
 
 /*
  * To define a cross-module function add it to this struct, add a default
@@ -64,10 +65,8 @@ typedef struct CrossModuleFunctions
 	Datum (*timescaledb_fdw_handler)(PG_FUNCTION_ARGS);
 	Datum (*timescaledb_fdw_validator)(PG_FUNCTION_ARGS);
 	void (*cache_syscache_invalidate)(Datum arg, int cacheid, uint32 hashvalue);
-#if !PG96
 	Datum (*remote_txn_id_in)(PG_FUNCTION_ARGS);
 	Datum (*remote_txn_id_out)(PG_FUNCTION_ARGS);
-#endif
 	void (*create_chunk_on_servers)(Chunk *chunk, Hypertable *ht);
 } CrossModuleFunctions;
 
