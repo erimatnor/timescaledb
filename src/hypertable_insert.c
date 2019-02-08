@@ -157,8 +157,8 @@ hypertable_insert_state_create(CustomScan *cscan)
 	state->mt = (ModifyTable *) linitial(cscan->custom_plans);
 	state->serveroids = linitial(cscan->custom_private);
 
-	if (list_length(cscan->custom_private) > 1)
-		state->fdwroutine = lsecond(cscan->custom_private);
+	if (state->serveroids != NIL)
+		state->fdwroutine = GetFdwRoutineByServerId(linitial_oid(state->serveroids));
 
 	return (Node *) state;
 }
@@ -246,13 +246,11 @@ hypertable_insert_plan_create(PlannerInfo *root, RelOptInfo *rel, struct CustomP
 
 	if (hipath->serveroids != NIL)
 	{
-		fdwroutine = GetFdwRoutineByServerId(linitial_oid(hipath->serveroids));
-
 		/*
 		 * Get the FDW routine for the first server. It should be the same for
 		 * all of them
 		 */
-		cscan->custom_private = lappend(cscan->custom_private, fdwroutine);
+		fdwroutine = GetFdwRoutineByServerId(linitial_oid(hipath->serveroids));
 	}
 
 	/*
