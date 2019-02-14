@@ -12,6 +12,7 @@
 #include <executor/executor.h>
 #include <executor/tuptable.h>
 #include <nodes/execnodes.h>
+#include <commands/explain.h>
 
 #include "export.h"
 
@@ -555,6 +556,14 @@ extern int oid_cmp(const void *p1, const void *p2);
 	create_append_path(rel, subpaths, required_outer, parallel_workers, partitioned_rels)
 #else
 #define create_append_path_compat create_append_path
+#endif
+
+#if PG96 || PG10
+#define ExplainPropertyIntegerCompat(qlabel, unit, value, es)                                      \
+	ExplainPropertyInteger(qlabel, value, es)
+#else
+#define ExplainPropertyIntegerCompat(qlabel, unit, value, es)                                      \
+	ExplainPropertyInteger(qlabel, unit, value, es)
 #endif
 
 #endif /* TIMESCALEDB_COMPAT_H */

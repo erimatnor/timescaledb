@@ -24,6 +24,7 @@ extern TSDLLEXPORT char *ts_guc_license_key;
 extern char *ts_last_tune_time;
 extern char *ts_last_tune_version;
 extern TSDLLEXPORT bool ts_guc_enable_2pc;
+extern TSDLLEXPORT int ts_guc_max_insert_batch_size;
 
 #ifdef TS_DEBUG
 extern bool ts_shutdown_bgw;
