@@ -21,6 +21,7 @@ TS_FUNCTION_INFO_V1(ts_alter_job_schedule);
 TS_FUNCTION_INFO_V1(ts_reorder_chunk);
 TS_FUNCTION_INFO_V1(ts_server_add);
 TS_FUNCTION_INFO_V1(ts_server_delete);
+TS_FUNCTION_INFO_V1(ts_server_attach);
 TS_FUNCTION_INFO_V1(ts_timescaledb_fdw_handler);
 TS_FUNCTION_INFO_V1(ts_timescaledb_fdw_validator);
 TS_FUNCTION_INFO_V1(ts_remote_txn_id_in);
@@ -73,6 +74,12 @@ Datum
 ts_server_delete(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(ts_cm_functions->delete_server(fcinfo));
+}
+
+Datum
+ts_server_attach(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(ts_cm_functions->attach_server(fcinfo));
 }
 
 Datum
@@ -259,6 +266,7 @@ TSDLLEXPORT CrossModuleFunctions ts_cm_functions_default = {
 	.reorder_chunk = error_no_default_fn_pg_community,
 	.add_server = error_no_default_fn_pg_community,
 	.delete_server = error_no_default_fn_pg_community,
+	.attach_server = error_no_default_fn_pg_community,
 	.show_chunk = error_no_default_fn_pg_community,
 	.create_chunk = error_no_default_fn_pg_community,
 	.create_chunk_on_servers = create_chunk_on_servers_default,

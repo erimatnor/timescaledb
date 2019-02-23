@@ -58,6 +58,7 @@ typedef struct CrossModuleFunctions
 	PGFunction reorder_chunk;
 	Datum (*add_server)(PG_FUNCTION_ARGS);
 	Datum (*delete_server)(PG_FUNCTION_ARGS);
+	Datum (*attach_server)(PG_FUNCTION_ARGS);
 	Datum (*create_chunk)(PG_FUNCTION_ARGS);
 	Datum (*show_chunk)(PG_FUNCTION_ARGS);
 	List *(*get_servername_list)(void);
