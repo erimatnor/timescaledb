@@ -14,8 +14,10 @@ typedef enum EventTriggerDropType
 	EVENT_TRIGGER_DROP_TABLE_CONSTRAINT,
 	EVENT_TRIGGER_DROP_INDEX,
 	EVENT_TRIGGER_DROP_TABLE,
+	EVENT_TRIGGER_DROP_FOREIGN_TABLE,
 	EVENT_TRIGGER_DROP_SCHEMA,
-	EVENT_TRIGGER_DROP_TRIGGER
+	EVENT_TRIGGER_DROP_TRIGGER,
+	EVENT_TRIGGER_DROP_FOREIGN_SERVER,
 } EventTriggerDropType;
 
 typedef struct EventTriggerDropObject
@@ -26,38 +28,37 @@ typedef struct EventTriggerDropObject
 typedef struct EventTriggerDropTableConstraint
 {
 	EventTriggerDropObject obj;
-	char *constraint_name;
-	char *schema;
-	char *table;
+	const char *constraint_name;
+	const char *schema;
+	const char *table;
 } EventTriggerDropTableConstraint;
 
-typedef struct EventTriggerDropIndex
+typedef struct EventTriggerDropRelation
 {
 	EventTriggerDropObject obj;
-	char *index_name;
-	char *schema;
-} EventTriggerDropIndex;
-
-typedef struct EventTriggerDropTable
-{
-	EventTriggerDropObject obj;
-	char *table_name;
-	char *schema;
-} EventTriggerDropTable;
+	const char *name;
+	const char *schema;
+} EventTriggerDropRelation;
 
 typedef struct EventTriggerDropSchema
 {
 	EventTriggerDropObject obj;
-	char *schema;
+	const char *schema;
 } EventTriggerDropSchema;
 
 typedef struct EventTriggerDropTrigger
 {
 	EventTriggerDropObject obj;
-	char *trigger_name;
-	char *schema;
-	char *table;
+	const char *trigger_name;
+	const char *schema;
+	const char *table;
 } EventTriggerDropTrigger;
+
+typedef struct EventTriggerDropForeignServer
+{
+	EventTriggerDropObject obj;
+	const char *servername;
+} EventTriggerDropForeignServer;
 
 extern List *ts_event_trigger_dropped_objects(void);
 extern List *ts_event_trigger_ddl_commands(void);

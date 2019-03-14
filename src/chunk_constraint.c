@@ -779,7 +779,7 @@ hypertable_constraint_tuple_filter(TupleInfo *ti, void *data)
 
 int
 ts_chunk_constraint_delete_by_hypertable_constraint_name(int32 chunk_id,
-														 char *hypertable_constraint_name,
+														 const char *hypertable_constraint_name,
 														 bool delete_metadata, bool drop_constraint)
 {
 	ConstraintInfo info = { .hypertable_constraint_name = hypertable_constraint_name,
