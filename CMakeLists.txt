@@ -14,7 +14,7 @@ function(GET_PG_CONFIG var)
       OUTPUT_STRIP_TRAILING_WHITESPACE)
   endif()
 
-  
+
   # On Windows, fields that are not recorded will be given the value
   # "not recorded", so we translate this into <var>-NOTFOUND to make
   # it undefined.
@@ -65,6 +65,41 @@ message(STATUS "Install method is '${PROJECT_INSTALL_METHOD}'")
 
 option(TS_COVERAGE_ONLY "run in debug mode with assertions disabled to provide more accurate test-coverage info")
 
+set(SUPPORTED_COMPILERS "GNU" "Clang" "AppleClang" "MSVC")
+
+# Check for a supported compiler
+if (NOT CMAKE_C_COMPILER_ID IN_LIST SUPPORTED_COMPILERS)
+   message(FATAL_ERROR "Unsupported compiler ${CMAKE_C_COMPILER_ID}. Supported compilers are: ${SUPPORTED_COMPILERS}")
+endif ()
+
+# Option to treat warnings as errors when compiling (default on)
+set(TS_WARNINGS_AS_ERRORS ON CACHE BOOL "Make compiler warnings into errors (default ON)")
+
+if (TS_WARNINGS_AS_ERRORS)
+  if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    add_compile_options(-Werror)
+  elseif (CMAKE_C_COMPILER_ID MATCHES "MSVC")
+    add_compile_options(/WX)
+  endif ()
+endif (TS_WARNINGS_AS_ERRORS)
+
+# Set the default compiler flags. The following flags have been
+# considered, but currently result in too many errors or warnings.
+#
+# * -fdelete-null-pointer-checks
+# * -Wnull-dereference
+# * -Wconversions
+#
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+  add_compile_options(-Wempty-body -Wvla)
+endif ()
+
+# Compile options conditional on version
+if ((CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "7") OR
+    (CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "3.3"))
+  add_compile_options(-Wimplicit-fallthrough)
+endif ()
+
 if (CMAKE_BUILD_TYPE MATCHES Debug)
   # CMAKE_BUILD_TYPE is set at CMake configuration type. But usage of CMAKE_C_FLAGS_DEBUG is
   # determined at build time by running cmake --build . --config Debug (at least on Windows).
@@ -76,37 +111,6 @@ if (CMAKE_BUILD_TYPE MATCHES Debug)
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DUSE_ASSERT_CHECKING=1")
   endif()
 endif (CMAKE_BUILD_TYPE MATCHES Debug)
-
-set(SUPPORTED_COMPILERS "GNU" "Clang" "AppleClang" "MSVC")
-
-# Check for a supported compiler
-if (NOT CMAKE_C_COMPILER_ID IN_LIST SUPPORTED_COMPILERS)
-   message(FATAL_ERROR "Unsupported compiler ${CMAKE_C_COMPILER_ID}. Supported compilers are: ${SUPPORTED_COMPILERS}")
-endif ()
-
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|AppleClang|Clang")
-  # These two flags generate too many errors currently, but we
-  # probably want these optimizations enabled.
-
-  # TODO: -fdelete-null-pointer-checks -Wnull-dereference
-
-  # This flag avoid some subtle bugs related to standard conversions,
-  # but currently does not compile because we are using too many
-  # implicit conversions that potentially lose precision.
-
-  # TODO: -Wconversions
-  add_compile_options(-Wempty-body -Wvla)
-  if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "7")
-    add_compile_options(-Wimplicit-fallthrough)
-  endif()
-
-  # Not sure when it was added to Clang, but it is mentioned in the
-  # release notes for Clang 3.3
-  if(CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER "3.3")
-    add_compile_options(-Wimplicit-fallthrough)
-  endif()
-
-endif()
 
 # Check for supported platforms and compiler flags
 if (WIN32)
