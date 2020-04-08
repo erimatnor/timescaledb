@@ -2918,8 +2918,8 @@ process_altertable_reset_options(AlterTableCmd *cmd, Hypertable *ht)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("compression options cannot be reset")));
 	}
-	else
-		return false;
+	
+	return false;
 }
 
 static bool

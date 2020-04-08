@@ -333,6 +333,7 @@ gorilla_compressor_for_type(Oid element_type)
 		default:
 			elog(ERROR, "invalid type for Gorilla compression %d", element_type);
 	}
+	pg_unreachable();
 }
 
 GorillaCompressor *
@@ -658,6 +659,7 @@ convert_from_internal(DecompressResultInternal res_internal, Oid element_type)
 		default:
 			elog(ERROR, "invalid type requested from gorilla decompression");
 	}
+	pg_unreachable();
 }
 
 static DecompressResultInternal

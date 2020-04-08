@@ -12,10 +12,8 @@
 #include "cache.h"
 #include "hypertable.h"
 
-extern TSDLLEXPORT Hypertable *ts_hypertable_cache_get_entry(Cache *cache, Oid relid,
-															 bool missing_ok);
-extern TSDLLEXPORT Hypertable *ts_hypertable_cache_get_cache_and_entry(Oid relid, bool missing_ok,
-																	   Cache **cache);
+extern TSDLLEXPORT Hypertable *ts_hypertable_cache_get_entry(Cache *const cache, const Oid relid, const bool missing_ok);
+extern TSDLLEXPORT Hypertable *ts_hypertable_cache_get_cache_and_entry(const Oid relid, const bool missing_ok, Cache **const cache);
 extern Hypertable *ts_hypertable_cache_get_entry_rv(Cache *cache, RangeVar *rv);
 extern Hypertable *ts_hypertable_cache_get_entry_with_table(Cache *cache, Oid relid,
 															const char *schema, const char *table);
