@@ -659,7 +659,7 @@ build_first_last_path(PlannerInfo *root, FirstLastAggInfo *fl_info, Oid eqop, Oi
 	subroot->tuple_fraction = 1.0;
 	subroot->limit_tuples = 1.0;
 
-#if PG12_GE
+#if 0 //PG12_GE
 	{
 		ListCell *lc;
 		/* min/max optimizations ususally happen before

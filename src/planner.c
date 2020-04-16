@@ -42,6 +42,7 @@
 #if PG12_LT
 #include <optimizer/var.h>
 #else
+#include <optimizer/inherit.h>
 #include <optimizer/appendinfo.h>
 #include <optimizer/optimizer.h>
 #endif
@@ -78,6 +79,9 @@ static planner_hook_type prev_planner_hook;
 static set_rel_pathlist_hook_type prev_set_rel_pathlist_hook;
 static get_relation_info_hook_type prev_get_relation_info_hook;
 static create_upper_paths_hook_type prev_create_upper_paths_hook;
+#if PG12_GE
+static expand_inherited_rtentry_hook_type prev_expand_inherited_rtentry_hook;
+#endif
 static bool contain_param(Node *node);
 static void cagg_reorder_groupby_clause(RangeTblEntry *subq_rte, int rtno, List *outer_sortcl,
 										List *outer_tlist);
@@ -101,7 +105,9 @@ rte_mark_for_expansion(RangeTblEntry *rte)
 	Assert(rte->rtekind == RTE_RELATION);
 	Assert(rte->ctename == NULL);
 	rte->ctename = (char *) TS_CTE_EXPAND;
+#if PG12_LT
 	rte->inh = false;
+#endif
 }
 
 static bool
@@ -526,8 +532,11 @@ static bool
 rte_should_expand(const RangeTblEntry *rte)
 {
 	bool is_hypertable = ts_rte_is_hypertable(rte);
-
+#if PG12_GE
+	return is_hypertable;
+#else
 	return is_hypertable && !rte->inh && rte_is_marked_for_expansion(rte);
+#endif
 }
 
 static void
@@ -703,6 +712,31 @@ valid_hook_call(void)
 	return ts_extension_is_loaded() && planner_hcache_exists();
 }
 
+#if PG12_GE
+static void
+ts_expand_inherited_rtentry(PlannerInfo *root,
+							RelOptInfo *rel,
+							RangeTblEntry *rte,
+							Index rti)
+{
+	Hypertable *ht;
+
+	Assert(rte->inh);
+
+	if  (classify_relation(root, rel, &ht) != TS_REL_HYPERTABLE)
+	{
+		if (prev_expand_inherited_rtentry_hook)
+			(*prev_expand_inherited_rtentry_hook) (root, rel, rte, rti);
+		else
+			expand_inherited_rtentry(root, rel, rte, rti);
+	}
+	else
+	{
+		ts_plan_expand_hypertable_chunks(ht, root, rel);
+	}
+}
+#endif
+
 static void
 timescaledb_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntry *rte)
 {
@@ -721,8 +755,8 @@ timescaledb_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, Rang
 
 #if PG12_GE
 	/* Check for unexpanded hypertable */
-	if (!rte->inh && rte_is_marked_for_expansion(rte))
-		reenable_inheritance(root, rel, rti, rte);
+	//if (!rte->inh && rte_is_marked_for_expansion(rte))
+	//	reenable_inheritance(root, rel, rti, rte);
 #endif
 
 	/* Call other extensions. Do it after table expansion. */
@@ -1120,7 +1154,10 @@ _planner_init(void)
 	planner_hook = timescaledb_planner;
 	prev_set_rel_pathlist_hook = set_rel_pathlist_hook;
 	set_rel_pathlist_hook = timescaledb_set_rel_pathlist;
-
+#if PG12_GE
+	prev_expand_inherited_rtentry_hook = expand_inherited_rtentry_hook;
+	expand_inherited_rtentry_hook = ts_expand_inherited_rtentry;
+#endif
 	prev_get_relation_info_hook = get_relation_info_hook;
 	get_relation_info_hook = timescaledb_get_relation_info_hook;
 
