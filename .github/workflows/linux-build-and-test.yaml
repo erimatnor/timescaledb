@@ -1,0 +1,145 @@
+name: Regression Linux
+on:
+  schedule:
+    # run daily 20:00 on master branch
+    - cron: '0 20 * * *'
+  push:
+    branches:
+      - prerelease_test
+  pull_request:
+jobs:
+  regress_linux:
+    name: PG${{ matrix.pg }} [${{ matrix.type }}]
+    runs-on: ubuntu-18.04
+    strategy:
+
+# This is the main workflow for linux regression tests
+# Since GitHub Actions don't currently allow dynamic
+# matrix entries, the matrix has all versions but
+# for pull request we only run the configurations
+# where on_pullrequest is true
+
+      matrix:
+        pg: [ "11.0", "11.8", "12.0", "12.3" ]
+        type: [ Debug, Release, ApacheOnly ]
+
+        include:
+          - type: Debug
+            on_pullrequest: true
+            build_type: Debug
+            pg_build_args: --enable-debug --enable-cassert
+            tsdb_build_args: -DCODECOVERAGE=ON
+            coverage: true
+          - type: Release
+            build_type: Release
+          - type: ApacheOnly
+            build_type: Release
+            tsdb_build_args: -DAPACHE_ONLY
+          - pg: "11.0"
+            on_pullrequest: false
+          - pg: "12.0"
+            on_pullrequest: false
+        exclude:
+          - pg: "11.0"
+            type: ApacheOnly
+          - pg: "11.0"
+            type: Release
+          - pg: "12.0"
+            type: ApacheOnly
+          - pg: "12.0"
+            type: Release
+    env:
+      PG_SRC_DIR: /home/runner/pg_src
+      PG_INSTALL_DIR: /usr/local
+      MAKE_JOBS: 4
+    steps:
+
+    - name: Install Dependencies
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      run: sudo apt install lcov
+
+    - name: Cache PostgreSQL
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      id: cache-postgresql
+      uses: actions/cache@v2
+      with:
+        path: ${{ env.PG_SRC_DIR }}
+        key: ${{ runner.os }}-postgresql-${{ matrix.pg }}-${{ matrix.build_type }}
+
+    - name: Build PostgreSQL ${{ matrix.pg }}
+      if: ( matrix.on_pullrequest || github.event_name != 'pull_request' ) && steps.cache-postgresql.outputs.cache-hit != 'true'
+      run: |
+        wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v${{ matrix.pg }}/postgresql-${{ matrix.pg }}.tar.bz2
+        mkdir -p $PG_SRC_DIR
+        tar --extract --file postgresql.tar.bz2 --directory $PG_SRC_DIR --strip-components 1
+        cd $PG_SRC_DIR
+        ./configure --prefix=$PG_INSTALL_DIR ${{ matrix.pg_build_args }} --with-openssl --with-llvm --without-readline --without-zlib
+        make -j $MAKE_JOBS
+        make -j $MAKE_JOBS -C src/test/isolation
+        make -j $MAKE_JOBS -C contrib/postgres_fdw
+
+    - name: Install PostgreSQL ${{ matrix.pg }}
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      run: |
+        sudo make -C $PG_SRC_DIR install
+        sudo make -C $PG_SRC_DIR/contrib/postgres_fdw install
+
+    - name: Checkout TimescaleDB
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      uses: actions/checkout@v2
+
+    - name: Test telemetry without OpenSSL
+      if: github.event_name != 'pull_request' && matrix.build_type == 'Debug'
+      run: |
+        BUILD_DIR=nossl ./bootstrap -DCMAKE_BUILD_TYPE=Debug -DPG_SOURCE_DIR=$PG_SRC_DIR -DUSE_OPENSSL=false
+        make -j $MAKE_JOBS -C nossl
+        sudo make -C nossl install
+        make -C nossl installcheck TESTS=telemetry
+
+    - name: Build TimescaleDB
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      run: |
+        ./bootstrap -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" -DPG_SOURCE_DIR=$PG_SRC_DIR ${{ matrix.tsdb_build_args }}
+        make -j $MAKE_JOBS -C build
+        sudo make -C build install
+
+    - name: Check exported symbols
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      run: ./build/scripts/export_prefix_check.sh
+
+    - name: make installcheck
+      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      id: installcheck
+      run: make -k -C build installcheck
+
+    - name: coverage
+      if: (matrix.on_pullrequest || github.event_name != 'pull_request') && matrix.coverage
+      run: make -j $MAKE_JOBS -k -C build coverage
+
+    - name: Upload coverage report
+      if: (matrix.on_pullrequest || github.event_name != 'pull_request') && matrix.coverage
+      uses: codecov/codecov-action@v1
+      with:
+        file: ./build/codecov/timescaledb-codecov.info
+
+    - name: Regression diffs
+      if: failure()
+      run: |
+        find build -name regression.diffs -exec cat {} + > regression.diffs
+        find build -name postmaster.log -exec cat {} + > postmaster.log
+        cat regression.diffs
+
+    - name: Save regression diffs
+      if: failure()
+      uses: actions/upload-artifact@v1
+      with:
+        name: Regression diff
+        path: regression.diffs
+
+    - name: Save postmaster.log
+      if: failure()
+      uses: actions/upload-artifact@v1
+      with:
+        name: PostgreSQL log
+        path: postmaster.log
+
