@@ -1,4 +1,4 @@
-name: Regression Linux
+name: Regression Linux/MacOS
 on:
   schedule:
     # run daily 20:00 on master branch
@@ -8,21 +8,19 @@ on:
       - prerelease_test
   pull_request:
 jobs:
-  regress_linux:
-    name: PG${{ matrix.pg }} [${{ matrix.type }}]
-    runs-on: ubuntu-18.04
+  regress:
+    name: ${{ matrix.os }} PG${{ matrix.pg }} [${{ matrix.type }}]
+    runs-on: ${{ matrix.os }}
     strategy:
-
 # This is the main workflow for linux regression tests
 # Since GitHub Actions don't currently allow dynamic
 # matrix entries, the matrix has all versions but
 # for pull request we only run the configurations
 # where on_pullrequest is true
-
       matrix:
+        os: [ ubuntu-18.04 ]
         pg: [ "11.0", "11.8", "12.0", "12.3" ]
         type: [ Debug, Release, ApacheOnly ]
-
         include:
           - type: Debug
             on_pullrequest: true
@@ -34,11 +32,15 @@ jobs:
             build_type: Release
           - type: ApacheOnly
             build_type: Release
-            tsdb_build_args: -DAPACHE_ONLY
+            tsdb_build_args: -DAPACHE_ONLY=true
           - pg: "11.0"
             on_pullrequest: false
           - pg: "12.0"
             on_pullrequest: false
+          - os: macos-10.15
+            type: Debug
+            build_type: Debug
+            pg: "12.3"
         exclude:
           - pg: "11.0"
             type: ApacheOnly
@@ -49,31 +51,38 @@ jobs:
           - pg: "12.0"
             type: Release
     env:
-      PG_SRC_DIR: /home/runner/pg_src
-      PG_INSTALL_DIR: /usr/local
       MAKE_JOBS: 4
-    steps:
 
+    steps:
+    - name: Set environment
+      run: |
+        echo ::set-env name=PG_SRC_PATH::$HOME/pg_src
+        echo ::set-env name=PG_INSTALL_PATH::$HOME/pgsql
     - name: Install Dependencies
-      if: matrix.on_pullrequest || github.event_name != 'pull_request'
+      if: runner.os == 'Linux' && (matrix.on_pullrequest || github.event_name != 'pull_request')
       run: sudo apt install lcov
+
+    - name: Set MacOS environment
+      if: runner.os == 'macOS'
+      run: |
+        echo ::set-env name=LLVM_CONFIG::/usr/local/opt/llvm/bin/llvm-config
 
     - name: Cache PostgreSQL
       if: matrix.on_pullrequest || github.event_name != 'pull_request'
       id: cache-postgresql
       uses: actions/cache@v2
       with:
-        path: ${{ env.PG_SRC_DIR }}
+        path: ${{ env.PG_SRC_PATH }}
         key: ${{ runner.os }}-postgresql-${{ matrix.pg }}-${{ matrix.build_type }}
-
     - name: Build PostgreSQL ${{ matrix.pg }}
       if: ( matrix.on_pullrequest || github.event_name != 'pull_request' ) && steps.cache-postgresql.outputs.cache-hit != 'true'
       run: |
+        echo "Installing into $PG_SRC_PATH"
         wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v${{ matrix.pg }}/postgresql-${{ matrix.pg }}.tar.bz2
-        mkdir -p $PG_SRC_DIR
-        tar --extract --file postgresql.tar.bz2 --directory $PG_SRC_DIR --strip-components 1
-        cd $PG_SRC_DIR
-        ./configure --prefix=$PG_INSTALL_DIR ${{ matrix.pg_build_args }} --with-openssl --with-llvm --without-readline --without-zlib
+        mkdir -p $PG_SRC_PATH
+        tar --extract --file postgresql.tar.bz2 --directory $PG_SRC_PATH --strip-components 1
+        cd $PG_SRC_PATH
+        ./configure --prefix=$PG_INSTALL_PATH ${{ matrix.pg_build_args }} --with-openssl --without-readline --without-zlib --with-libraries=/usr/local/opt/openssl/lib --with-includes=/usr/local/opt/openssl/include
         make -j $MAKE_JOBS
         make -j $MAKE_JOBS -C src/test/isolation
         make -j $MAKE_JOBS -C contrib/postgres_fdw
@@ -81,27 +90,27 @@ jobs:
     - name: Install PostgreSQL ${{ matrix.pg }}
       if: matrix.on_pullrequest || github.event_name != 'pull_request'
       run: |
-        sudo make -C $PG_SRC_DIR install
-        sudo make -C $PG_SRC_DIR/contrib/postgres_fdw install
+        make -C $PG_SRC_PATH install
+        make -C $PG_SRC_PATH/contrib/postgres_fdw install
 
     - name: Checkout TimescaleDB
       if: matrix.on_pullrequest || github.event_name != 'pull_request'
       uses: actions/checkout@v2
 
     - name: Test telemetry without OpenSSL
-      if: github.event_name != 'pull_request' && matrix.build_type == 'Debug'
+      if: runner.os == 'Linux' && (github.event_name != 'pull_request' && matrix.build_type == 'Debug')
       run: |
-        BUILD_DIR=nossl ./bootstrap -DCMAKE_BUILD_TYPE=Debug -DPG_SOURCE_DIR=$PG_SRC_DIR -DUSE_OPENSSL=false
+        BUILD_DIR=nossl ./bootstrap -DCMAKE_BUILD_TYPE=Debug -DPG_SOURCE_DIR=$PG_SRC_PATH -DUSE_OPENSSL=false -DREGRESS_CHECKS=OFF -DPG_PATH=$PG_INSTALL_PATH -DLINTER=OFF
         make -j $MAKE_JOBS -C nossl
-        sudo make -C nossl install
+        make -C nossl install
         make -C nossl installcheck TESTS=telemetry
 
     - name: Build TimescaleDB
       if: matrix.on_pullrequest || github.event_name != 'pull_request'
       run: |
-        ./bootstrap -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" -DPG_SOURCE_DIR=$PG_SRC_DIR ${{ matrix.tsdb_build_args }}
+        ./bootstrap -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" -DPG_SOURCE_DIR=$PG_SRC_PATH ${{ matrix.tsdb_build_args }} -DREGRESS_CHECKS=OFF -DPG_PATH=$PG_INSTALL_PATH -DLINTER=OFF -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl
         make -j $MAKE_JOBS -C build
-        sudo make -C build install
+        make -C build install
 
     - name: Check exported symbols
       if: matrix.on_pullrequest || github.event_name != 'pull_request'
@@ -142,4 +151,3 @@ jobs:
       with:
         name: PostgreSQL log
         path: postmaster.log
-
