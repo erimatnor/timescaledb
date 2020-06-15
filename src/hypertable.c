@@ -1849,76 +1849,98 @@ ts_hypertable_create_internal(PG_FUNCTION_ARGS, bool is_dist_call)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid main_table: cannot be NULL")));
 
-	if (NULL == time_dim_name)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid time_column_name: cannot be NULL")));
+	ht = ts_hypertable_cache_get_cache_and_entry(table_relid, CACHE_FLAG_MISSING_OK, &hcache);
 
-	if (NULL != data_node_arr && ARR_NDIM(data_node_arr) > 1)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid data nodes format"),
-				 errhint("Specify a one-dimensional array of data nodes.")));
-
-	/*
-	 * Ensure replication factor is a valid value and convert it to
-	 * catalog table format
-	 */
-	replication_factor = ts_validate_replication_factor(replication_factor_in,
-														replication_factor_is_null,
-														is_dist_call);
-
-	/* Validate data nodes and check permissions on them if this is a
-	 * distributed hypertable. */
-	if (replication_factor > 0)
-		data_nodes = ts_cm_functions->get_and_validate_data_node_list(data_node_arr);
-
-	if (NULL != space_dim_name)
+	if (ht != NULL)
 	{
-		int16 num_partitions = PG_ARGISNULL(3) ? -1 : PG_GETARG_INT16(3);
+		if (if_not_exists)
+			ereport(NOTICE,
+					(errcode(ERRCODE_TS_HYPERTABLE_EXISTS),
+					 errmsg("table \"%s\" is already a hypertable, skipping",
+							get_rel_name(table_relid))));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_TS_HYPERTABLE_EXISTS),
+					 errmsg("table \"%s\" is already a hypertable", get_rel_name(table_relid))));
+		created = false;
+	}
+	else
+	{
+		if (NULL == time_dim_name)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid time_column_name: cannot be NULL")));
 
-		/* If the number of partitions isn't specified, default to setting it
-		 * to the number of data nodes */
-		if (num_partitions < 1 && replication_factor > 0)
+		if (NULL != data_node_arr && ARR_NDIM(data_node_arr) > 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid data nodes format"),
+					 errhint("Specify a one-dimensional array of data nodes.")));
+
+		/*
+		 * Ensure replication factor is a valid value and convert it to
+		 * catalog table format
+		 */
+		replication_factor = ts_validate_replication_factor(replication_factor_in,
+															replication_factor_is_null,
+															is_dist_call);
+
+		/* Validate data nodes and check permissions on them if this is a
+		 * distributed hypertable. */
+		if (replication_factor > 0)
+			data_nodes = ts_cm_functions->get_and_validate_data_node_list(data_node_arr);
+
+		if (NULL != space_dim_name)
 		{
-			int num_nodes = list_length(data_nodes);
+			int16 num_partitions = PG_ARGISNULL(3) ? -1 : PG_GETARG_INT16(3);
 
-			Assert(num_nodes >= 0);
-			num_partitions = num_nodes & 0xFFFF;
+			/* If the number of partitions isn't specified, default to setting it
+			 * to the number of data nodes */
+			if (num_partitions < 1 && replication_factor > 0)
+			{
+				int num_nodes = list_length(data_nodes);
+
+				Assert(num_nodes >= 0);
+				num_partitions = num_nodes & 0xFFFF;
+			}
+
+			space_dim_info =
+				ts_dimension_info_create_closed(table_relid,
+												/* column name */
+												space_dim_name,
+												/* number partitions */
+												num_partitions,
+												/* partitioning func */
+												PG_ARGISNULL(9) ? InvalidOid : PG_GETARG_OID(9));
 		}
 
-		space_dim_info =
-			ts_dimension_info_create_closed(table_relid,
-											/* column name */
-											space_dim_name,
-											/* number partitions */
-											num_partitions,
-											/* partitioning func */
-											PG_ARGISNULL(9) ? InvalidOid : PG_GETARG_OID(9));
+		if (if_not_exists)
+			flags |= HYPERTABLE_CREATE_IF_NOT_EXISTS;
+		if (!create_default_indexes)
+			flags |= HYPERTABLE_CREATE_DISABLE_DEFAULT_INDEXES;
+		if (migrate_data)
+			flags |= HYPERTABLE_CREATE_MIGRATE_DATA;
+
+		created = ts_hypertable_create_from_info(table_relid,
+												 INVALID_HYPERTABLE_ID,
+												 flags,
+												 time_dim_info,
+												 space_dim_info,
+												 associated_schema_name,
+												 associated_table_prefix,
+												 &chunk_sizing_info,
+												 replication_factor,
+												 data_nodes);
+
+		Assert(created);
+
+		/* Refresh the cache */
+		ts_cache_release(hcache);
+		ht = ts_hypertable_cache_get_cache_and_entry(table_relid, CACHE_FLAG_NONE, &hcache);
+
+		if (NULL != space_dim_info)
+			ts_hypertable_check_partitioning(ht, space_dim_info->dimension_id);
 	}
-
-	if (if_not_exists)
-		flags |= HYPERTABLE_CREATE_IF_NOT_EXISTS;
-	if (!create_default_indexes)
-		flags |= HYPERTABLE_CREATE_DISABLE_DEFAULT_INDEXES;
-	if (migrate_data)
-		flags |= HYPERTABLE_CREATE_MIGRATE_DATA;
-
-	created = ts_hypertable_create_from_info(table_relid,
-											 INVALID_HYPERTABLE_ID,
-											 flags,
-											 time_dim_info,
-											 space_dim_info,
-											 associated_schema_name,
-											 associated_table_prefix,
-											 &chunk_sizing_info,
-											 replication_factor,
-											 data_nodes);
-
-	ht = ts_hypertable_cache_get_cache_and_entry(table_relid, CACHE_FLAG_NONE, &hcache);
-
-	if (NULL != space_dim_info)
-		ts_hypertable_check_partitioning(ht, space_dim_info->dimension_id);
 
 	retval = create_hypertable_datum(fcinfo, ht, created);
 	ts_cache_release(hcache);
