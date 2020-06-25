@@ -1592,7 +1592,7 @@ ts_chunk_find(Hypertable *ht, Point *p)
 static ChunkScanCtx *
 chunks_find_all_in_range_limit(Hypertable *ht, Dimension *time_dim, StrategyNumber start_strategy,
 							   int64 start_value, StrategyNumber end_strategy, int64 end_value,
-							   int limit, uint64 *num_found)
+							   int limit, uint64 *num_found, ScanTupLock *tuplock)
 {
 	ChunkScanCtx *ctx = palloc(sizeof(ChunkScanCtx));
 	DimensionVec *slices;
@@ -1607,7 +1607,8 @@ chunks_find_all_in_range_limit(Hypertable *ht, Dimension *time_dim, StrategyNumb
 												 start_value,
 												 end_strategy,
 												 end_value,
-												 limit);
+												 limit,
+												 tuplock);
 
 	/* The scan context will keep the state accumulated during the scan */
 	chunk_scan_ctx_init(ctx, ht->space, NULL);
@@ -1670,6 +1671,13 @@ chunks_typecheck_and_find_all_in_range_limit(Hypertable *ht, Dimension *time_dim
 	StrategyNumber start_strategy = InvalidStrategy;
 	StrategyNumber end_strategy = InvalidStrategy;
 	MemoryContext oldcontext;
+	/* We want to hold a FOR KEY SHARE lock on dimension slices since they are
+	 * shared between chunks. We don't want them to disappear in case we're
+	 * dropping the chunk. */
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+	};
 
 	if (time_dim == NULL)
 		ereport(ERROR,
@@ -1712,7 +1720,8 @@ chunks_typecheck_and_find_all_in_range_limit(Hypertable *ht, Dimension *time_dim
 											   end_strategy,
 											   older_than,
 											   limit,
-											   num_found);
+											   num_found,
+											   &tuplock);
 	MemoryContextSwitchTo(oldcontext);
 
 	return chunk_ctx;
@@ -2531,11 +2540,28 @@ chunk_tuple_delete(TupleInfo *ti, DropBehavior behavior, bool preserve_chunk_cat
 			 * Delete the dimension slice if there are no remaining constraints
 			 * referencing it
 			 */
-			if (is_dimension_constraint(cc) &&
-				ts_chunk_constraint_scan_by_dimension_slice_id(cc->fd.dimension_slice_id,
-															   NULL,
-															   CurrentMemoryContext) == 0)
-				ts_dimension_slice_delete_by_id(cc->fd.dimension_slice_id, false);
+			if (is_dimension_constraint(cc))
+			{
+				DimensionSlice *slice;
+				ScanTupLock tuplock = {
+					.lockmode = LockTupleExclusive,
+					.waitpolicy = LockWaitBlock,
+				};
+
+				/* Since a dimension slice is shared, we must lock the
+				 * dimension slice in FOR UPDATE mode prior to deletion so
+				 * that we can ensure that we aren't deleting a slice that
+				 * a concurrently created chunk depends on. */
+				slice = ts_dimension_slice_scan_by_id(cc->fd.dimension_slice_id,
+													  &tuplock,
+													  CurrentMemoryContext);
+				Assert(slice != NULL);
+
+				if (ts_chunk_constraint_scan_by_dimension_slice_id(slice->fd.id,
+																   NULL,
+																   CurrentMemoryContext) == 0)
+					ts_dimension_slice_delete_by_id(cc->fd.dimension_slice_id, false);
+			}
 		}
 	}
 

@@ -178,7 +178,7 @@ ts_hypercube_from_constraints(ChunkConstraints *constraints, MemoryContext mctx)
 			DimensionSlice *slice;
 
 			Assert(hc->num_slices < constraints->num_dimension_constraints);
-			slice = ts_dimension_slice_scan_by_id(cc->fd.dimension_slice_id, mctx);
+			slice = ts_dimension_slice_scan_by_id(cc->fd.dimension_slice_id, NULL, mctx);
 			Assert(slice != NULL);
 			hc->slices[hc->num_slices++] = slice;
 		}
@@ -248,6 +248,11 @@ ts_hypercube_calculate_from_point(Hyperspace *hs, Point *p)
 
 		if (!found)
 		{
+			ScanTupLock tuplock = {
+				.lockmode = LockTupleKeyShare,
+				.waitpolicy = LockWaitBlock,
+			};
+
 			/*
 			 * No existing slice found, or we are not aligning, so calculate
 			 * the range of a new slice
@@ -259,7 +264,7 @@ ts_hypercube_calculate_from_point(Hyperspace *hs, Point *p)
 			 * range. If a slice already exists, use that slice's ID instead
 			 * of a new one.
 			 */
-			ts_dimension_slice_scan_for_existing(cube->slices[i]);
+			ts_dimension_slice_scan_for_existing(cube->slices[i], &tuplock, CurrentMemoryContext);
 		}
 	}
 

@@ -3,7 +3,6 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-APACHE for a copy of the license.
  */
-#include <stdlib.h>
 #include <postgres.h>
 #include <access/relscan.h>
 #include <access/xact.h>
@@ -106,7 +105,7 @@ static int
 dimension_slice_scan_limit_direction_internal(int indexid, ScanKeyData *scankey, int nkeys,
 											  tuple_found_func on_tuple_found, void *scandata,
 											  int limit, ScanDirection scandir, LOCKMODE lockmode,
-											  MemoryContext mctx)
+											  ScanTupLock *tuplock, MemoryContext mctx)
 {
 	Catalog *catalog = ts_catalog_get();
 	ScannerCtx scanctx = {
@@ -118,6 +117,7 @@ dimension_slice_scan_limit_direction_internal(int indexid, ScanKeyData *scankey,
 		.limit = limit,
 		.tuple_found = on_tuple_found,
 		.lockmode = lockmode,
+		.tuplock = tuplock,
 		.scandirection = scandir,
 		.result_mctx = mctx,
 	};
@@ -128,7 +128,7 @@ dimension_slice_scan_limit_direction_internal(int indexid, ScanKeyData *scankey,
 static int
 dimension_slice_scan_limit_internal(int indexid, ScanKeyData *scankey, int nkeys,
 									tuple_found_func on_tuple_found, void *scandata, int limit,
-									LOCKMODE lockmode, MemoryContext mctx)
+									LOCKMODE lockmode, ScanTupLock *tuplock, MemoryContext mctx)
 {
 	return dimension_slice_scan_limit_direction_internal(indexid,
 														 scankey,
@@ -138,6 +138,7 @@ dimension_slice_scan_limit_internal(int indexid, ScanKeyData *scankey, int nkeys
 														 limit,
 														 ForwardScanDirection,
 														 lockmode,
+														 tuplock,
 														 mctx);
 }
 
@@ -181,6 +182,7 @@ ts_dimension_slice_scan_limit(int32 dimension_id, int64 coordinate, int limit)
 										&slices,
 										limit,
 										AccessShareLock,
+										NULL,
 										CurrentMemoryContext);
 
 	return ts_dimension_vec_sort(&slices);
@@ -190,7 +192,7 @@ static void
 dimension_slice_scan_with_strategies(int32 dimension_id, StrategyNumber start_strategy,
 									 int64 start_value, StrategyNumber end_strategy,
 									 int64 end_value, void *data, tuple_found_func tuple_found,
-									 int limit)
+									 int limit, ScanTupLock *tuplock, MemoryContext mctx)
 {
 	ScanKeyData scankey[3];
 	int nkeys = 1;
@@ -261,7 +263,8 @@ dimension_slice_scan_with_strategies(int32 dimension_id, StrategyNumber start_st
 										data,
 										limit,
 										AccessShareLock,
-										CurrentMemoryContext);
+										tuplock,
+										mctx);
 }
 
 /*
@@ -272,7 +275,7 @@ dimension_slice_scan_with_strategies(int32 dimension_id, StrategyNumber start_st
 DimensionVec *
 ts_dimension_slice_scan_range_limit(int32 dimension_id, StrategyNumber start_strategy,
 									int64 start_value, StrategyNumber end_strategy, int64 end_value,
-									int limit)
+									int limit, ScanTupLock *tuplock)
 {
 	DimensionVec *slices = ts_dimension_vec_create(limit > 0 ? limit : DIMENSION_VEC_DEFAULT_SIZE);
 
@@ -283,7 +286,9 @@ ts_dimension_slice_scan_range_limit(int32 dimension_id, StrategyNumber start_str
 										 end_value,
 										 &slices,
 										 dimension_vec_tuple_found,
-										 limit);
+										 limit,
+										 tuplock,
+										 CurrentMemoryContext);
 
 	return ts_dimension_vec_sort(&slices);
 }
@@ -323,6 +328,7 @@ ts_dimension_slice_collision_scan_limit(int32 dimension_id, int64 range_start, i
 										&slices,
 										limit,
 										AccessShareLock,
+										NULL,
 										CurrentMemoryContext);
 
 	return ts_dimension_vec_sort(&slices);
@@ -347,6 +353,7 @@ ts_dimension_slice_scan_by_dimension(int32 dimension_id, int limit)
 										&slices,
 										limit,
 										AccessShareLock,
+										NULL,
 										CurrentMemoryContext);
 
 	return ts_dimension_vec_sort(&slices);
@@ -390,6 +397,7 @@ ts_dimension_slice_scan_by_dimension_before_point(int32 dimension_id, int64 poin
 		limit,
 		scandir,
 		AccessShareLock,
+		NULL,
 		mctx);
 
 	return ts_dimension_vec_sort(&slices);
@@ -435,6 +443,7 @@ ts_dimension_slice_delete_by_dimension_id(int32 dimension_id, bool delete_constr
 		&delete_constraints,
 		0,
 		RowExclusiveLock,
+		NULL,
 		CurrentMemoryContext);
 }
 
@@ -456,6 +465,7 @@ ts_dimension_slice_delete_by_id(int32 dimension_slice_id, bool delete_constraint
 											   &delete_constraints,
 											   1,
 											   RowExclusiveLock,
+											   NULL,
 											   CurrentMemoryContext);
 }
 
@@ -473,7 +483,8 @@ dimension_slice_fill(TupleInfo *ti, void *data)
  * and range. If a match is found, the given slice is updated with slice ID.
  */
 DimensionSlice *
-ts_dimension_slice_scan_for_existing(DimensionSlice *slice)
+ts_dimension_slice_scan_for_existing(DimensionSlice *slice, ScanTupLock *tuplock,
+									 MemoryContext mctx)
 {
 	ScanKeyData scankey[3];
 
@@ -500,7 +511,8 @@ ts_dimension_slice_scan_for_existing(DimensionSlice *slice)
 										&slice,
 										1,
 										AccessShareLock,
-										CurrentMemoryContext);
+										tuplock,
+										mctx);
 
 	return slice;
 }
@@ -517,7 +529,7 @@ dimension_slice_tuple_found(TupleInfo *ti, void *data)
 }
 
 DimensionSlice *
-ts_dimension_slice_scan_by_id(int32 dimension_slice_id, MemoryContext mctx)
+ts_dimension_slice_scan_by_id(int32 dimension_slice_id, ScanTupLock *tuplock, MemoryContext mctx)
 {
 	DimensionSlice *slice = NULL;
 	ScanKeyData scankey[1];
@@ -535,6 +547,7 @@ ts_dimension_slice_scan_by_id(int32 dimension_slice_id, MemoryContext mctx)
 										&slice,
 										1,
 										AccessShareLock,
+										tuplock,
 										mctx);
 
 	return slice;
@@ -684,8 +697,14 @@ ts_dimension_slice_insert_multi(DimensionSlice **slices, Size num_slices, bool o
 	{
 		if (only_non_existing)
 		{
+			ScanTupLock tuplock = {
+				.lockmode = LockTupleKeyShare,
+				.waitpolicy = LockWaitBlock,
+			};
+
 			slices[i]->fd.id = 0;
-			slices[i] = ts_dimension_slice_scan_for_existing(slices[i]);
+			slices[i] =
+				ts_dimension_slice_scan_for_existing(slices[i], &tuplock, CurrentMemoryContext);
 		}
 
 		if (!only_non_existing || slices[i]->fd.id == 0)
@@ -733,6 +752,7 @@ ts_dimension_slice_nth_latest_slice(int32 dimension_id, int n)
 		n,
 		BackwardScanDirection,
 		AccessShareLock,
+		NULL,
 		CurrentMemoryContext);
 	if (num_tuples < n)
 		return NULL;
@@ -794,7 +814,9 @@ ts_dimension_slice_oldest_valid_chunk_for_reorder(int32 job_id, int32 dimension_
 										 end_value,
 										 &info,
 										 dimension_slice_check_chunk_stats_tuple_found,
-										 -1);
+										 -1,
+										 NULL,
+										 CurrentMemoryContext);
 
 	return info.chunk_id;
 }
@@ -835,7 +857,9 @@ ts_dimension_slice_get_chunkid_to_compress(int32 dimension_id, StrategyNumber st
 										 end_value,
 										 &chunk_id_ret,
 										 dimension_slice_check_is_chunk_uncompressed_tuple_found,
-										 -1);
+										 -1,
+										 NULL,
+										 CurrentMemoryContext);
 
 	return chunk_id_ret;
 }

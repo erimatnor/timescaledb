@@ -59,6 +59,12 @@ typedef ScanTupleResult (*tuple_found_func)(TupleInfo *ti, void *data);
 typedef ScanFilterResult (*tuple_filter_func)(TupleInfo *ti, void *data);
 typedef void (*postscan_func)(int num_tuples, void *data);
 
+typedef struct ScanTupLock
+{
+	LockTupleMode lockmode;
+	LockWaitPolicy waitpolicy;
+} ScanTupLock;
+
 typedef struct ScannerCtx
 {
 	Oid table;
@@ -70,12 +76,8 @@ typedef struct ScannerCtx
 	LOCKMODE lockmode;
 	MemoryContext result_mctx; /* The memory context to allocate the result
 								* on */
-	struct
-	{
-		LockTupleMode lockmode;
-		LockWaitPolicy waitpolicy;
-		bool enabled;
-	} tuplock;
+
+	ScanTupLock *tuplock;
 	ScanDirection scandirection;
 	void *data; /* User-provided data passed on to filter()
 				 * and tuple_found() */

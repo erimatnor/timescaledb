@@ -43,15 +43,17 @@ typedef struct DimensionVec DimensionVec;
 typedef struct Hypercube Hypercube;
 
 extern DimensionVec *ts_dimension_slice_scan_limit(int32 dimension_id, int64 coordinate, int limit);
-extern DimensionVec *ts_dimension_slice_scan_range_limit(int32 dimension_id,
-														 StrategyNumber start_strategy,
-														 int64 start_value,
-														 StrategyNumber end_strategy,
-														 int64 end_value, int limit);
+extern DimensionVec *
+ts_dimension_slice_scan_range_limit(int32 dimension_id, StrategyNumber start_strategy,
+									int64 start_value, StrategyNumber end_strategy, int64 end_value,
+									int limit, ScanTupLock *tuplock);
 extern DimensionVec *ts_dimension_slice_collision_scan_limit(int32 dimension_id, int64 range_start,
 															 int64 range_end, int limit);
-extern DimensionSlice *ts_dimension_slice_scan_for_existing(DimensionSlice *slice);
-extern DimensionSlice *ts_dimension_slice_scan_by_id(int32 dimension_slice_id, MemoryContext mctx);
+extern DimensionSlice *ts_dimension_slice_scan_for_existing(DimensionSlice *slice,
+															ScanTupLock *tuplock,
+															MemoryContext mctx);
+extern DimensionSlice *ts_dimension_slice_scan_by_id(int32 dimension_slice_id, ScanTupLock *tuplock,
+													 MemoryContext mctx);
 extern DimensionVec *ts_dimension_slice_scan_by_dimension(int32 dimension_id, int limit);
 extern DimensionVec *ts_dimension_slice_scan_by_dimension_before_point(int32 dimension_id,
 																	   int64 point, int limit,
