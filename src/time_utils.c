@@ -7,6 +7,7 @@
 #include <access/xact.h>
 #include <catalog/pg_type.h>
 #include <utils/timestamp.h>
+#include <utils/date.h>
 #include <utils/builtins.h>
 #include <parser/parse_coerce.h>
 #include <fmgr.h>
@@ -124,4 +125,34 @@ ts_time_value_from_arg(Datum arg, Oid argtype, Oid timetype)
 						 format_type_be(timetype))));
 
 	return ts_time_value_to_internal(arg, argtype);
+}
+
+int64
+ts_time_get_nobegin(Oid timetype)
+{
+	int64 nobegin;
+
+	switch (timetype)
+	{
+		case DATEOID:
+			nobegin = DATEVAL_NOBEGIN;
+			break;
+		case TIMESTAMPOID:
+		case TIMESTAMPTZOID:
+			nobegin = DT_NOBEGIN;
+			break;
+		case INT2OID:
+			nobegin = PG_INT16_MIN;
+			break;
+		case INT4OID:
+			nobegin = PG_INT32_MIN;
+			break;
+		case INT8OID:
+			nobegin = PG_INT64_MIN;
+			break;
+		default:
+			elog(ERROR, "unsupported time type %d", timetype);
+	}
+
+	return nobegin;
 }

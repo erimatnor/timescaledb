@@ -291,3 +291,63 @@ ts_time_bucket_by_type(int64 interval, int64 timestamp, Oid timestamp_type)
 
 	return ts_time_value_to_internal(time_bucketed, timestamp_type);
 }
+
+/*
+ * Add one bucket to a time value.
+ *
+ * The time value is typically the start of a time bucket, but need not be.
+ */
+Datum
+ts_time_bucket_add_one(Datum timeval, int64 bucket_width, Oid timetype)
+{
+	Datum new_timeval = timeval;
+
+	switch (timetype)
+	{
+		case DATEOID:
+		{
+			DateADT date = DatumGetDateADT(timeval);
+
+			if (date < (TS_DATE_END - bucket_width))
+				new_timeval = DateADTGetDatum(date + bucket_width);
+			break;
+		}
+		case TIMESTAMPTZOID:
+		case TIMESTAMPOID:
+		{
+			TimestampTz timestamp = DatumGetTimestampTz(timeval);
+
+			if (timestamp < (TS_TIMESTAMP_END - bucket_width))
+				new_timeval = TimestampTzGetDatum(timestamp + bucket_width);
+			break;
+		}
+		case INT2OID:
+		{
+			int16 intval = DatumGetInt16(timeval);
+
+			if (intval < (PG_INT16_MAX - bucket_width))
+				new_timeval = Int16GetDatum(intval + bucket_width);
+			break;
+		}
+		case INT4OID:
+		{
+			int32 intval = DatumGetInt32(timeval);
+
+			if (intval < (PG_INT32_MAX - bucket_width))
+				new_timeval = Int32GetDatum(intval + bucket_width);
+			break;
+		}
+		case INT8OID:
+		{
+			int64 intval = DatumGetInt64(timeval);
+
+			if (intval < (PG_INT64_MAX - bucket_width))
+				new_timeval = Int64GetDatum(intval + bucket_width);
+			break;
+		}
+		default:
+			elog(ERROR, "invalid time type %d", timetype);
+	}
+
+	return new_timeval;
+}
