@@ -219,8 +219,10 @@ SELECT count(c) FROM show_chunks('drop_chunks_view') AS c;
 SELECT * FROM drop_chunks_view ORDER BY 1;
 
 -- TRUNCATE test
-\set ON_ERROR_STOP 0
+-- Can truncate regular hyperables that have caggs
 TRUNCATE drop_chunks_table_u;
+\set ON_ERROR_STOP 0
+-- Can't truncate materialized hypertables directly
 TRUNCATE :drop_chunks_mat_table_u;
 \set ON_ERROR_STOP 1
 
