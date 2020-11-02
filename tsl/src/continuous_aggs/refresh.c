@@ -139,41 +139,42 @@ compute_inscribed_bucketed_refresh_window(const InternalTimeRange *const refresh
 }
 
 /*
- * Adjust the refresh window to align with circumscribed buckets, so it includes buckets, which
- * fully cover the refresh window.
+ * Adjust an invalidation range to align with buckets and to include buckets
+ * which fully cover the range of the invalidation. Invalidation ranges are
+ * also clamped to the original refresh window to ensure they respect it. The
+ * original refresh window might either align with buckets or chunk boundaries
+ * (of the source hypertable).
  *
- * Bucketing refresh window is necessary for a continuous aggregate refresh, which can refresh only
- * entire buckets. The result of the function is a bucketed window, where its start is at the start
- * of a bucket, which contains the start of the refresh window, and its end is at the end of a
- * bucket, which contains the end of the refresh window.
+ * Bucketing invalidations is necessary for a continuous aggregate refresh,
+ * which use invalidations for refresh and must include entire buckets. The
+ * result of the function is a bucketed invalidation range, where its start is
+ * at the start of a bucket, which contains the start of the refresh window,
+ * and its end is at the end of a bucket, which contains the end of the
+ * refresh window.
  *
- * Example1, the window needs to expand:
- *    [---------)      - given refresh window
+ * Example1, the range needs to expand:
+ *    [---------)      - given invalidation range
  * .|....|....|....|.  - buckets
- *  [--------------)   - circumscribed bucketed window
+ *  [--------------)   - bucketed range
  *
- * Example2, the window is already aligned:
- *       [----)        - given refresh window
+ * Example2, the range is already aligned:
+ *       [----)        - given invalidation range
  * .|....|....|....|.  - buckets
- *       [----)        - inscribed bucketed window
+ *       [----)        - bucketed range
  *
- * This function is called for an invalidation window before refreshing it and after the
- * invalidation window was adjusted to be fully inside a refresh window. In the case of a
- * continuous aggregate policy or manual refresh, the refresh window is the inscribed bucketed
- * window.
- *
- * The circumscribed behaviour is also used for a refresh on drop, when the refresh is called during
- * dropping chunks manually or as part of retention policy.
+ * This function is called for an invalidation range before using it to
+ * refresh a continuous aggregate.
  */
 static InternalTimeRange
-compute_circumscribed_bucketed_refresh_window(const InternalTimeRange *const refresh_window,
-											  const int64 bucket_width)
+compute_bucketed_invalidation(const InternalTimeRange *const invalidation,
+							  const InternalTimeRange *const refresh_window,
+							  const int64 bucket_width)
 {
-	InternalTimeRange result = *refresh_window;
+	InternalTimeRange result = *invalidation;
 	InternalTimeRange largest_bucketed_window =
-		get_largest_bucketed_window(refresh_window->type, bucket_width);
+		get_largest_bucketed_window(invalidation->type, bucket_width);
 
-	if (refresh_window->start <= largest_bucketed_window.start)
+	if (invalidation->start <= largest_bucketed_window.start)
 	{
 		result.start = largest_bucketed_window.start;
 	}
@@ -182,10 +183,10 @@ compute_circumscribed_bucketed_refresh_window(const InternalTimeRange *const ref
 		/* For alignment with a bucket, which includes the start of the refresh window, we just
 		 * need to get start of the bucket. */
 		result.start =
-			ts_time_bucket_by_type(bucket_width, refresh_window->start, refresh_window->type);
+			ts_time_bucket_by_type(bucket_width, invalidation->start, invalidation->type);
 	}
 
-	if (refresh_window->end >= largest_bucketed_window.end)
+	if (invalidation->end >= largest_bucketed_window.end)
 	{
 		result.end = largest_bucketed_window.end;
 	}
@@ -194,18 +195,26 @@ compute_circumscribed_bucketed_refresh_window(const InternalTimeRange *const ref
 		int64 exclusive_end;
 		int64 bucketed_end;
 
-		Assert(refresh_window->end > result.start);
+		Assert(invalidation->end > result.start);
 
 		/* The end of the window is non-inclusive so subtract one before
 		 * bucketing in case we're already at the end of the bucket (we don't
 		 * want to add an extra bucket).  */
-		exclusive_end = ts_time_saturating_sub(refresh_window->end, 1, refresh_window->type);
-		bucketed_end = ts_time_bucket_by_type(bucket_width, exclusive_end, refresh_window->type);
+		exclusive_end = ts_time_saturating_sub(invalidation->end, 1, invalidation->type);
+		bucketed_end = ts_time_bucket_by_type(bucket_width, exclusive_end, invalidation->type);
 
 		/* We get the time value for the start of the bucket, so need to add
 		 * bucket_width to get the end of it. */
-		result.end = ts_time_saturating_add(bucketed_end, bucket_width, refresh_window->type);
+		result.end = ts_time_saturating_add(bucketed_end, bucket_width, invalidation->type);
 	}
+
+	/* Clamp the resulting range to the original refresh window */
+	if (result.end > refresh_window->end)
+		result.end = refresh_window->end;
+
+	if (result.start < refresh_window->start)
+		result.start = refresh_window->start;
+
 	return result;
 }
 
@@ -318,11 +327,11 @@ continuous_agg_refresh_with_window(const ContinuousAgg *cagg,
 			.end = ts_time_saturating_add(DatumGetInt64(end), 1, refresh_window->type),
 		};
 
-		InternalTimeRange bucketed_refresh_window =
-			compute_circumscribed_bucketed_refresh_window(&invalidation, cagg->data.bucket_width);
+		InternalTimeRange bucketed_invalidation_window =
+			compute_bucketed_invalidation(&invalidation, refresh_window, cagg->data.bucket_width);
 
-		log_refresh_window(DEBUG1, cagg, &bucketed_refresh_window, "invalidation refresh on");
-		continuous_agg_refresh_execute(&refresh, &bucketed_refresh_window);
+		log_refresh_window(DEBUG1, cagg, &bucketed_invalidation_window, "invalidation refresh on");
+		continuous_agg_refresh_execute(&refresh, &bucketed_invalidation_window);
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
