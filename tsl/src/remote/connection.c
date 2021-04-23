@@ -148,10 +148,10 @@ typedef struct ResultEntry
 
 typedef struct TSConnection
 {
-	ListNode ln;			  /* Must be first entry */
-	PGconn *pg_conn;		  /* PostgreSQL connection */
-	bool closing_guard;		  /* Guard against calling PQfinish() directly on PGconn */
-	bool processing;		  /* TRUE if there is ongoing async request processing */
+	ListNode ln;		/* Must be first entry */
+	PGconn *pg_conn;	/* PostgreSQL connection */
+	bool closing_guard; /* Guard against calling PQfinish() directly on PGconn */
+	enum TsConnectionStatus status;
 	NameData node_name;		  /* Associated data node name */
 	char *tz_name;			  /* Timezone name last sent over connection */
 	bool autoclose;			  /* Set if this connection should automatically
@@ -162,6 +162,9 @@ typedef struct TSConnection
 	bool xact_transitioning;  /* TRUE if connection is transitioning to
 							   * another transaction state */
 	ListNode results;		  /* Head of PGresult list */
+	char *copycmd;
+	bool binarycopy;
+	FILE *tracefile;
 } TSConnection;
 
 /*
@@ -187,6 +190,10 @@ remote_connection_free(TSConnection *conn)
 {
 	if (NULL != conn->tz_name)
 		free(conn->tz_name);
+
+	if (NULL != conn->copycmd)
+		free(conn->copycmd);
+
 	free(conn);
 }
 
@@ -587,7 +594,7 @@ remote_connection_create(PGconn *pg_conn, bool processing, const char *node_name
 	conn->ln.next = conn->ln.prev = NULL;
 	conn->pg_conn = pg_conn;
 	conn->closing_guard = false;
-	conn->processing = processing;
+	conn->status = processing ? CONN_PROCESSING : CONN_IDLE;
 	namestrcpy(&conn->node_name, node_name);
 	conn->tz_name = NULL;
 	conn->autoclose = true;
@@ -597,10 +604,16 @@ remote_connection_create(PGconn *pg_conn, bool processing, const char *node_name
 	/* Initialize results head */
 	conn->results.next = &conn->results;
 	conn->results.prev = &conn->results;
+	conn->binarycopy = false;
+	conn->copycmd = NULL;
 	list_insert_after(&conn->ln, &connections);
 
 	elog(DEBUG3, "created connection %p", conn);
+	char filename[256];
 
+	snprintf(filename, 256, "/tmp/libpq-%s.trace", NameStr(conn->node_name));
+	conn->tracefile = fopen(filename, "w+");
+	PQtrace(pg_conn, conn->tracefile);
 	connstats.connections_created++;
 
 	return conn;
@@ -677,14 +690,27 @@ bool
 remote_connection_is_processing(const TSConnection *conn)
 {
 	Assert(conn != NULL);
-	return conn->processing;
+	return conn->status != CONN_IDLE;
 }
 
 void
 remote_connection_set_processing(TSConnection *conn, bool processing)
 {
 	Assert(conn != NULL);
-	conn->processing = processing;
+	conn->status = processing ? CONN_PROCESSING : CONN_IDLE;
+}
+
+void
+remote_connection_set_status(TSConnection *conn, TSConnectionStatus status)
+{
+	Assert(conn != NULL);
+	conn->status = status;
+}
+
+TSConnectionStatus
+remote_connection_get_status(TSConnection *conn)
+{
+	return conn->status;
 }
 
 static void
@@ -1490,6 +1516,13 @@ remote_connection_close(TSConnection *conn)
 	/* Assert that PQfinish detached this connection from the global list of
 	 * connections */
 	Assert(IS_DETACHED_ENTRY(&conn->ln));
+
+	if (conn->tracefile)
+	{
+		PQuntrace(conn->pg_conn);
+		fclose(conn->tracefile);
+	}
+
 	remote_connection_free(conn);
 }
 
@@ -1662,19 +1695,19 @@ remote_connection_cancel_query(TSConnection *conn)
 	PGcancel *cancel;
 	char errbuf[256];
 	TimestampTz endtime;
+	TSConnectionError err;
 
 	if (!conn)
 		return true;
+
+	if (conn->status == CONN_COPY_IN && !remote_connection_end_copy(conn, &err))
+		remote_connection_warn(&err);
 
 	/*
 	 * If it takes too long to cancel the query and discard the result, assume
 	 * the connection is dead.
 	 */
 	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
-
-	/* We assume that processing is over no matter if cancel completes
-	 * successfully or not. */
-	remote_connection_set_processing(conn, false);
 
 	/*
 	 * Issue cancel request.  Unfortunately, there's no good way to limit the
@@ -1703,6 +1736,10 @@ remote_connection_cancel_query(TSConnection *conn)
 		default:
 			return false;
 	}
+
+	/* We assume that processing is over no matter if cancel completes
+	 * successfully or not. */
+	remote_connection_set_processing(conn, false);
 }
 
 void
@@ -1850,6 +1887,254 @@ bool
 remote_connection_set_single_row_mode(TSConnection *conn)
 {
 	return PQsetSingleRowMode(conn->pg_conn);
+}
+
+const char *
+remote_connecion_error_detailmsg(const TSConnectionError *err)
+{
+	if (err->resulterr.sqlstate)
+		return psprintf("Remote error [%s]: [%s] %s",
+						err->nodename,
+						err->resulterr.sqlstate,
+						err->resulterr.msg);
+
+	if (err->connmsg)
+		return psprintf("Remote error [%s]: %s", err->nodename, err->connmsg);
+
+	return psprintf("Remote error [%s]", err->nodename);
+}
+
+static bool
+fill_simple_error(TSConnectionError *err, int errcode, const char *errmsg, const TSConnection *conn)
+{
+	if (NULL == err)
+		return false;
+
+	MemSet(err, 0, sizeof(*err));
+
+	err->errcode = errcode;
+	err->msg = errmsg;
+	err->host = pstrdup(PQhost(conn->pg_conn));
+	err->nodename = pstrdup(NameStr(conn->node_name));
+
+	return false;
+}
+
+static bool
+fill_connection_error(TSConnectionError *err, int errcode, const char *errmsg,
+					  const TSConnection *conn)
+{
+	if (NULL == err)
+		return false;
+
+	fill_simple_error(err, errcode, errmsg, conn);
+	err->connmsg = pstrdup(PQerrorMessage(conn->pg_conn));
+
+	return false;
+}
+
+static char *
+get_error_field_copy(const PGresult *res, int fieldcode)
+{
+	const char *msg = PQresultErrorField(res, fieldcode);
+
+	if (NULL == msg)
+		return NULL;
+	return pchomp(msg);
+}
+
+static bool
+fill_result_error(TSConnectionError *err, int errcode, const char *errmsg, const TSConnection *conn,
+				  const PGresult *res)
+{
+	if (NULL == err || NULL == res)
+		return false;
+
+	fill_simple_error(err, errcode, errmsg, conn);
+	err->resulterr.sqlstate = get_error_field_copy(res, PG_DIAG_SQLSTATE);
+	err->resulterr.msg = get_error_field_copy(res, PG_DIAG_MESSAGE_PRIMARY);
+	err->resulterr.detail = get_error_field_copy(res, PG_DIAG_MESSAGE_DETAIL);
+	err->resulterr.hint = get_error_field_copy(res, PG_DIAG_MESSAGE_HINT);
+
+	return false;
+}
+
+#define POSTGRES_BINARY_COPY_SIGNATURE "PGCOPY\n\377\r\n\0"
+#define POSTGRES_SIGNATURE_LENGTH 11
+
+static bool
+send_binary_copy_header(const TSConnection *conn, TSConnectionError *err)
+{
+	StringInfo header = makeStringInfo();
+	uint32 buf = 0;
+	int result;
+
+	appendBinaryStringInfo(header,
+						   POSTGRES_BINARY_COPY_SIGNATURE,
+						   POSTGRES_SIGNATURE_LENGTH);			/* signature */
+	appendBinaryStringInfo(header, (char *) &buf, sizeof(buf)); /* flags */
+	appendBinaryStringInfo(header, (char *) &buf, sizeof(buf)); /* header extension length */
+
+	result = PQputCopyData(conn->pg_conn, header->data, 19);
+
+	if (result != 1)
+	{
+		fill_connection_error(err,
+							  ERRCODE_CONNECTION_FAILURE,
+							  "could not set binary COPY mode",
+							  conn);
+		return false;
+	}
+
+	return true;
+}
+
+static bool
+remote_connection_begin_copy_internal(TSConnection *conn, const char *copycmd, bool binary,
+									  TSConnectionError *err, bool resume)
+{
+	PGconn *pg_conn = remote_connection_get_pg_conn(conn);
+	PGresult *volatile res = NULL;
+
+	if (PQisnonblocking(pg_conn))
+		return fill_simple_error(err,
+								 ERRCODE_FEATURE_NOT_SUPPORTED,
+								 "distributed copy doesn't support non-blocking connections",
+								 conn);
+
+	if (conn->status != CONN_IDLE)
+		return fill_simple_error(err,
+								 ERRCODE_INTERNAL_ERROR,
+								 "connection not IDLE when beginning COPY",
+								 conn);
+
+	res = PQexec(pg_conn, copycmd);
+
+	if (PQresultStatus(res) != PGRES_COPY_IN)
+	{
+		fill_result_error(err,
+						  ERRCODE_CONNECTION_FAILURE,
+						  "unable to start remote COPY on data node",
+						  conn,
+						  res);
+		PQclear(res);
+		return false;
+	}
+
+	PQclear(res);
+
+	if (binary && !send_binary_copy_header(conn, err))
+		goto err_end_copy;
+
+	conn->binarycopy = binary;
+	conn->status = CONN_COPY_IN;
+
+	if (!resume)
+	{
+		size_t copycmd_len = strlen(copycmd);
+
+		if (conn->copycmd != NULL)
+			free(conn->copycmd);
+
+		conn->copycmd = malloc(copycmd_len + 1);
+
+		if (conn->copycmd == NULL)
+		{
+			fill_simple_error(err, ERRCODE_OUT_OF_MEMORY, "out of memory", conn);
+			goto err_end_copy;
+		}
+
+		strcpy(conn->copycmd, copycmd);
+		conn->copycmd[copycmd_len] = '\0';
+	}
+
+	return true;
+err_end_copy:
+	PQputCopyEnd(pg_conn, err->msg);
+
+	return false;
+}
+
+bool
+remote_connection_begin_copy(TSConnection *conn, const char *copycmd, bool binary,
+							 TSConnectionError *err)
+{
+	return remote_connection_begin_copy_internal(conn, copycmd, binary, err, false);
+}
+
+bool
+remote_connection_resume_copy(TSConnection *conn, TSConnectionError *err)
+{
+	if (NULL == conn->copycmd)
+		return fill_simple_error(err, ERRCODE_CONNECTION_EXCEPTION, "cannot resume COPY", conn);
+
+	return remote_connection_begin_copy_internal(conn, conn->copycmd, conn->binarycopy, err, true);
+}
+
+bool
+remote_connection_put_copy_data(TSConnection *conn, const char *buffer, size_t len,
+								TSConnectionError *err)
+{
+	int res;
+
+	res = PQputCopyData(remote_connection_get_pg_conn(conn), buffer, len);
+
+	if (res != 1)
+		return fill_connection_error(err,
+									 ERRCODE_CONNECTION_EXCEPTION,
+									 "could not send COPY data",
+									 conn);
+
+	return true;
+}
+
+static bool
+send_end_binary_copy_data(const TSConnection *conn, TSConnectionError *err)
+{
+	const uint16 buf = pg_hton16((uint16) -1);
+
+	if (PQputCopyData(conn->pg_conn, (char *) &buf, sizeof(buf)) != 1)
+		return fill_simple_error(err, ERRCODE_INTERNAL_ERROR, "could not end binary COPY", conn);
+
+	return true;
+}
+
+bool
+remote_connection_end_copy(TSConnection *conn, TSConnectionError *err)
+{
+	PGresult *res;
+	bool success;
+
+	if (conn->status != CONN_COPY_IN)
+		return fill_simple_error(err,
+								 ERRCODE_INTERNAL_ERROR,
+								 "connection not in COPY_IN state when ending COPY",
+								 conn);
+
+	if (conn->binarycopy && !send_end_binary_copy_data(conn, err))
+		return false;
+
+	if (PQputCopyEnd(conn->pg_conn, NULL) != 1)
+		return fill_simple_error(err,
+								 ERRCODE_CONNECTION_EXCEPTION,
+								 "could not end remote COPY",
+								 conn);
+
+	success = true;
+	conn->status = CONN_PROCESSING;
+
+	while ((res = PQgetResult(conn->pg_conn)))
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			success = fill_result_error(err,
+										ERRCODE_CONNECTION_EXCEPTION,
+										"invalid result when ending remote COPY",
+										conn,
+										res);
+
+	Assert(res == NULL);
+	conn->status = CONN_IDLE;
+
+	return success;
 }
 
 #ifdef TS_DEBUG
