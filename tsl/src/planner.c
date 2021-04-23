@@ -23,6 +23,8 @@
 #include "hypertable.h"
 #include "nodes/compress_dml/compress_dml.h"
 #include "nodes/decompress_chunk/decompress_chunk.h"
+#include "nodes/data_node_dispatch.h"
+#include "nodes/data_node_copy.h"
 #include "nodes/gapfill/planner.h"
 #include "planner.h"
 
@@ -145,4 +147,14 @@ tsl_set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEntr
 	}
 
 	ts_cache_release(hcache);
+}
+
+Path *
+tsl_create_insert_path(PlannerInfo *root, ModifyTablePath *mtpath, Index hypertable_rti,
+					   int subplan_index)
+{
+	if (mtpath->onconflict)
+		return data_node_dispatch_path_create(root, mtpath, hypertable_rti, subplan_index);
+
+	return data_node_copy_path_create(root, mtpath, hypertable_rti, subplan_index);
 }

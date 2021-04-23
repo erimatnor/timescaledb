@@ -29,6 +29,22 @@ typedef enum ConnOptionType
 	CONN_OPTION_TYPE_NODE,
 } ConnOptionType;
 
+typedef struct TSConnectionError
+{
+	int errcode;
+	const char *msg;
+	const char *host;
+	const char *nodename;
+	const char *connmsg;
+	struct
+	{
+		const char *sqlstate;
+		const char *msg;
+		const char *hint;
+		const char *detail;
+	} resulterr;
+} TSConnectionError;
+
 /* Open a connection with a remote endpoint. Note that this is a raw
  * connection that does not obey txn semantics and is allocated using
  * malloc. Most users should use `remote_dist_txn_get_connection` or
@@ -80,12 +96,21 @@ typedef enum TSConnectionResult
 	CONN_NO_RESPONSE,
 } TSConnectionResult;
 
+typedef enum TsConnectionStatus
+{
+	CONN_IDLE,		 /* No command being processed */
+	CONN_PROCESSING, /* Command/query is being processed */
+	CONN_COPY_IN,	/* Connection is in COPY_IN mode */
+} TSConnectionStatus;
+
 TSConnectionResult remote_connection_drain(TSConnection *conn, TimestampTz endtime,
 										   PGresult **result);
 extern bool remote_connection_cancel_query(TSConnection *conn);
 extern PGconn *remote_connection_get_pg_conn(const TSConnection *conn);
 extern bool remote_connection_is_processing(const TSConnection *conn);
 extern void remote_connection_set_processing(TSConnection *conn, bool processing);
+extern void remote_connection_set_status(TSConnection *conn, TSConnectionStatus status);
+extern TSConnectionStatus remote_connection_get_status(TSConnection *conn);
 extern bool remote_connection_configure_if_changed(TSConnection *conn);
 extern void remote_connection_elog(TSConnection *conn, int elevel);
 extern const char *remote_connection_node_name(const TSConnection *conn);
@@ -116,7 +141,25 @@ extern void remote_connection_stats_reset(void);
 extern RemoteConnectionStats *remote_connection_stats_get(void);
 #endif
 
+extern bool remote_connection_begin_copy(TSConnection *conn, const char *copycmd, bool binary,
+										 TSConnectionError *err);
+extern bool remote_connection_resume_copy(TSConnection *conn, TSConnectionError *err);
+extern bool remote_connection_end_copy(TSConnection *conn, TSConnectionError *err);
+extern bool remote_connection_put_copy_data(TSConnection *conn, const char *buffer, size_t len,
+											TSConnectionError *err);
+
 extern void _remote_connection_init(void);
 extern void _remote_connection_fini(void);
+extern const char *remote_connecion_error_detailmsg(const TSConnectionError *err);
+
+#define remote_connection_log(level, connerr)                                                      \
+	ereport(level,                                                                                 \
+			(errcode((connerr)->errcode),                                                          \
+			 errmsg("%s", (connerr)->msg),                                                         \
+			 errdetail("%s", remote_connecion_error_detailmsg(connerr))))
+
+#define remote_connection_warn(connerr) remote_connection_log(WARNING, connerr)
+
+#define remote_connection_error(connerr) remote_connection_log(ERROR, connerr)
 
 #endif /* TIMESCALEDB_TSL_REMOTE_CONNECTION_H */
