@@ -11,6 +11,8 @@
 #include <catalog/namespace.h>
 #include <access/htup_details.h>
 #include <access/xact.h>
+#include <executor/spi.h>
+#include <executor/executor.h>
 #include <nodes/makefuncs.h>
 #include <utils/acl.h>
 #include <utils/builtins.h>
@@ -20,12 +22,10 @@
 #include <utils/palloc.h>
 #include <utils/memutils.h>
 #include <utils/snapmgr.h>
-#include <executor/executor.h>
 #include <parser/parse_func.h>
 #include <funcapi.h>
 #include <miscadmin.h>
 #include <fmgr.h>
-#include <executor/spi.h>
 
 #if USE_ASSERT_CHECKING
 #include <funcapi.h>
@@ -85,6 +85,36 @@ struct ChunkCopy
 	/* temporary memory context */
 	MemoryContext mcxt;
 };
+
+static void
+commit_transaction(void)
+{
+	/*
+	 * If we commit within another procedure, there's an active SPI
+	 * context. Commit using SPI to maintain the context across
+	 * transactions. */
+	if (SPI_inside_nonatomic_context())
+		SPI_commit();
+	else
+	{
+		/*
+		 * Before committing, pop all active snapshots to avoid error about
+		 * "snapshot %p still active".
+		 */
+		while (ActiveSnapshotSet())
+			PopActiveSnapshot();
+
+		CommitTransactionCommand();
+	}
+}
+
+static void
+start_transaction(void)
+{
+	MemoryContext oldcontext = CurrentMemoryContext;
+	StartTransactionCommand();
+	MemoryContextSwitchTo(oldcontext);
+}
 
 static HeapTuple
 chunk_copy_operation_make_tuple(const FormData_chunk_copy_operation *fd, TupleDesc desc)
@@ -352,7 +382,7 @@ chunk_copy_setup(ChunkCopy *cc, Oid chunk_relid, const char *src_node, const cha
 
 	/* Commit to get out of starting transaction. This will also pop active
 	 * snapshots. */
-	SPI_commit();
+	commit_transaction();
 }
 
 static void
@@ -362,7 +392,7 @@ chunk_copy_finish(ChunkCopy *cc)
 	MemoryContextDelete(cc->mcxt);
 
 	/* Start a transaction for the final outer transaction */
-	SPI_start_transaction();
+	start_transaction();
 }
 
 static void
@@ -784,8 +814,7 @@ chunk_copy_execute(ChunkCopy *cc)
 	 */
 	for (stage = &chunk_copy_stages[0]; stage->name != NULL; stage++)
 	{
-		SPI_start_transaction();
-
+		start_transaction();
 		cc->stage = stage;
 		cc->stage->function(cc);
 
@@ -793,8 +822,7 @@ chunk_copy_execute(ChunkCopy *cc)
 		chunk_copy_operation_update(cc);
 
 		DEBUG_ERROR_INJECTION(stage->name);
-
-		SPI_commit();
+		commit_transaction();
 	}
 }
 
@@ -913,7 +941,7 @@ chunk_copy_cleanup_internal(ChunkCopy *cc, int stage_idx)
 	/* Cleanup each copy stage in a separate transaction */
 	do
 	{
-		SPI_start_transaction();
+		start_transaction();
 
 		cc->stage = &chunk_copy_stages[stage_idx];
 		if (cc->stage->function_cleanup)
@@ -925,7 +953,7 @@ chunk_copy_cleanup_internal(ChunkCopy *cc, int stage_idx)
 		else
 			first = false;
 
-		SPI_commit();
+		commit_transaction();
 	} while (--stage_idx >= 0);
 }
 
@@ -977,7 +1005,7 @@ chunk_copy_cleanup(const char *operation_id)
 
 	/* Commit to get out of starting transaction, this will also pop active
 	 * snapshots. */
-	SPI_commit();
+	commit_transaction();
 
 	/* Run the corresponding cleanup steps to roll back the activity. */
 	PG_TRY();
