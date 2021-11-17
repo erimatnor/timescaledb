@@ -71,6 +71,7 @@ copy_chunk_state_create(Hypertable *ht, Relation rel, CopyFromFunc from_func, Co
 	ccstate->next_copy_from = from_func;
 	ccstate->where_clause = NULL;
 
+	// add test comment
 	return ccstate;
 }
 
