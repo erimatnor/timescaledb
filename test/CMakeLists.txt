@@ -90,6 +90,24 @@ add_custom_command(
 # installchecklocal tests against an existing postgres instance
 add_custom_target(installchecklocal DEPENDS ${_local_install_checks})
 
+if(TAP_CHECKS)
+  add_custom_target(
+    provecheck
+    COMMAND rm -rf ${CMAKE_CURRENT_BINARY_DIR}/tmp_check
+    COMMAND
+      CONFDIR=${CMAKE_BINARY_DIR}/test PATH="${PG_BINDIR}:$ENV{PATH}"
+      PG_REGRESS=${PG_REGRESS} SRC_DIR=${PG_SOURCE_DIR}
+      CM_SRC_DIR=${CMAKE_SOURCE_DIR} PG_LIBDIR=${PG_LIBDIR}
+      ${PRIMARY_TEST_DIR}/pg_prove.sh
+    USES_TERMINAL)
+  list(APPEND _install_checks provecheck)
+elseif(REQUIRE_ALL_TESTS)
+  message(
+    FATAL_ERROR
+      "All tests were required but TAP_CHECKS was off (see previous messages why)"
+	)	
+endif()
+
 add_subdirectory(sql)
 add_subdirectory(isolation)
 
@@ -102,3 +120,4 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
 endif(CMAKE_BUILD_TYPE MATCHES Debug)
 
 add_subdirectory(perl)
+add_subdirectory(t)

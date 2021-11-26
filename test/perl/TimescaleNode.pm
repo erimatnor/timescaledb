@@ -43,7 +43,7 @@ sub psql_is
 	my ($psql_rc, $psql_out, $psql_err) = $self->SUPER::psql($db, $query);
 	PostgresNode::ok(!$psql_rc, "$testname: err_code check");
 	PostgresNode::is($psql_err, '', "$testname: error_msg check");
-	PostgresNode::is($psql_out, $expected_stdout,
+ 	PostgresNode::is($psql_out, $expected_stdout,
 		"$testname: psql output check");
 }
 
