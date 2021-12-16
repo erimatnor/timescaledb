@@ -534,6 +534,12 @@ catalog_get_table(Catalog *catalog, Oid relid)
 	return INVALID_CATALOG_TABLE;
 }
 
+bool
+ts_is_catalog_table(Oid relid)
+{
+	return catalog_get_table(ts_catalog_get(), relid) != INVALID_CATALOG_TABLE;
+}
+
 /*
  * Get the next serial ID for a catalog table, if one exists for the given table.
  */

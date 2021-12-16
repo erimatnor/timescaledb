@@ -26,6 +26,7 @@
 #include "license_guc.h"
 #include "bgw_policy/policy.h"
 #include "ts_catalog/compression_chunk_size.h"
+#include "stats.h"
 
 #include "cross_module_fn.h"
 
@@ -601,6 +602,18 @@ ts_get_telemetry_report(PG_FUNCTION_ARGS)
 	}
 
 	request = build_version_body();
+
+	AllRelkindStats stats;
+
+	ts_telemetry_relation_stats(&stats);
+
+	elog(NOTICE, "Num hypertable chunks: " INT64_FORMAT, stats.hypertable.chunkcount);
+	elog(NOTICE, "Num cagg chunks: " INT64_FORMAT, stats.continuous_agg.chunkcount);
+	elog(NOTICE, "Num hypertable compressed chunks: " INT64_FORMAT, stats.hypertable_compressed.chunkcount);
+	elog(NOTICE, "Num distributed hypertable chunks: " INT64_FORMAT, stats.distributed_hypertable.chunkcount);
+	elog(NOTICE, "Num distributed hypertable compressed chunks: " INT64_FORMAT, stats.distributed_hypertable_compressed.chunkcount);
+	elog(NOTICE, "Num distributed hypertable member chunks: " INT64_FORMAT, stats.distributed_hypertable_member.chunkcount);
+	elog(NOTICE, "Num distributed hypertable member compressed chunks: " INT64_FORMAT, stats.distributed_hypertable_member_compressed.chunkcount);
 
 	return CStringGetTextDatum(request->data);
 }
