@@ -54,6 +54,13 @@
 #define REQ_DATA_VOLUME "data_volume"
 #define REQ_NUM_HYPERTABLES "num_hypertables"
 #define REQ_NUM_COMPRESSED_HYPERTABLES "num_compressed_hypertables"
+#define REQ_NUM_DISTRIBUTED_HYPERTABLES "num_distributed_hypertables"
+#define REQ_NUM_DISTRIBUTED_COMPRESSED_HYPERTABLES "num_distributed_compressed_hypertables"
+#define REQ_NUM_DISTRIBUTED_HYPERTABLES_MEMBERS "num_distributed_hypertables_members"
+#define REQ_NUM_DISTRIBUTED_COMPRESSED_HYPERTABLES_MEMBERS                                         \
+	"num_distributed_compressed_hypertables_members"
+#define REQ_NUM_REPLICATED_DISTRIBUTED_HYPERTABLES "num_replicated_distributed_hypertables"
+
 #define REQ_NUM_CONTINUOUS_AGGS "num_continuous_aggs"
 #define REQ_NUM_POLICY_CAGG "num_continuous_aggs_policies"
 #define REQ_NUM_POLICY_COMPRESSION "num_compression_policies"
@@ -306,6 +313,213 @@ format_iso8601(Datum value)
 {
 	return TextDatumGetCString(
 		DirectFunctionCall2(timestamptz_to_char, value, CStringGetTextDatum(ISO8601_FORMAT)));
+}
+
+#define REQ_RELKIND_COUNT "total_count"
+#define REQ_RELKIND_RELSIZE "total_relsize"
+#define REQ_RELKIND_RELTUPLES "total_reltuples"
+#define REQ_RELKIND_CHUNKS "total_chunks"
+#define REQ_RELKIND_COMPRESSED_CHUNKS "total_compressed_chunks"
+
+static JsonbValue *
+add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
+						 const BaseStats *stats)
+{
+	JsonbValue name = {
+		.type = jbvString,
+		.val.string.val = pstrdup(relkindname),
+		.val.string.len = strlen(relkindname),
+	};
+	pushJsonbValue(&parse_state, WJB_KEY, &name);
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+
+	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COUNT, stats->relcount);
+
+	if (stats->type >= STATS_TYPE_STORAGE)
+	{
+		const StorageStats *storage = (StorageStats *) stats;
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_RELSIZE, storage->relsize);
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_RELTUPLES, storage->reltuples);
+	}
+
+	if (stats->type >= STATS_TYPE_HYPER)
+	{
+		const HyperStats *hyper = (HyperStats *) stats;
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_CHUNKS, hyper->chunkcount);
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_COMPRESSED_CHUNKS,
+						   hyper->compressed_chunkcount);
+	}
+
+	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+}
+
+static const char *base_stats_names[] = {
+	[STATS_BASE_VIEW] = "views",
+	[STATS_BASE_FOREIGN_TABLE] = "foreign_tables",
+};
+
+static const char *storage_stats_names[] = {
+	[STATS_STORAGE_INDEX] = "indexes",
+	[STATS_STORAGE_TABLE] = "tables",
+	[STATS_STORAGE_MATVIEW] = "materialized_views",
+};
+
+static const char *hyper_stats_names[] = {
+	[STATS_HYPER_HYPERTABLE] = "hypertables",
+	[STATS_HYPER_HYPERTABLE_COMPRESSED] = "compressed_hypertables",
+	[STATS_HYPER_DISTRIBUTED_HYPERTABLE] = "distributed_hypertables",
+	[STATS_HYPER_DISTRIBUTED_HYPERTABLE_COMPRESSED] = "compressed_distributed_hypertables",
+	[STATS_HYPER_DISTRIBUTED_HYPERTABLE_MEMBER] = "distributed_hypertable_members",
+	[STATS_HYPER_DISTRIBUTED_HYPERTABLE_MEMBER_COMPRESSED] =
+		"compressed_distributed_hypertable_members",
+	[STATS_HYPER_CONTINUOUS_AGG] = "continuous_aggregates",
+	[STATS_HYPER_CONTINUOUS_AGG_COMPRESSED] = "compressed_continuous_aggregates",
+	[STATS_HYPER_PARTITIONED_TABLE] = "partitioned_tables",
+	[STATS_HYPER_PARTITIONED_INDEX] = "partitioned_indexes",
+};
+
+static Jsonb *
+build_telemetry_report()
+{
+	JsonbParseState *parse_state = NULL;
+	JsonbValue key;
+	JsonbValue *result;
+	AllRelkindStats relstats;
+	int i;
+
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+
+	ts_jsonb_add_str(parse_state,
+					 REQ_DB_UUID,
+					 DatumGetCString(
+						 DirectFunctionCall1(uuid_out, ts_telemetry_metadata_get_uuid())));
+	ts_jsonb_add_str(parse_state,
+					 REQ_EXPORTED_DB_UUID,
+					 DatumGetCString(
+						 DirectFunctionCall1(uuid_out, ts_telemetry_metadata_get_exported_uuid())));
+	ts_jsonb_add_str(parse_state,
+					 REQ_INSTALL_TIME,
+					 format_iso8601(ts_telemetry_metadata_get_install_timestamp()));
+
+	ts_jsonb_add_str(parse_state, REQ_PS_VERSION, get_pgversion_string());
+	ts_jsonb_add_str(parse_state, REQ_TS_VERSION, TIMESCALEDB_VERSION_MOD);
+	ts_jsonb_add_str(parse_state, REQ_BUILD_OS, BUILD_OS_NAME);
+	ts_jsonb_add_str(parse_state, REQ_BUILD_OS_VERSION, BUILD_OS_VERSION);
+	ts_jsonb_add_str(parse_state, REQ_BUILD_ARCHITECTURE, BUILD_PROCESSOR);
+	ts_jsonb_add_str(parse_state, REQ_BUILD_ARCHITECTURE_BIT_SIZE, get_architecture_bit_size());
+	ts_jsonb_add_str(parse_state, REQ_DATA_VOLUME, get_database_size());
+
+	/* Add relation stats */
+	ts_telemetry_relation_stats(&relstats);
+	key.type = jbvString;
+	key.val.string.val = "relkind_stats";
+	key.val.string.len = strlen("relkind_stats");
+	pushJsonbValue(&parse_state, WJB_KEY, &key);
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+
+	for (i = 0; i < STATS_BASE_MAX; i++)
+		add_relkind_stats_object(parse_state, base_stats_names[i], &relstats.basestats[i]);
+
+	for (i = 0; i < STATS_STORAGE_MAX; i++)
+		add_relkind_stats_object(parse_state,
+								 storage_stats_names[i],
+								 &relstats.storagestats[i].base);
+
+	for (i = 0; i < STATS_HYPER_MAX; i++)
+		add_relkind_stats_object(parse_state,
+								 hyper_stats_names[i],
+								 &relstats.hyperstats[i].storage.base);
+
+	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+
+	/* Old stats */
+	ts_telemetry_relation_stats(&relstats);
+
+	ts_jsonb_add_str(parse_state, REQ_NUM_HYPERTABLES "_old", get_num_hypertables());
+	ts_jsonb_add_str(parse_state,
+					 REQ_NUM_COMPRESSED_HYPERTABLES "_old",
+					 get_num_compressed_hypertables());
+	ts_jsonb_add_str(parse_state, REQ_NUM_CONTINUOUS_AGGS "_old", get_num_continuous_aggs());
+
+	add_job_counts(parse_state);
+
+	TotalSizes sizes = ts_compression_chunk_size_totals();
+	ts_jsonb_add_str(parse_state,
+					 REQ_COMPRESSED_HEAP_SIZE "_old",
+					 get_size(sizes.compressed_heap_size));
+	ts_jsonb_add_str(parse_state,
+					 REQ_COMPRESSED_INDEX_SIZE "_old",
+					 get_size(sizes.compressed_index_size));
+	ts_jsonb_add_str(parse_state,
+					 REQ_COMPRESSED_TOAST_SIZE "_old",
+					 get_size(sizes.compressed_toast_size));
+	ts_jsonb_add_str(parse_state,
+					 REQ_UNCOMPRESSED_HEAP_SIZE "_old",
+					 get_size(sizes.uncompressed_heap_size));
+	ts_jsonb_add_str(parse_state,
+					 REQ_UNCOMPRESSED_INDEX_SIZE "_old",
+					 get_size(sizes.uncompressed_index_size));
+	ts_jsonb_add_str(parse_state,
+					 REQ_UNCOMPRESSED_TOAST_SIZE "_old",
+					 get_size(sizes.uncompressed_toast_size));
+
+	/* Add related extensions, which is a nested JSON */
+	key.type = jbvString;
+	key.val.string.val = REQ_RELATED_EXTENSIONS;
+	key.val.string.len = strlen(REQ_RELATED_EXTENSIONS);
+	pushJsonbValue(&parse_state, WJB_KEY, &key);
+	add_related_extensions(parse_state);
+
+	/* license */
+	key.type = jbvString;
+	key.val.string.val = REQ_LICENSE_INFO;
+	key.val.string.len = strlen(REQ_LICENSE_INFO);
+	pushJsonbValue(&parse_state, WJB_KEY, &key);
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+	if (ts_license_is_apache())
+		ts_jsonb_add_str(parse_state, REQ_LICENSE_EDITION, REQ_LICENSE_EDITION_APACHE);
+	else
+		ts_jsonb_add_str(parse_state, REQ_LICENSE_EDITION, REQ_LICENSE_EDITION_COMMUNITY);
+	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+
+	/* add distributed database fields */
+	if (!ts_license_is_apache())
+		ts_cm_functions->add_tsl_telemetry_info(&parse_state);
+
+	/* add tuned info, which is optional */
+	if (ts_last_tune_time != NULL)
+		ts_jsonb_add_str(parse_state, REQ_TS_LAST_TUNE_TIME, ts_last_tune_time);
+
+	if (ts_last_tune_version != NULL)
+		ts_jsonb_add_str(parse_state, REQ_TS_LAST_TUNE_VERSION, ts_last_tune_version);
+
+	/* add cloud to telemetry when set */
+	if (ts_telemetry_cloud != NULL)
+	{
+		key.type = jbvString;
+		key.val.string.val = REQ_INSTANCE_METADATA;
+		key.val.string.len = strlen(REQ_INSTANCE_METADATA);
+		pushJsonbValue(&parse_state, WJB_KEY, &key);
+
+		pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+		ts_jsonb_add_str(parse_state, REQ_TS_TELEMETRY_CLOUD, ts_telemetry_cloud);
+		pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+	}
+
+	/* Add additional content from metadata */
+	key.type = jbvString;
+	key.val.string.val = REQ_METADATA;
+	key.val.string.len = strlen(REQ_METADATA);
+	pushJsonbValue(&parse_state, WJB_KEY, &key);
+	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
+	ts_telemetry_metadata_add_values(parse_state);
+	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+
+	/* end of telemetry object */
+	result = pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
+
+	return JsonbValueToJsonb(result);
 }
 
 static StringInfo
@@ -603,17 +817,15 @@ ts_get_telemetry_report(PG_FUNCTION_ARGS)
 
 	request = build_version_body();
 
-	AllRelkindStats stats;
-
-	ts_telemetry_relation_stats(&stats);
-
-	elog(NOTICE, "Num hypertable chunks: " INT64_FORMAT, stats.hypertable.chunkcount);
-	elog(NOTICE, "Num cagg chunks: " INT64_FORMAT, stats.continuous_agg.chunkcount);
-	elog(NOTICE, "Num hypertable compressed chunks: " INT64_FORMAT, stats.hypertable_compressed.chunkcount);
-	elog(NOTICE, "Num distributed hypertable chunks: " INT64_FORMAT, stats.distributed_hypertable.chunkcount);
-	elog(NOTICE, "Num distributed hypertable compressed chunks: " INT64_FORMAT, stats.distributed_hypertable_compressed.chunkcount);
-	elog(NOTICE, "Num distributed hypertable member chunks: " INT64_FORMAT, stats.distributed_hypertable_member.chunkcount);
-	elog(NOTICE, "Num distributed hypertable member compressed chunks: " INT64_FORMAT, stats.distributed_hypertable_member_compressed.chunkcount);
-
 	return CStringGetTextDatum(request->data);
+}
+
+TS_FUNCTION_INFO_V1(ts_telemetry_get_report_jsonb);
+
+Datum
+ts_telemetry_get_report_jsonb(PG_FUNCTION_ARGS)
+{
+	Jsonb *jb = build_telemetry_report();
+
+	PG_RETURN_JSONB_P(jb);
 }

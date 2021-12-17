@@ -38,15 +38,15 @@ tsl_telemetry_add_distributed_database_info(JsonbParseState *parse_state)
 					 psprintf("%d", list_length(data_node_get_node_name_list())));
 
 	ts_jsonb_add_str(parse_state,
-					 NUM_DISTRIBUTED_HYPERTABLES_KEY,
+					 NUM_DISTRIBUTED_HYPERTABLES_KEY "_old",
 					 psprintf("%d", stat.num_hypertables_distributed));
 
 	ts_jsonb_add_str(parse_state,
-					 NUM_REPLICATED_DISTRIBUTED_HYPERTABLES_KEY,
+					 NUM_REPLICATED_DISTRIBUTED_HYPERTABLES_KEY "_old",
 					 psprintf("%d", stat.num_hypertables_distributed_and_replicated));
 
 	ts_jsonb_add_str(parse_state,
-					 NUM_DISTRIBUTED_HYPERTABLES_MEMBERS_KEY,
+					 NUM_DISTRIBUTED_HYPERTABLES_MEMBERS_KEY "_old",
 					 psprintf("%d", stat.num_hypertables_distributed_members));
 }
 
