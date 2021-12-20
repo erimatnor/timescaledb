@@ -320,6 +320,8 @@ format_iso8601(Datum value)
 #define REQ_RELKIND_RELTUPLES "total_reltuples"
 #define REQ_RELKIND_CHUNKS "total_chunks"
 #define REQ_RELKIND_COMPRESSED_CHUNKS "total_compressed_chunks"
+#define REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE "total_uncompressed_heap_size"
+#define REQ_RELKIND_COMPRESSED_HEAP_SIZE "total_compressed_heap_size"
 
 static JsonbValue *
 add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
@@ -349,6 +351,12 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 		ts_jsonb_add_int64(parse_state,
 						   REQ_RELKIND_COMPRESSED_CHUNKS,
 						   hyper->compressed_chunkcount);
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE,
+						   hyper->uncompressed_heap_size);
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_COMPRESSED_HEAP_SIZE,
+						   hyper->compressed_heap_size);		
 	}
 
 	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);

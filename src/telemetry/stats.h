@@ -34,6 +34,13 @@ typedef struct HyperStats
 	StorageStats storage;
 	int64 chunkcount;
 	int64 compressed_chunkcount;
+	int64 compressed_size;
+	int64 compressed_heap_size;
+	int64 compressed_index_size;
+	int64 compressed_toast_size;
+	int64 uncompressed_heap_size;
+	int64 uncompressed_index_size;
+	int64 uncompressed_toast_size;
 } HyperStats;
 
 typedef enum HyperStatsIndex

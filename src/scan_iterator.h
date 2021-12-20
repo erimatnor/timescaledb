@@ -10,6 +10,7 @@
 #include <utils/palloc.h>
 
 #include "scanner.h"
+#include "catalog.h"
 
 #define EMBEDDED_SCAN_KEY_SIZE 5
 
@@ -74,21 +75,25 @@ ts_scan_iterator_alloc_result(const ScanIterator *iterator, Size size)
 static inline void
 ts_scan_iterator_start_scan(ScanIterator *iterator)
 {
+	MemoryContext oldmcxt = MemoryContextSwitchTo(iterator->scankey_mcxt);
 	ts_scanner_start_scan(&(iterator)->ctx, &(iterator)->ictx);
+	MemoryContextSwitchTo(oldmcxt);
 }
 
 static inline TupleInfo *
 ts_scan_iterator_next(ScanIterator *iterator)
 {
-	return ts_scanner_next(&(iterator)->ctx, &(iterator)->ictx);
+	iterator->tinfo = ts_scanner_next(&(iterator)->ctx, &(iterator)->ictx);
+	return iterator->tinfo;
 }
 
 static inline void
-ts_scan_key_reset(ScanIterator *iterator)
+ts_scan_iterator_reset(ScanIterator *iterator)
 {
 	iterator->ctx.nkeys = 0;
 }
 
+void TSDLLEXPORT ts_scan_iterator_set_index(ScanIterator *iterator, CatalogTable table, int indexid);
 void TSDLLEXPORT ts_scan_iterator_close(ScanIterator *iterator);
 void TSDLLEXPORT ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumber attributeNumber,
 												StrategyNumber strategy, RegProcedure procedure,
@@ -104,6 +109,6 @@ void TSDLLEXPORT ts_scan_iterator_rescan(ScanIterator *iterator);
 /* You must use `ts_scan_iterator_close` if terminating this loop early */
 #define ts_scanner_foreach(scan_iterator)                                                          \
 	for (ts_scan_iterator_start_scan((scan_iterator));                                             \
-		 ((scan_iterator)->tinfo = ts_scan_iterator_next(scan_iterator)) != NULL;)
+		 ts_scan_iterator_next(scan_iterator) != NULL;)
 
 #endif /* TIMESCALEDB_SCAN_ITERATOR_H */
