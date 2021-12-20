@@ -315,13 +315,13 @@ format_iso8601(Datum value)
 		DirectFunctionCall2(timestamptz_to_char, value, CStringGetTextDatum(ISO8601_FORMAT)));
 }
 
-#define REQ_RELKIND_COUNT "total_count"
-#define REQ_RELKIND_RELSIZE "total_relsize"
-#define REQ_RELKIND_RELTUPLES "total_reltuples"
-#define REQ_RELKIND_CHUNKS "total_chunks"
-#define REQ_RELKIND_COMPRESSED_CHUNKS "total_compressed_chunks"
-#define REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE "total_uncompressed_heap_size"
-#define REQ_RELKIND_COMPRESSED_HEAP_SIZE "total_compressed_heap_size"
+#define REQ_RELKIND_COUNT "num_relations"
+#define REQ_RELKIND_RELSIZE "total_relation_size"
+#define REQ_RELKIND_RELTUPLES "num_reltuples"
+#define REQ_RELKIND_CHUNKS "num_chunks"
+#define REQ_RELKIND_COMPRESSED_CHUNKS "num_compressed_chunks"
+#define REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE "pre_compressed_relation_size"
+#define REQ_RELKIND_COMPRESSED_HEAP_SIZE "compressed_relation_size"
 
 static JsonbValue *
 add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
@@ -353,10 +353,10 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 						   hyper->compressed_chunkcount);
 		ts_jsonb_add_int64(parse_state,
 						   REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE,
-						   hyper->uncompressed_heap_size);
+						   hyper->uncompressed_heap_size + hyper->uncompressed_index_size + hyper->uncompressed_toast_size);
 		ts_jsonb_add_int64(parse_state,
 						   REQ_RELKIND_COMPRESSED_HEAP_SIZE,
-						   hyper->compressed_heap_size);		
+						   hyper->compressed_heap_size + hyper->compressed_index_size + hyper->compressed_toast_size);		
 	}
 
 	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);

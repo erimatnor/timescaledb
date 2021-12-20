@@ -35,23 +35,11 @@ add_storage_stats(StorageStats *stats, Form_pg_class class)
 
 	stats->reltuples += class->reltuples;
 	stats->relpages += class->relpages;
-	res = DirectFunctionCall2(pg_relation_size,
-							  ObjectIdGetDatum(class->oid),
-							  CStringGetTextDatum("main"));
+	res = DirectFunctionCall1(pg_total_relation_size,
+							  ObjectIdGetDatum(class->oid));
 	stats->relsize += DatumGetInt64(res);
 }
 
-/*
-static void
-add_distributed_hypertable_size_stats(RelkindStats *stats, Form_pg_class class)
-{
-	Oid funcid;
-
-	add_relation_size_stats(stats, class);
-
-	OidFunctionCall1(funcid, ObjectIdGetDatum(class->oid));
-}
-*/
 static void
 add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk, const Form_compression_chunk_size fd_compr)
 {
@@ -65,7 +53,7 @@ add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk, cons
 	{
 		stats->compressed_heap_size += fd_compr->compressed_heap_size;
 		stats->compressed_index_size += fd_compr->compressed_index_size;
-		stats->compressed_toast_size += fd_compr->compressed_toast_size;		
+		stats->compressed_toast_size += fd_compr->compressed_toast_size;
 		stats->uncompressed_heap_size += fd_compr->uncompressed_heap_size;
 		stats->uncompressed_index_size += fd_compr->uncompressed_index_size;
 		stats->uncompressed_toast_size += fd_compr->uncompressed_toast_size;		
@@ -79,6 +67,48 @@ process_relation_stats(BaseStats *stats, Form_pg_class class)
 
 	if (RELKIND_HAS_STORAGE(class->relkind))
 		add_storage_stats((StorageStats *) stats, class);
+}
+
+static bool
+get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk, Form_compression_chunk_size compr_stats)
+{
+	if (!ts_chunk_is_compressed(chunk))
+		return false;
+	
+	ts_scan_iterator_reset(&statsctx->compressed_chunk_stats_iterator);
+	ts_scan_iterator_scan_key_init(&statsctx->compressed_chunk_stats_iterator,
+								   Anum_compression_chunk_size_pkey_chunk_id,
+								   BTEqualStrategyNumber,
+								   F_INT4EQ,
+								   Int32GetDatum(chunk->fd.id));
+	
+	if (statsctx->iterator_valid)
+		ts_scan_iterator_rescan(&statsctx->compressed_chunk_stats_iterator);
+	else
+	{
+		ts_scan_iterator_start_scan(&statsctx->compressed_chunk_stats_iterator);
+		statsctx->iterator_valid = true;
+	}
+	
+	if (ts_scan_iterator_next(&statsctx->compressed_chunk_stats_iterator))
+	{
+		Form_compression_chunk_size fd;
+		bool should_free;
+		HeapTuple tuple = ts_scan_iterator_fetch_heap_tuple(&statsctx->compressed_chunk_stats_iterator, false, &should_free);
+		
+		fd = (Form_compression_chunk_size) GETSTRUCT(tuple);
+		memcpy(compr_stats, fd, sizeof(*fd));
+		
+		if (should_free)
+			heap_freetuple(tuple);
+		
+		return true;
+	}
+
+	/* Shouldn't really get here */
+	statsctx->iterator_valid = false;
+
+	return false;
 }
 
 /*
@@ -99,7 +129,7 @@ process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk 
 	AllRelkindStats *stats = statsctx->stats;
 	const Hypertable *ht;
 
-	/* Lookup the chunk's parent hypertable */
+	/* Look up the chunk's parent hypertable */
 	ht = ts_hypertable_cache_get_entry(htcache, chunk->hypertable_relid, CACHE_FLAG_NONE);
 
 	if (TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht))
@@ -111,12 +141,19 @@ process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk 
 	}
 	else
 	{
+		FormData_compression_chunk_size comp_stats_data;
+		Form_compression_chunk_size compr_stats = NULL;
+
+		if (get_chunk_compression_stats(statsctx, chunk, &comp_stats_data))
+			compr_stats = &comp_stats_data;
+		
 		switch (ht->fd.replication_factor)
 		{
 			case HYPERTABLE_DISTRIBUTED_MEMBER:
 				add_chunk_stats(&stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE_MEMBER],
 								class,
-								chunk, NULL);
+								chunk,
+								compr_stats);
 				break;
 			case HYPERTABLE_REGULAR:
 			{
@@ -125,56 +162,9 @@ process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk 
 				const ContinuousAgg *cagg = ts_continuous_agg_find_by_mat_hypertable_id(ht->fd.id);
 
 				if (cagg)
-					add_chunk_stats(&stats->hyperstats[STATS_HYPER_CONTINUOUS_AGG], class, chunk, NULL);
+					add_chunk_stats(&stats->hyperstats[STATS_HYPER_CONTINUOUS_AGG], class, chunk, compr_stats);
 				else 
-				{
-					bool found_compression_stats = false;
-					
-					if (ts_chunk_is_compressed(chunk))
-					{
-						
-						elog(NOTICE, "Finding compression stats for chunk %d", chunk->fd.id);
-						ts_scan_iterator_reset(&statsctx->compressed_chunk_stats_iterator);
-						ts_scan_iterator_scan_key_init(&statsctx->compressed_chunk_stats_iterator,
-													   Anum_compression_chunk_size_pkey_chunk_id,
-													   BTEqualStrategyNumber,
-													   F_INT4EQ,
-													   Int32GetDatum(chunk->fd.id));
-						
-						if (statsctx->iterator_valid)
-							ts_scan_iterator_rescan(&statsctx->compressed_chunk_stats_iterator);
-						else
-						{
-							ts_scan_iterator_start_scan(&statsctx->compressed_chunk_stats_iterator);
-							statsctx->iterator_valid = true;
-						}
-						
-						if (ts_scan_iterator_next(&statsctx->compressed_chunk_stats_iterator))
-						{
-							Form_compression_chunk_size fd;
-							bool should_free;
-							HeapTuple tuple = ts_scan_iterator_fetch_heap_tuple(&statsctx->compressed_chunk_stats_iterator, false, &should_free);
-
-							fd = (Form_compression_chunk_size) GETSTRUCT(tuple);
-							
-							add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE], class, chunk, fd);
-							
-							if (should_free)
-								heap_freetuple(tuple);
-
-							found_compression_stats = true;
-							elog(NOTICE, "Found compression stats for chunk %d", chunk->fd.id);
-						}
-						else
-						{
-							elog(NOTICE, "chunk compression stats not found for compressed chunk %d", chunk->fd.id);
-							statsctx->iterator_valid = false;
-						}
-					}
-
-					if (!found_compression_stats)
-						add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE], class, chunk, NULL);
-				}
+					add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE], class, chunk, compr_stats);
 				break;
 			}
 			case HYPERTABLE_DISTRIBUTED:
@@ -281,18 +271,7 @@ process_foreign_table_stats(AllRelkindStats *stats, Form_pg_class class)
 		const Chunk *chunk = ts_chunk_get_by_relid(class->oid, false);
 
 		if (chunk)
-		{
-			add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE], class, chunk, NULL);
-
-			/* Normally, the count of the number of compressed chunks comes
-			 * from counting the chunks in the internal compression
-			 * hypertable. But a distributed hypertable has no internal
-			 * compression table on the access node, so, for this case, we
-			 * handle the count of compressed chunks based on the reported
-			 * compression status on the main table chunk instead. */
-			if (ts_chunk_is_compressed(chunk))
-				stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE_COMPRESSED].chunkcount++;
-		}
+			add_chunk_stats(&stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE], class, chunk, NULL);
 		else
 			process_relation_stats(&stats->basestats[STATS_BASE_FOREIGN_TABLE], class);
 	}
