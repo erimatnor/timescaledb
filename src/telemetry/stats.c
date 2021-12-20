@@ -20,12 +20,6 @@
 #include "hypertable_cache.h"
 #include "ts_catalog/continuous_agg.h"
 
-typedef struct StatProcessCtx
-{
-	AllRelkindStats *stats;
-	Relation compression_stats_rel;
-} StatsProcessCtx;
-
 static void
 add_storage_stats(StorageStats *stats, Form_pg_class class)
 {

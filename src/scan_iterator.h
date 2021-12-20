@@ -18,6 +18,7 @@ typedef struct ScanIterator
 	ScannerCtx ctx;
 	TupleInfo *tinfo;
 	InternalScannerCtx ictx;
+	MemoryContext scankey_mcxt;
 	ScanKeyData scankey[EMBEDDED_SCAN_KEY_SIZE];
 } ScanIterator;
 
@@ -30,7 +31,8 @@ typedef struct ScanIterator
 			.scandirection = ForwardScanDirection,                                                 \
 			.lockmode = lock_mode,                                                                 \
 			.result_mctx = mctx,                                                                   \
-		}                                                                                          \
+		},																\
+			.scankey_mcxt = CurrentMemoryContext,						\
 	}
 
 static inline TupleInfo *
@@ -81,11 +83,23 @@ ts_scan_iterator_next(ScanIterator *iterator)
 	return ts_scanner_next(&(iterator)->ctx, &(iterator)->ictx);
 }
 
-void TSDLLEXPORT ts_scan_iterator_close(ScanIterator *iterator);
+static inline void
+ts_scan_key_reset(ScanIterator *iterator)
+{
+	iterator->ctx.nkeys = 0;
+}
 
+void TSDLLEXPORT ts_scan_iterator_close(ScanIterator *iterator);
 void TSDLLEXPORT ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumber attributeNumber,
 												StrategyNumber strategy, RegProcedure procedure,
 												Datum argument);
+
+/*
+ * Reset the scan to use a new scan key.
+ *
+ * Note that the scan key should typically be reinitialized before a rescan.
+*/
+void TSDLLEXPORT ts_scan_iterator_rescan(ScanIterator *iterator);
 
 /* You must use `ts_scan_iterator_close` if terminating this loop early */
 #define ts_scanner_foreach(scan_iterator)                                                          \
