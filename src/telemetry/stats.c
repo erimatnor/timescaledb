@@ -18,46 +18,160 @@
 #include "stats.h"
 #include "catalog.h"
 #include "chunk.h"
+#include "extension.h"
 #include "hypertable_cache.h"
 #include "ts_catalog/continuous_agg.h"
 
 typedef struct StatProcessCtx
 {
 	AllRelkindStats *stats;
-    ScanIterator compressed_chunk_stats_iterator;
+	ScanIterator compressed_chunk_stats_iterator;
 	bool iterator_valid;
 } StatsProcessCtx;
+
+static StatsRelType
+classify_hypertable(const Hypertable *ht)
+{
+	if (TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht))
+	{
+		/* This is an internal compression table, but could be for a
+		 * regular hypertable, a distributed member hypertable, or for
+		 * an internal materialized hypertable (cagg). The latter case
+		 * is currently not handled */
+		return RELTYPE_COMPRESSION_HYPERTABLE;
+	}
+	else
+	{
+		/* Not dealing with an internal compression hypertable, but
+		 * could be a materialized hypertable (cagg) unless it is
+		 * distributed.  */
+		switch (ht->fd.replication_factor)
+		{
+			case HYPERTABLE_DISTRIBUTED_MEMBER:
+				return RELTYPE_DISTRIBUTED_HYPERTABLE;
+			case HYPERTABLE_REGULAR: {
+				const ContinuousAgg *cagg = ts_continuous_agg_find_by_mat_hypertable_id(ht->fd.id);
+
+				if (cagg)
+					return RELTYPE_MATERIALIZED_HYPERTABLE;
+
+				return RELTYPE_HYPERTABLE;
+			}
+			case HYPERTABLE_DISTRIBUTED:
+				return RELTYPE_DISTRIBUTED_HYPERTABLE;
+			default:
+				Assert(ht->fd.replication_factor > 1);
+				return RELTYPE_REPLICATED_DISTRIBUTED_HYPERTABLE;
+		}
+	}
+}
+
+static StatsRelType
+classify_inheritance_table(Oid relid, Cache *htcache, const Hypertable **ht)
+{
+		/* Check if this is a hypertable */
+	*ht = ts_hypertable_cache_get_entry(htcache, relid, CACHE_FLAG_MISSING_OK);
+	
+	if (*ht)
+		return classify_hypertable(*ht);
+	
+	return RELTYPE_TABLE;
+}
+
+static StatsRelType
+classify_table(Form_pg_class class, Cache *htcache, const Hypertable **ht, const Chunk **chunk)
+{
+	if (class->relispartition)
+		return RELTYPE_PARTITION;
+	else if (class->relhassubclass)
+		return classify_inheritance_table(class->oid, htcache, ht);
+	else
+	{
+		/* Check if it is a chunk */
+		*chunk = ts_chunk_get_by_relid(class->oid, false);
+
+		if (*chunk)
+		{
+			if (class->relkind == RELKIND_FOREIGN_TABLE)
+				return RELTYPE_DISTRIBUTED_CHUNK;
+			return RELTYPE_CHUNK;
+		}
+	}
+
+	return RELTYPE_OTHER;
+}
+
+static StatsRelType
+classify_foreign_table(Oid relid, const Chunk **chunk)
+{
+	*chunk = ts_chunk_get_by_relid(relid, false);
+
+	if (*chunk)
+		return RELTYPE_DISTRIBUTED_CHUNK;
+
+	return RELTYPE_FOREIGN_TABLE;
+}
+
+static StatsRelType
+classify_view(Oid relid, Cache *htcache)
+{
+	const ContinuousAgg *cagg = ts_continuous_agg_find_by_relid(relid);
+
+	if (cagg)
+		return RELTYPE_CONTINUOUS_AGG;
+
+	/* Ignore internal cagg views, so classify as other */
+	cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggPartialView);
+
+	if (cagg)
+		return RELTYPE_OTHER;
+
+	cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggDirectView);
+
+	if (cagg)
+		return RELTYPE_OTHER;
+
+	return RELTYPE_VIEW;
+}
+
+static StatsRelType
+classify_relation(Form_pg_class class, Cache *htcache, const Hypertable **ht, const Chunk **chunk)
+{
+	*chunk = NULL;
+	*ht = NULL;
+	
+	switch (class->relkind)
+	{
+		case RELKIND_INDEX:
+			return RELTYPE_INDEX;
+		case RELKIND_RELATION:
+			return classify_table(class, htcache, ht, chunk);
+		case RELKIND_FOREIGN_TABLE:
+			return classify_foreign_table(class->oid, chunk);
+		case RELKIND_PARTITIONED_TABLE:
+			return RELTYPE_PARTITIONED_TABLE;
+		case RELKIND_PARTITIONED_INDEX:
+			return RELTYPE_PARTITIONED_INDEX;
+		case RELKIND_MATVIEW:
+			return RELTYPE_MATVIEW;
+		case RELKIND_VIEW:
+			return classify_view(class->oid, htcache);
+		default:
+			return RELTYPE_OTHER;
+	}
+}
 
 static void
 add_storage_stats(StorageStats *stats, Form_pg_class class)
 {
-	Datum res;
+	Datum relsize;
 
 	stats->reltuples += class->reltuples;
 	stats->relpages += class->relpages;
-	res = DirectFunctionCall1(pg_total_relation_size,
-							  ObjectIdGetDatum(class->oid));
-	stats->relsize += DatumGetInt64(res);
-}
-
-static void
-add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk, const Form_compression_chunk_size fd_compr)
-{
-	add_storage_stats(&stats->storage, class);
-	stats->chunkcount++;
-
-	if (ts_chunk_is_compressed(chunk))
-		stats->compressed_chunkcount++;
-
-	if (NULL != fd_compr)
-	{
-		stats->compressed_heap_size += fd_compr->compressed_heap_size;
-		stats->compressed_index_size += fd_compr->compressed_index_size;
-		stats->compressed_toast_size += fd_compr->compressed_toast_size;
-		stats->uncompressed_heap_size += fd_compr->uncompressed_heap_size;
-		stats->uncompressed_index_size += fd_compr->uncompressed_index_size;
-		stats->uncompressed_toast_size += fd_compr->uncompressed_toast_size;		
-	}
+	relsize = DirectFunctionCall1(pg_total_relation_size, ObjectIdGetDatum(class->oid));
+	stats->total_relation_size += DatumGetInt64(relsize);
+	relsize = DirectFunctionCall1(pg_indexes_size, ObjectIdGetDatum(class->oid));
+	stats->indexes_size += DatumGetInt64(relsize);
 }
 
 static void
@@ -69,19 +183,54 @@ process_relation_stats(BaseStats *stats, Form_pg_class class)
 		add_storage_stats((StorageStats *) stats, class);
 }
 
+static void
+process_distributed_hypertable_stats(BaseStats *stats, Form_pg_class class)
+{
+	stats->relcount++;
+}
+
+static void
+add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk,
+				const Form_compression_chunk_size fd_compr)
+{
+	stats->chunkcount++;
+
+	if (RELKIND_HAS_STORAGE(class->relkind))
+		add_storage_stats(&stats->storage, class);
+
+	if (ts_chunk_is_compressed(chunk))
+		stats->compressed_chunkcount++;
+
+	if (NULL != fd_compr)
+	{
+		stats->compressed_heap_size += fd_compr->compressed_heap_size;
+		stats->compressed_indexes_size += fd_compr->compressed_index_size;
+		stats->compressed_toast_size += fd_compr->compressed_toast_size;
+		stats->uncompressed_heap_size += fd_compr->uncompressed_heap_size;
+		stats->uncompressed_indexes_size += fd_compr->uncompressed_index_size;
+		stats->uncompressed_toast_size += fd_compr->uncompressed_toast_size;
+
+		/* Also add compressed sizes to total number for entire table */
+		stats->storage.indexes_size += fd_compr->compressed_index_size;
+		stats->storage.total_relation_size += fd_compr->compressed_heap_size +
+			fd_compr->compressed_toast_size;
+	}
+}
+
 static bool
-get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk, Form_compression_chunk_size compr_stats)
+get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
+							Form_compression_chunk_size compr_stats)
 {
 	if (!ts_chunk_is_compressed(chunk))
 		return false;
-	
+
 	ts_scan_iterator_reset(&statsctx->compressed_chunk_stats_iterator);
 	ts_scan_iterator_scan_key_init(&statsctx->compressed_chunk_stats_iterator,
 								   Anum_compression_chunk_size_pkey_chunk_id,
 								   BTEqualStrategyNumber,
 								   F_INT4EQ,
 								   Int32GetDatum(chunk->fd.id));
-	
+
 	if (statsctx->iterator_valid)
 		ts_scan_iterator_rescan(&statsctx->compressed_chunk_stats_iterator);
 	else
@@ -89,19 +238,22 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk, Form_
 		ts_scan_iterator_start_scan(&statsctx->compressed_chunk_stats_iterator);
 		statsctx->iterator_valid = true;
 	}
-	
+
 	if (ts_scan_iterator_next(&statsctx->compressed_chunk_stats_iterator))
 	{
 		Form_compression_chunk_size fd;
 		bool should_free;
-		HeapTuple tuple = ts_scan_iterator_fetch_heap_tuple(&statsctx->compressed_chunk_stats_iterator, false, &should_free);
-		
+		HeapTuple tuple =
+			ts_scan_iterator_fetch_heap_tuple(&statsctx->compressed_chunk_stats_iterator,
+											  false,
+											  &should_free);
+
 		fd = (Form_compression_chunk_size) GETSTRUCT(tuple);
 		memcpy(compr_stats, fd, sizeof(*fd));
-		
+
 		if (should_free)
 			heap_freetuple(tuple);
-		
+
 		return true;
 	}
 
@@ -124,21 +276,20 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk, Form_
  *  - Internal compression table for materialized hypertable (cagg)
  */
 static void
-process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk *chunk, Cache *htcache)
+process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk *chunk,
+					Cache *htcache)
 {
 	AllRelkindStats *stats = statsctx->stats;
 	const Hypertable *ht;
+	StatsRelType reltype;
 
-	/* Look up the chunk's parent hypertable */
-	ht = ts_hypertable_cache_get_entry(htcache, chunk->hypertable_relid, CACHE_FLAG_NONE);
+	Assert(chunk);
+	
+	/* Classify the chunk's parent */
+	reltype = classify_inheritance_table(chunk->hypertable_relid, htcache, &ht);	
 
-	if (TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht))
-	{
-		/* This is an internal compression table, but could be for a regular
-		 * hypertable or for an internal materialized hypertable (cagg). The
-		 * latter case is currently not handled */
-		add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE_COMPRESSED], class, chunk, NULL);
-	}
+	if (reltype == RELTYPE_COMPRESSION_HYPERTABLE)
+		add_chunk_stats(&stats->hyperstats[STATS_HYPERTABLE_COMPRESSED], class, chunk, NULL);
 	else
 	{
 		FormData_compression_chunk_size comp_stats_data;
@@ -147,151 +298,66 @@ process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk 
 		if (get_chunk_compression_stats(statsctx, chunk, &comp_stats_data))
 			compr_stats = &comp_stats_data;
 		
-		switch (ht->fd.replication_factor)
+		/* Classify the chunk's parent */
+		switch (reltype)
 		{
-			case HYPERTABLE_DISTRIBUTED_MEMBER:
-				add_chunk_stats(&stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE_MEMBER],
-								class,
-								chunk,
-								compr_stats);
-				break;
-			case HYPERTABLE_REGULAR:
-			{
-				/* Not dealing with an internal compression hypertable, but could be a
-				 * materialized hypertable (cagg) */
-				const ContinuousAgg *cagg = ts_continuous_agg_find_by_mat_hypertable_id(ht->fd.id);
-
-				if (cagg)
-					add_chunk_stats(&stats->hyperstats[STATS_HYPER_CONTINUOUS_AGG], class, chunk, compr_stats);
-				else 
-					add_chunk_stats(&stats->hyperstats[STATS_HYPER_HYPERTABLE], class, chunk, compr_stats);
-				break;
-			}
-			case HYPERTABLE_DISTRIBUTED:
-				/* This case is handled when processing foreign tables. It can
-				 * be handled more efficiently there. */
-				Assert(false);
-				break;
-			default:
-				Assert(ht->fd.replication_factor >= 1);
-				Assert(!TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht));
-				/* TODO: handle replicated hypertables */
-				break;
+		case RELTYPE_HYPERTABLE:
+			add_chunk_stats(&stats->hyperstats[STATS_HYPERTABLE],
+							class,
+							chunk,
+							compr_stats);
+			break;
+		case RELTYPE_DISTRIBUTED_HYPERTABLE:
+			add_chunk_stats(&stats->hyperstats[STATS_DISTRIBUTED_HYPERTABLE],
+							class,
+							chunk,
+							compr_stats);
+			break;
+		case RELTYPE_DISTRIBUTED_HYPERTABLE_MEMBER:
+			add_chunk_stats(&stats->hyperstats[STATS_DISTRIBUTED_HYPERTABLE_MEMBER],
+							class,
+							chunk,
+							compr_stats);
+			break;
+		case RELTYPE_MATERIALIZED_HYPERTABLE:
+			add_chunk_stats(&stats->hyperstats[STATS_CONTINUOUS_AGG],
+							class,
+							chunk,
+							compr_stats);
+			break;
+		default:
+			break;
 		}
 	}
 }
 
-static void
-process_table_stats(StatsProcessCtx *statsctx, Form_pg_class class, Cache *htcache)
+
+static bool
+is_information_or_catalog_schema(Oid namespace)
 {
-	AllRelkindStats *stats = statsctx->stats;
+	static Oid information_schema_oid = InvalidOid;
+	static Oid timescaledb_information_oid = InvalidOid;
 	
-	/* Check things that are already in the pg_class tuple first before
-	 * further lookups */
-	if (class->relispartition)
-	{
-		/* Partition in a partitioned table */
-	}
-	else if (class->relhassubclass)
-	{
-		/* Could be a hypertable */
-		const Hypertable *ht;
+	if (namespace == PG_CATALOG_NAMESPACE ||
+		namespace == PG_TOAST_NAMESPACE)
+		return true;
+	
+	if (!OidIsValid(information_schema_oid))
+		information_schema_oid = get_namespace_oid("information_schema", false);
 
-		ht = ts_hypertable_cache_get_entry(htcache, class->oid, CACHE_FLAG_MISSING_OK);
-
-		if (ht)
-		{
-			if (TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht))
-			{
-				/* This is an internal compression table, but could be for a
-				 * regular hypertable, a distributed member hypertable, or for
-				 * an internal materialized hypertable (cagg). The latter case
-				 * is currently not handled */
-				process_relation_stats((BaseStats *) &stats->hyperstats[STATS_HYPER_HYPERTABLE_COMPRESSED],
-									   class);
-			}
-			else
-			{
-				/* Not dealing with an internal compression hypertable, but
-				 * could be a materialized hypertable (cagg).  */
-				switch (ht->fd.replication_factor)
-				{
-					case HYPERTABLE_DISTRIBUTED_MEMBER:
-						process_relation_stats((BaseStats *) &stats->hyperstats
-												   [STATS_HYPER_DISTRIBUTED_HYPERTABLE_MEMBER],
-											   class);
-						break;
-					case HYPERTABLE_REGULAR:
-					{
-						const ContinuousAgg *cagg =
-							ts_continuous_agg_find_by_mat_hypertable_id(ht->fd.id);
-
-						/* Don't count internal materialized hypertables here
-						 * (caggs), since those are processed when the main view
-						 * is processed. */
-						if (!cagg)
-							process_relation_stats((BaseStats *) &stats->hyperstats[STATS_HYPER_HYPERTABLE],
-												   class);
-						break;
-					}
-					case HYPERTABLE_DISTRIBUTED:
-						process_relation_stats((BaseStats *) &stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE],
-											   class);
-						break;
-					default:
-						Assert(ht->fd.replication_factor >= 1);
-						Assert(!TS_HYPERTABLE_IS_INTERNAL_COMPRESSION_TABLE(ht));
-						/* TODO: handle replicated hypertables */
-
-						break;
-				}
-			}
-		}
-	}
-	else
-	{
-		/* Check if it is a chunk */
-		const Chunk *chunk = ts_chunk_get_by_relid(class->oid, false);
-
-		if (chunk)
-			process_chunk_stats(statsctx, class, chunk, htcache);
-	}
+	if (!OidIsValid(timescaledb_information_oid))
+	   timescaledb_information_oid = get_namespace_oid("timescaledb_information", false);
+	
+	return namespace == information_schema_oid ||
+		namespace == timescaledb_information_oid ||
+		namespace == ts_extension_schema_oid();
 }
 
-static void
-process_foreign_table_stats(AllRelkindStats *stats, Form_pg_class class)
+static bool
+should_ignore_relation(Form_pg_class class)
 {
-	if (class->relispartition)
-	{
-		/* Partition in a partitioned table */
-	}
-	else
-	{
-		/* Check if it is a chunk in a distributed hypertable */
-		const Chunk *chunk = ts_chunk_get_by_relid(class->oid, false);
-
-		if (chunk)
-			add_chunk_stats(&stats->hyperstats[STATS_HYPER_DISTRIBUTED_HYPERTABLE], class, chunk, NULL);
-		else
-			process_relation_stats(&stats->basestats[STATS_BASE_FOREIGN_TABLE], class);
-	}
-}
-
-static void
-process_view_stats(AllRelkindStats *stats, Form_pg_class class, Cache *htcache)
-{
-	const ContinuousAgg *cagg = ts_continuous_agg_find_by_relid(class->oid);
-
-	if (cagg)
-		process_relation_stats((BaseStats *) &stats->hyperstats[STATS_HYPER_CONTINUOUS_AGG], class);
-
-	/* TODO: filter internal cagg views */
-}
-
-static bool should_ignore_relation(Form_pg_class class)
-{
-	return (class->relnamespace == PG_CATALOG_NAMESPACE ||
-			class->relnamespace == PG_TOAST_NAMESPACE || isAnyTempNamespace(class->relnamespace) ||
+	return (is_information_or_catalog_schema(class->relnamespace) ||
+			isAnyTempNamespace(class->relnamespace) ||
 			ts_is_catalog_table(class->oid));
 }
 
@@ -302,13 +368,13 @@ stats_init(AllRelkindStats *stats)
 
 	MemSet(stats, 0, sizeof(*stats));
 
-	for (i = 0; i < STATS_BASE_MAX; i++)
+	for (i = 0; i < _MAX_STATS_BASE; i++)
 		stats->basestats[i].type = STATS_TYPE_BASE;
 
-	for (i = 0; i < STATS_STORAGE_MAX; i++)
+	for (i = 0; i < _MAX_STATS_STORAGE; i++)
 		stats->storagestats[i].base.type = STATS_TYPE_STORAGE;
 
-	for (i = 0; i < STATS_HYPER_MAX; i++)
+	for (i = 0; i < _MAX_STATS_HYPER; i++)
 		stats->hyperstats[i].storage.base.type = STATS_TYPE_HYPER;
 }
 
@@ -320,15 +386,15 @@ get_stats(AllRelkindStats *stats, StatsType type, unsigned index)
 	switch (type)
 	{
 		case STATS_TYPE_BASE:
-			Assert(index < STATS_BASE_MAX);
+			Assert(index < _MAX_STATS_BASE);
 			res = &stats->basestats[index];
 			break;
 		case STATS_TYPE_STORAGE:
-			Assert(index < STATS_STORAGE_MAX);
+			Assert(index < _MAX_STATS_STORAGE);
 			res = (BaseStats *) &stats->storagestats[index];
 			break;
 		case STATS_TYPE_HYPER:
-			Assert(index < STATS_HYPER_MAX);
+			Assert(index < _MAX_STATS_HYPER);
 			res = (BaseStats *) &stats->hyperstats[index];
 			break;
 	}
@@ -354,12 +420,11 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 	};
 
 	stats_init(stats);
-	iterator = ts_scan_iterator_create(COMPRESSION_CHUNK_SIZE,
-									   AccessShareLock,
-									   CurrentMemoryContext);
+	iterator =
+		ts_scan_iterator_create(COMPRESSION_CHUNK_SIZE, AccessShareLock, CurrentMemoryContext);
 	ts_scan_iterator_set_index(&iterator, COMPRESSION_CHUNK_SIZE, COMPRESSION_CHUNK_SIZE_PKEY);
 	statsctx.compressed_chunk_stats_iterator = iterator;
-	
+
 	rel = table_open(RelationRelationId, AccessShareLock);
 	scan = systable_beginscan(rel, ClassOidIndexId, false, NULL, 0, NULL);
 
@@ -373,7 +438,10 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 	{
 		HeapTuple tup;
 		Form_pg_class class;
-
+		StatsRelType reltype;
+		const Chunk *chunk = NULL;
+		const Hypertable *ht = NULL;
+		
 		MemoryContextReset(relmcxt);
 		tup = systable_getnext(scan);
 
@@ -385,40 +453,67 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 		if (should_ignore_relation(class))
 			continue;
 
-		switch (class->relkind)
+		reltype = classify_relation(class, htcache, &ht, &chunk);
+
+		switch (reltype)
 		{
-			case RELKIND_RELATION:
-				process_table_stats(&statsctx, class, htcache);
-				break;
-			case RELKIND_INDEX:
-				process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_STORAGE_INDEX),
+		case RELTYPE_HYPERTABLE:
+			process_relation_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_HYPERTABLE), class);
+			break;
+		case RELTYPE_DISTRIBUTED_HYPERTABLE:
+			process_distributed_hypertable_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_DISTRIBUTED_HYPERTABLE), class);
+			break;
+		case RELTYPE_REPLICATED_DISTRIBUTED_HYPERTABLE:
+			break;
+		case RELTYPE_DISTRIBUTED_HYPERTABLE_MEMBER:
+			process_relation_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_DISTRIBUTED_HYPERTABLE_MEMBER), class);
+			break;
+		case RELTYPE_COMPRESSION_HYPERTABLE:
+			process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_HYPERTABLE_COMPRESSED), class);
+			break;
+		case RELTYPE_MATERIALIZED_HYPERTABLE:
+			break;
+		case RELTYPE_TABLE:
+			process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_TABLE), class);
+			break;
+		case RELTYPE_FOREIGN_TABLE:
+			process_relation_stats(get_stats(stats, STATS_TYPE_BASE, STATS_FOREIGN_TABLE), class);
+			break;
+		case RELTYPE_PARTITIONED_TABLE:
+			process_relation_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_PARTITIONED_TABLE),
 									   class);
-				break;
-			case RELKIND_FOREIGN_TABLE:
-				process_foreign_table_stats(stats, class);
-				break;
-			case RELKIND_PARTITIONED_TABLE:
-				process_relation_stats(get_stats(stats,
-												 STATS_TYPE_HYPER,
-												 STATS_HYPER_PARTITIONED_TABLE),
+			break;
+		case RELTYPE_CHUNK:
+		case RELTYPE_DISTRIBUTED_CHUNK:
+			process_chunk_stats(&statsctx, class, chunk, htcache);
+			break;
+		case RELTYPE_COMPRESSION_CHUNK:
+			add_chunk_stats(&stats->hyperstats[STATS_HYPERTABLE_COMPRESSED], class, chunk, NULL);
+			break;
+		case RELTYPE_MATERIALIZED_CHUNK:
+			add_chunk_stats(&stats->hyperstats[STATS_CONTINUOUS_AGG], class, chunk, NULL);
+			break;
+		case RELTYPE_PARTITION:
+			break;
+		case RELTYPE_INDEX:			
+			process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_INDEX), class);
+			break;
+		case RELTYPE_PARTITIONED_INDEX:
+			process_relation_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_PARTITIONED_INDEX),
 									   class);
-				break;
-			case RELKIND_PARTITIONED_INDEX:
-				process_relation_stats(get_stats(stats,
-												 STATS_TYPE_HYPER,
-												 STATS_HYPER_PARTITIONED_INDEX),
+			break;
+		case RELTYPE_VIEW:			
+			process_relation_stats(get_stats(stats, STATS_TYPE_BASE, STATS_VIEW),
 									   class);
-				break;
-			case RELKIND_VIEW:
-				process_view_stats(stats, class, htcache);
-				break;
-			case RELKIND_MATVIEW:
-				process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_STORAGE_MATVIEW),
-									   class);
-				break;
-			default:
-				/* RELKIND we don't care about */
-				break;
+			break;
+		case RELTYPE_MATVIEW:
+			process_relation_stats(get_stats(stats, STATS_TYPE_STORAGE, STATS_MATVIEW), class);
+			break;
+		case RELTYPE_CONTINUOUS_AGG:
+			process_relation_stats(get_stats(stats, STATS_TYPE_HYPER, STATS_CONTINUOUS_AGG), class);
+			break;
+		case RELTYPE_OTHER:
+			break;
 		}
 	}
 
