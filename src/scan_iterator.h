@@ -23,9 +23,9 @@ typedef struct ScanIterator
 	ScanKeyData scankey[EMBEDDED_SCAN_KEY_SIZE];
 } ScanIterator;
 
-#define ts_scan_iterator_create(catalog_table_id, lock_mode, mctx)                                 \
-	(ScanIterator)                                                                                 \
-	{                                                                                              \
+#define ts_scan_iterator_create(catalog_table_id, lock_mode, mctx)                                   \
+	(ScanIterator)                                                                                   \
+	{                                                                                                \
 		.ctx = {                                                                                   \
 			.table = catalog_get_table_id(ts_catalog_get(), catalog_table_id),                     \
 			.nkeys = 0,                                                                            \
@@ -33,7 +33,7 @@ typedef struct ScanIterator
 			.lockmode = lock_mode,                                                                 \
 			.result_mctx = mctx,                                                                   \
 		},																\
-			.scankey_mcxt = CurrentMemoryContext,						\
+			.scankey_mcxt = CurrentMemoryContext, \
 	}
 
 static inline TupleInfo *
@@ -93,7 +93,8 @@ ts_scan_iterator_reset(ScanIterator *iterator)
 	iterator->ctx.nkeys = 0;
 }
 
-void TSDLLEXPORT ts_scan_iterator_set_index(ScanIterator *iterator, CatalogTable table, int indexid);
+void TSDLLEXPORT ts_scan_iterator_set_index(ScanIterator *iterator, CatalogTable table,
+											int indexid);
 void TSDLLEXPORT ts_scan_iterator_close(ScanIterator *iterator);
 void TSDLLEXPORT ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumber attributeNumber,
 												StrategyNumber strategy, RegProcedure procedure,
@@ -103,7 +104,7 @@ void TSDLLEXPORT ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumb
  * Reset the scan to use a new scan key.
  *
  * Note that the scan key should typically be reinitialized before a rescan.
-*/
+ */
 void TSDLLEXPORT ts_scan_iterator_rescan(ScanIterator *iterator);
 
 /* You must use `ts_scan_iterator_close` if terminating this loop early */

@@ -337,12 +337,10 @@ add_compression_stats_object(JsonbParseState *parse_state, const HyperStats *hyp
 	pushJsonbValue(&parse_state, WJB_KEY, &name);
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
-	ts_jsonb_add_int64(parse_state,						   
-					   REQ_RELKIND_COMPRESSED_CHUNKS,
-					   hyper->compressed_chunkcount);
+	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COMPRESSED_CHUNKS, hyper->compressed_chunkcount);
 	ts_jsonb_add_int64(parse_state,
 					   REQ_RELKIND_COMPRESSED_TOTAL_RELATION_SIZE,
-					   hyper->compressed_heap_size + hyper->compressed_toast_size);		
+					   hyper->compressed_heap_size + hyper->compressed_toast_size);
 	ts_jsonb_add_int64(parse_state,
 					   REQ_RELKIND_COMPRESSED_INDEXES_SIZE,
 					   hyper->compressed_indexes_size);
@@ -352,7 +350,7 @@ add_compression_stats_object(JsonbParseState *parse_state, const HyperStats *hyp
 	ts_jsonb_add_int64(parse_state,
 					   REQ_RELKIND_UNCOMPRESSED_INDEXES_SIZE,
 					   hyper->uncompressed_indexes_size);
-		
+
 	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 }
 
@@ -374,7 +372,9 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 	{
 		const StorageStats *storage = (StorageStats *) stats;
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_RELTUPLES, storage->reltuples);
-		ts_jsonb_add_int64(parse_state, REQ_RELKIND_TOTAL_RELATION_SIZE, storage->total_relation_size);
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_TOTAL_RELATION_SIZE,
+						   storage->total_relation_size);
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_INDEXES_SIZE, storage->indexes_size);
 	}
 
@@ -405,8 +405,7 @@ static const char *hyper_stats_names[] = {
 	[STATS_DISTRIBUTED_HYPERTABLE] = "distributed_hypertables",
 	[STATS_DISTRIBUTED_HYPERTABLE_COMPRESSED] = "compressed_distributed_hypertables",
 	[STATS_DISTRIBUTED_HYPERTABLE_MEMBER] = "distributed_hypertable_members",
-	[STATS_DISTRIBUTED_HYPERTABLE_MEMBER_COMPRESSED] =
-		"compressed_distributed_hypertable_members",
+	[STATS_DISTRIBUTED_HYPERTABLE_MEMBER_COMPRESSED] = "compressed_distributed_hypertable_members",
 	[STATS_CONTINUOUS_AGG] = "continuous_aggregates",
 	[STATS_CONTINUOUS_AGG_COMPRESSED] = "compressed_continuous_aggregates",
 	[STATS_PARTITIONED_TABLE] = "partitioned_tables",

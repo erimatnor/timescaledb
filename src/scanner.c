@@ -116,12 +116,11 @@ index_scanner_getnext(InternalScannerCtx *ctx)
 	return success;
 }
 
-
 static void
 index_scanner_rescan(InternalScannerCtx *ctx)
 {
 	ScannerCtx *sctx = ctx->sctx;
-	
+
 	index_rescan(ctx->scan.index_scan, sctx->scankey, sctx->nkeys, NULL, sctx->norderbys);
 }
 
@@ -180,7 +179,7 @@ ts_scanner_rescan(ScannerCtx *ctx, InternalScannerCtx *ictx, const ScanKey scank
 	 * old should be reused */
 	if (NULL != scankey)
 		memcpy(ctx->scankey, scankey, sizeof(*ctx->scankey));
-	
+
 	scanner->rescan(ictx);
 }
 
@@ -248,13 +247,11 @@ ts_scanner_start_scan(ScannerCtx *ctx, InternalScannerCtx *ictx)
 		ctx->prescan(ctx->data);
 }
 
-
 static inline bool
 ts_scanner_limit_reached(ScannerCtx *ctx, InternalScannerCtx *ictx)
 {
 	return ctx->limit > 0 && ictx->tinfo.count >= ctx->limit;
 }
-
 
 TSDLLEXPORT void
 ts_scanner_end_scan(ScannerCtx *ctx, InternalScannerCtx *ictx)

@@ -27,21 +27,20 @@ ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumber attributeNumbe
 
 	Assert(iterator->ctx.scankey == NULL || iterator->ctx.scankey == iterator->scankey);
 	iterator->ctx.scankey = iterator->scankey;
-	
+
 	if (iterator->ctx.nkeys >= EMBEDDED_SCAN_KEY_SIZE)
 		elog(ERROR, "cannot scan more than %d keys", EMBEDDED_SCAN_KEY_SIZE);
 
-
 	/* For rescans, when the scan key is reinitialized during the scan, make
 	 * sure the scan eky is initialized on the long-lived scankey memory
-	 * context. */ 
+	 * context. */
 	oldmcxt = MemoryContextSwitchTo(iterator->scankey_mcxt);
 	ScanKeyInit(&iterator->scankey[iterator->ctx.nkeys++],
 				attributeNumber,
 				strategy,
 				procedure,
 				argument);
-    MemoryContextSwitchTo(oldmcxt);
+	MemoryContextSwitchTo(oldmcxt);
 }
 
 TSDLLEXPORT void
