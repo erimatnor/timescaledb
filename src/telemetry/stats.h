@@ -17,7 +17,6 @@ typedef enum StatsType
 
 typedef struct BaseStats
 {
-	StatsType type;
 	int64 relcount;
 } BaseStats;
 
@@ -44,36 +43,6 @@ typedef struct HyperStats
 	int64 uncompressed_toast_size;
 } HyperStats;
 
-typedef enum HyperStatsIndex
-{
-	STATS_HYPERTABLE,
-	STATS_HYPERTABLE_COMPRESSED,
-	STATS_DISTRIBUTED_HYPERTABLE,
-	STATS_DISTRIBUTED_HYPERTABLE_COMPRESSED,
-	STATS_DISTRIBUTED_HYPERTABLE_MEMBER,
-	STATS_DISTRIBUTED_HYPERTABLE_MEMBER_COMPRESSED,
-	STATS_CONTINUOUS_AGG,
-	STATS_CONTINUOUS_AGG_COMPRESSED,
-	STATS_PARTITIONED_TABLE,
-	STATS_PARTITIONED_INDEX,
-	_MAX_STATS_HYPER,
-} HyperStatsIndex;
-
-typedef enum StorageStatsIndex
-{
-	STATS_INDEX,
-	STATS_TABLE,
-	STATS_MATVIEW,
-	_MAX_STATS_STORAGE,
-} StorageStatsIndex;
-
-typedef enum BaseStatsIndex
-{
-	STATS_VIEW,
-	STATS_FOREIGN_TABLE,
-	_MAX_STATS_BASE,
-} BaseStatsIndex;
-
 typedef enum StatsRelType
 {
 	RELTYPE_HYPERTABLE,
@@ -84,6 +53,7 @@ typedef enum StatsRelType
 	RELTYPE_COMPRESSION_HYPERTABLE,
 	RELTYPE_CONTINUOUS_AGG,
 	RELTYPE_TABLE,
+	RELTYPE_INHERITANCE_TABLE,
 	RELTYPE_INDEX,
 	RELTYPE_PARTITIONED_TABLE,
 	RELTYPE_PARTITIONED_INDEX,
@@ -100,9 +70,17 @@ typedef enum StatsRelType
 
 typedef struct AllRelkindStats
 {
-	HyperStats hyperstats[_MAX_STATS_HYPER];
-	StorageStats storagestats[_MAX_STATS_STORAGE];
-	BaseStats basestats[_MAX_STATS_BASE];
+	HyperStats hypertables;
+	HyperStats distributed_hypertables;
+	HyperStats distributed_hypertable_members;
+	HyperStats continuous_aggs;
+	/* Internal tables */
+	HyperStats compression_hypertable;
+	HyperStats materialized_hypertable;
+	StorageStats tables;
+	StorageStats partitioned_tables;
+	StorageStats materialized_views;
+	BaseStats views;
 } AllRelkindStats;
 
 extern void ts_telemetry_relation_stats(AllRelkindStats *stats);

@@ -466,13 +466,14 @@ ts_catalog_get(void)
 							   catalog_table_index_definitions,
 							   catalog_table_serial_id_names);
 
+	s_catalog.catalog_schema_id = get_namespace_oid(CATALOG_SCHEMA_NAME, false);
 	s_catalog.cache_schema_id = get_namespace_oid(CACHE_SCHEMA_NAME, false);
+	s_catalog.config_schema_id = get_namespace_oid(CONFIG_SCHEMA_NAME, false);
+	s_catalog.internal_schema_id = get_namespace_oid(INTERNAL_SCHEMA_NAME, false);
 
 	for (i = 0; i < _MAX_CACHE_TYPES; i++)
 		s_catalog.caches[i].inval_proxy_id =
 			get_relname_relid(cache_proxy_table_names[i], s_catalog.cache_schema_id);
-
-	s_catalog.internal_schema_id = get_namespace_oid(INTERNAL_SCHEMA_NAME, false);
 
 	for (i = 0; i < _MAX_INTERNAL_FUNCTIONS; i++)
 	{

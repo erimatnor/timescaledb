@@ -1297,14 +1297,16 @@ typedef struct CatalogDatabaseInfo
 typedef struct Catalog
 {
 	CatalogTableInfo tables[_MAX_CATALOG_TABLES];
-
+	Oid catalog_schema_id;
 	Oid cache_schema_id;
+	Oid config_schema_id;
+	Oid internal_schema_id;
+
 	struct
 	{
 		Oid inval_proxy_id;
 	} caches[_MAX_CACHE_TYPES];
 
-	Oid internal_schema_id;
 	struct
 	{
 		Oid function_id;

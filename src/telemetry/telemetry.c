@@ -356,7 +356,7 @@ add_compression_stats_object(JsonbParseState *parse_state, const HyperStats *hyp
 
 static JsonbValue *
 add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
-						 const BaseStats *stats)
+						 const BaseStats *stats, StatsType type)
 {
 	JsonbValue name = {
 		.type = jbvString,
@@ -368,7 +368,7 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 
 	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COUNT, stats->relcount);
 
-	if (stats->type >= STATS_TYPE_STORAGE)
+	if (type >= STATS_TYPE_STORAGE)
 	{
 		const StorageStats *storage = (StorageStats *) stats;
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_RELTUPLES, storage->reltuples);
@@ -378,7 +378,7 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_INDEXES_SIZE, storage->indexes_size);
 	}
 
-	if (stats->type >= STATS_TYPE_HYPER)
+	if (type >= STATS_TYPE_HYPER)
 	{
 		const HyperStats *hyper = (HyperStats *) stats;
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_CHUNKS, hyper->chunkcount);
@@ -388,30 +388,6 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 }
 
-static const char *base_stats_names[] = {
-	[STATS_VIEW] = "views",
-	[STATS_FOREIGN_TABLE] = "foreign_tables",
-};
-
-static const char *storage_stats_names[] = {
-	[STATS_INDEX] = "indexes",
-	[STATS_TABLE] = "tables",
-	[STATS_MATVIEW] = "materialized_views",
-};
-
-static const char *hyper_stats_names[] = {
-	[STATS_HYPERTABLE] = "hypertables",
-	[STATS_HYPERTABLE_COMPRESSED] = "compressed_hypertables",
-	[STATS_DISTRIBUTED_HYPERTABLE] = "distributed_hypertables",
-	[STATS_DISTRIBUTED_HYPERTABLE_COMPRESSED] = "compressed_distributed_hypertables",
-	[STATS_DISTRIBUTED_HYPERTABLE_MEMBER] = "distributed_hypertable_members",
-	[STATS_DISTRIBUTED_HYPERTABLE_MEMBER_COMPRESSED] = "compressed_distributed_hypertable_members",
-	[STATS_CONTINUOUS_AGG] = "continuous_aggregates",
-	[STATS_CONTINUOUS_AGG_COMPRESSED] = "compressed_continuous_aggregates",
-	[STATS_PARTITIONED_TABLE] = "partitioned_tables",
-	[STATS_PARTITIONED_INDEX] = "partitioned_indexes",
-};
-
 static Jsonb *
 build_telemetry_report()
 {
@@ -419,7 +395,6 @@ build_telemetry_report()
 	JsonbValue key;
 	JsonbValue *result;
 	AllRelkindStats relstats;
-	int i;
 
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
@@ -451,19 +426,24 @@ build_telemetry_report()
 	pushJsonbValue(&parse_state, WJB_KEY, &key);
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
-	for (i = 0; i < _MAX_STATS_BASE; i++)
-		add_relkind_stats_object(parse_state, base_stats_names[i], &relstats.basestats[i]);
-
-	for (i = 0; i < _MAX_STATS_STORAGE; i++)
-		add_relkind_stats_object(parse_state,
-								 storage_stats_names[i],
-								 &relstats.storagestats[i].base);
-
-	for (i = 0; i < _MAX_STATS_HYPER; i++)
-		add_relkind_stats_object(parse_state,
-								 hyper_stats_names[i],
-								 &relstats.hyperstats[i].storage.base);
-
+	add_relkind_stats_object(parse_state, "tables", &relstats.tables.base, STATS_TYPE_STORAGE);
+	add_relkind_stats_object(parse_state,
+							 "materialized_views",
+							 &relstats.materialized_views.base,
+							 STATS_TYPE_STORAGE);
+	add_relkind_stats_object(parse_state, "views", &relstats.views, STATS_TYPE_BASE);
+	add_relkind_stats_object(parse_state,
+							 "hypertables",
+							 &relstats.hypertables.storage.base,
+							 STATS_TYPE_HYPER);
+	add_relkind_stats_object(parse_state,
+							 "distributed_hypertables",
+							 &relstats.distributed_hypertables.storage.base,
+							 STATS_TYPE_HYPER);
+	add_relkind_stats_object(parse_state,
+							 "continuous_aggregates",
+							 &relstats.continuous_aggs.storage.base,
+							 STATS_TYPE_HYPER);
 	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 
 	/* Old stats */
