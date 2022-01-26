@@ -227,7 +227,7 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
 	if (!ts_chunk_is_compressed(chunk))
 		return false;
 
-	ts_scan_iterator_reset(&statsctx->compressed_chunk_stats_iterator);
+	ts_scan_iterator_scan_key_reset(&statsctx->compressed_chunk_stats_iterator);
 	ts_scan_iterator_scan_key_init(&statsctx->compressed_chunk_stats_iterator,
 								   Anum_compression_chunk_size_pkey_chunk_id,
 								   BTEqualStrategyNumber,
@@ -235,7 +235,9 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
 								   Int32GetDatum(chunk->fd.id));
 
 	if (statsctx->iterator_valid)
+	{
 		ts_scan_iterator_rescan(&statsctx->compressed_chunk_stats_iterator);
+	}
 	else
 	{
 		ts_scan_iterator_start_scan(&statsctx->compressed_chunk_stats_iterator);
@@ -260,7 +262,9 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
 		return true;
 	}
 
-	/* Shouldn't really get here */
+	/* Should only get here if a compressed chunk is missing stats for some
+	 * reason. The iterator will automatically close if no tuple is found, so
+	 * need to make sure it is re-opened next time this function is called. */
 	statsctx->iterator_valid = false;
 
 	return false;

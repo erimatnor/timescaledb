@@ -88,7 +88,7 @@ ts_scan_iterator_next(ScanIterator *iterator)
 }
 
 static inline void
-ts_scan_iterator_reset(ScanIterator *iterator)
+ts_scan_iterator_scan_key_reset(ScanIterator *iterator)
 {
 	iterator->ctx.nkeys = 0;
 }

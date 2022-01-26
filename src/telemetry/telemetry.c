@@ -447,8 +447,6 @@ build_telemetry_report()
 	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 
 	/* Old stats */
-	ts_telemetry_relation_stats(&relstats);
-
 	ts_jsonb_add_str(parse_state, REQ_NUM_HYPERTABLES "_old", get_num_hypertables());
 	ts_jsonb_add_str(parse_state,
 					 REQ_NUM_COMPRESSED_HYPERTABLES "_old",
