@@ -134,9 +134,8 @@ static void
 index_scanner_close(InternalScannerCtx *ctx)
 {
 	LOCKMODE lockmode = ctx->sctx->keeplock ? NoLock : ctx->sctx->lockmode;
-
-	table_close(ctx->tablerel, lockmode);
 	index_close(ctx->indexrel, ctx->sctx->lockmode);
+	table_close(ctx->tablerel, lockmode);
 }
 
 /*
@@ -198,6 +197,7 @@ ts_scanner_start_scan(ScannerCtx *ctx, InternalScannerCtx *ictx)
 
 	ictx->sctx = ctx;
 	ictx->closed = false;
+	ictx->ended = false;
 	ictx->registered_snapshot = false;
 
 	scanner = scanner_ctx_get_scanner(ctx);
