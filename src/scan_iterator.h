@@ -10,7 +10,7 @@
 #include <utils/palloc.h>
 
 #include "scanner.h"
-#include "catalog.h"
+#include "ts_catalog/catalog.h"
 
 #define EMBEDDED_SCAN_KEY_SIZE 5
 

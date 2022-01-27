@@ -16,19 +16,23 @@
 #include <fmgr.h>
 
 #include "stats.h"
-#include "catalog.h"
+#include "ts_catalog/catalog.h"
+#include "ts_catalog/continuous_agg.h"
 #include "chunk.h"
 #include "extension.h"
 #include "hypertable_cache.h"
-#include "ts_catalog/continuous_agg.h"
+#include "utils.h"
 
-typedef struct StatProcessCtx
+typedef struct StatsContext
 {
-	AllRelkindStats *stats;
+	TelemetryStats *stats;
 	ScanIterator compressed_chunk_stats_iterator;
 	bool iterator_valid;
-} StatsProcessCtx;
+} StatsContext;
 
+/*
+ * Determine the type of a hypertable.
+ */
 static StatsRelType
 classify_hypertable(const Hypertable *ht)
 {
@@ -116,32 +120,34 @@ classify_foreign_table(Oid relid, const Chunk **chunk)
 }
 
 static StatsRelType
-classify_view(Oid relid, Cache *htcache)
+classify_view(Oid relid, Cache *htcache, const ContinuousAgg **cagg)
 {
-	const ContinuousAgg *cagg = ts_continuous_agg_find_by_relid(relid);
+	*cagg = ts_continuous_agg_find_by_relid(relid);
 
-	if (cagg)
+	if (*cagg)
 		return RELTYPE_CONTINUOUS_AGG;
 
 	/* Ignore internal cagg views, so classify as other */
-	cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggPartialView);
+	*cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggPartialView);
 
 	if (cagg)
 		return RELTYPE_OTHER;
 
-	cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggDirectView);
+	*cagg = ts_continuous_agg_find_by_view_name("", "", ContinuousAggDirectView);
 
-	if (cagg)
+	if (*cagg)
 		return RELTYPE_OTHER;
 
 	return RELTYPE_VIEW;
 }
 
 static StatsRelType
-classify_relation(Form_pg_class class, Cache *htcache, const Hypertable **ht, const Chunk **chunk)
+classify_relation(Form_pg_class class, Cache *htcache, const Hypertable **ht, const Chunk **chunk,
+				  const ContinuousAgg **cagg)
 {
 	*chunk = NULL;
 	*ht = NULL;
+	*cagg = NULL;
 
 	switch (class->relkind)
 	{
@@ -158,7 +164,7 @@ classify_relation(Form_pg_class class, Cache *htcache, const Hypertable **ht, co
 		case RELKIND_MATVIEW:
 			return RELTYPE_MATVIEW;
 		case RELKIND_VIEW:
-			return classify_view(class->oid, htcache);
+			return classify_view(class->oid, htcache, cagg);
 		default:
 			return RELTYPE_OTHER;
 	}
@@ -167,43 +173,86 @@ classify_relation(Form_pg_class class, Cache *htcache, const Hypertable **ht, co
 static void
 add_storage_stats(StorageStats *stats, Form_pg_class class)
 {
-	Datum relsize;
+	RelationSize relsize;
 
+	/* Note that reltuples should be correct even for compressed chunks since
+	 * we "freeze" those stats when we compress. */
 	stats->reltuples += class->reltuples;
 	stats->relpages += class->relpages;
-	relsize = DirectFunctionCall1(pg_total_relation_size, ObjectIdGetDatum(class->oid));
-	stats->total_relation_size += DatumGetInt64(relsize);
-	relsize = DirectFunctionCall1(pg_indexes_size, ObjectIdGetDatum(class->oid));
-	stats->indexes_size += DatumGetInt64(relsize);
+
+	if (RELKIND_HAS_STORAGE(class->relkind))
+	{
+		relsize = ts_relation_size(class->oid);
+		stats->relsize.heap_size += relsize.heap_size;
+		stats->relsize.toast_size += relsize.toast_size;
+		stats->relsize.index_size += relsize.index_size;
+	}
 }
 
 static void
 process_relation_stats(BaseStats *stats, Form_pg_class class)
 {
 	stats->relcount++;
-
-	if (RELKIND_HAS_STORAGE(class->relkind))
-		add_storage_stats((StorageStats *) stats, class);
+	add_storage_stats((StorageStats *) stats, class);
 }
 
 static void
-process_distributed_hypertable_stats(BaseStats *stats, Form_pg_class class)
+process_hypertable_stats(BaseStats *stats, Form_pg_class class, const Hypertable *ht)
 {
+	HyperStats *hyperstats = (HyperStats *) stats;
+
+	process_relation_stats(stats, class);
+
+	if (TS_HYPERTABLE_HAS_COMPRESSION_ENABLED(ht))
+		hyperstats->compressed_hypertable_count++;
+}
+
+static void
+process_distributed_hypertable_stats(BaseStats *stats, Form_pg_class class, const Hypertable *ht)
+{
+	HyperStats *hyperstats = (HyperStats *) stats;
+
 	stats->relcount++;
+
+	if (TS_HYPERTABLE_HAS_COMPRESSION_ENABLED(ht))
+		hyperstats->compressed_hypertable_count++;
+
+	if (ht->fd.replication_factor > 1)
+		hyperstats->replicated_hypertable_count++;
+}
+
+static void
+process_continuous_agg_stats(BaseStats *stats, Form_pg_class class, const ContinuousAgg *cagg)
+{
+	HyperStats *hyperstats = (HyperStats *) stats;
+	const Hypertable *ht = ts_hypertable_get_by_id(cagg->data.mat_hypertable_id);
+
+	process_relation_stats(stats, class);
+
+	if (TS_HYPERTABLE_HAS_COMPRESSION_ENABLED(ht))
+		hyperstats->compressed_hypertable_count++;
+}
+
+static void
+add_partition_stats(HyperStats *stats, Form_pg_class class)
+{
+	stats->child_count++;
+	add_storage_stats(&stats->storage, class);
 }
 
 static void
 add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk,
 				const Form_compression_chunk_size fd_compr)
 {
-	stats->chunkcount++;
-
-	if (RELKIND_HAS_STORAGE(class->relkind))
-		add_storage_stats(&stats->storage, class);
+	add_partition_stats(stats, class);
 
 	if (ts_chunk_is_compressed(chunk))
-		stats->compressed_chunkcount++;
+		stats->compressed_chunk_count++;
 
+	/* A chunk on a distributed hypertable can be marked as compressed but
+	 * have no compression stats (the stats exists on the data node and might
+	 * not be "imported"). Therefore, the check here is not the same as
+	 * above. */
 	if (NULL != fd_compr)
 	{
 		stats->compressed_heap_size += fd_compr->compressed_heap_size;
@@ -212,16 +261,18 @@ add_chunk_stats(HyperStats *stats, Form_pg_class class, const Chunk *chunk,
 		stats->uncompressed_heap_size += fd_compr->uncompressed_heap_size;
 		stats->uncompressed_indexes_size += fd_compr->uncompressed_index_size;
 		stats->uncompressed_toast_size += fd_compr->uncompressed_toast_size;
+		stats->uncompressed_row_count += fd_compr->numrows_pre_compression;
+		stats->compressed_row_count += fd_compr->numrows_post_compression;
 
 		/* Also add compressed sizes to total number for entire table */
-		stats->storage.indexes_size += fd_compr->compressed_index_size;
-		stats->storage.total_relation_size +=
-			fd_compr->compressed_heap_size + fd_compr->compressed_toast_size;
+		stats->storage.relsize.heap_size += fd_compr->compressed_heap_size;
+		stats->storage.relsize.toast_size += fd_compr->compressed_toast_size;
+		stats->storage.relsize.index_size += fd_compr->compressed_index_size;
 	}
 }
 
 static bool
-get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
+get_chunk_compression_stats(StatsContext *statsctx, const Chunk *chunk,
 							Form_compression_chunk_size compr_stats)
 {
 	if (!ts_chunk_is_compressed(chunk))
@@ -283,10 +334,9 @@ get_chunk_compression_stats(StatsProcessCtx *statsctx, const Chunk *chunk,
  *  - Internal compression table for materialized hypertable (cagg)
  */
 static void
-process_chunk_stats(StatsProcessCtx *statsctx, Form_pg_class class, const Chunk *chunk,
-					Cache *htcache)
+process_chunk_stats(StatsContext *statsctx, Form_pg_class class, const Chunk *chunk, Cache *htcache)
 {
-	AllRelkindStats *stats = statsctx->stats;
+	TelemetryStats *stats = statsctx->stats;
 	const Hypertable *ht;
 	StatsRelType reltype;
 
@@ -353,30 +403,24 @@ should_ignore_relation(const Catalog *catalog, Form_pg_class class)
 			class->relnamespace == catalog->config_schema_id || ts_is_catalog_table(class->oid));
 }
 
-static void
-stats_init(AllRelkindStats *stats)
-{
-	MemSet(stats, 0, sizeof(*stats));
-}
-
 /*
  * Scan the entire pg_class catalog table for all relations. For each
  * relation, classify it and gather basic stats.
  */
 void
-ts_telemetry_relation_stats(AllRelkindStats *stats)
+ts_telemetry_stats_gather(TelemetryStats *stats)
 {
 	const Catalog *catalog = ts_catalog_get();
 	Relation rel;
 	SysScanDesc scan;
 	Cache *htcache = ts_hypertable_cache_pin();
 	MemoryContext oldmcxt, relmcxt;
-	StatsProcessCtx statsctx = {
+	StatsContext statsctx = {
 		.stats = stats,
 		.iterator_valid = false,
 	};
 
-	stats_init(stats);
+	MemSet(stats, 0, sizeof(*stats));
 	statsctx.compressed_chunk_stats_iterator =
 		ts_scan_iterator_create(COMPRESSION_CHUNK_SIZE, AccessShareLock, CurrentMemoryContext);
 	ts_scan_iterator_set_index(&statsctx.compressed_chunk_stats_iterator,
@@ -399,6 +443,7 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 		StatsRelType reltype;
 		const Chunk *chunk = NULL;
 		const Hypertable *ht = NULL;
+		const ContinuousAgg *cagg = NULL;
 
 		MemoryContextReset(relmcxt);
 		tup = systable_getnext(scan);
@@ -411,21 +456,27 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 		if (should_ignore_relation(catalog, class))
 			continue;
 
-		reltype = classify_relation(class, htcache, &ht, &chunk);
+		reltype = classify_relation(class, htcache, &ht, &chunk, &cagg);
 
 		switch (reltype)
 		{
 			case RELTYPE_HYPERTABLE:
-				process_relation_stats(&stats->hypertables.storage.base, class);
+				Assert(NULL != ht);
+				process_hypertable_stats(&stats->hypertables.storage.base, class, ht);
 				break;
 			case RELTYPE_DISTRIBUTED_HYPERTABLE:
-				process_distributed_hypertable_stats(&stats->distributed_hypertables.storage.base,
-													 class);
-				break;
 			case RELTYPE_REPLICATED_DISTRIBUTED_HYPERTABLE:
+				Assert(NULL != ht);
+				process_distributed_hypertable_stats(&stats->distributed_hypertables.storage.base,
+													 class,
+													 ht);
 				break;
 			case RELTYPE_DISTRIBUTED_HYPERTABLE_MEMBER:
-				process_relation_stats(&stats->distributed_hypertable_members.storage.base, class);
+				/* Since this is just a hypertable on a data node, process as
+				 * a regular hypertable */
+				process_hypertable_stats(&stats->distributed_hypertable_members.storage.base,
+										 class,
+										 ht);
 				break;
 			case RELTYPE_COMPRESSION_HYPERTABLE:
 				process_relation_stats(&stats->compression_hypertable.storage.base, class);
@@ -441,7 +492,7 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 			case RELTYPE_INHERITANCE_TABLE:
 				break;
 			case RELTYPE_PARTITIONED_TABLE:
-				process_relation_stats(&stats->partitioned_tables.base, class);
+				process_relation_stats(&stats->partitioned_tables.storage.base, class);
 				break;
 			case RELTYPE_CHUNK:
 			case RELTYPE_DISTRIBUTED_CHUNK:
@@ -454,6 +505,7 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 				add_chunk_stats(&stats->continuous_aggs, class, chunk, NULL);
 				break;
 			case RELTYPE_PARTITION:
+				add_partition_stats(&stats->partitioned_tables, class);
 				break;
 			case RELTYPE_INDEX:
 				break;
@@ -468,7 +520,7 @@ ts_telemetry_relation_stats(AllRelkindStats *stats)
 				process_relation_stats(&stats->materialized_views.base, class);
 				break;
 			case RELTYPE_CONTINUOUS_AGG:
-				process_relation_stats(&stats->continuous_aggs.storage.base, class);
+				process_continuous_agg_stats(&stats->continuous_aggs.storage.base, class, cagg);
 				break;
 			case RELTYPE_OTHER:
 				break;

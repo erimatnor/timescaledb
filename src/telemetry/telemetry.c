@@ -316,37 +316,67 @@ format_iso8601(Datum value)
 }
 
 #define REQ_RELKIND_COUNT "num_relations"
-#define REQ_RELKIND_TOTAL_RELATION_SIZE "total_relation_size"
-#define REQ_RELKIND_INDEXES_SIZE "indexes_size"
 #define REQ_RELKIND_RELTUPLES "num_reltuples"
-#define REQ_RELKIND_CHUNKS "num_chunks"
+
+#define REQ_RELKIND_HEAP_SIZE "heap_size"
+#define REQ_RELKIND_TOAST_SIZE "toast_size"
+#define REQ_RELKIND_INDEXES_SIZE "indexes_size"
+
+#define REQ_RELKIND_CHILDREN "num_children"
 #define REQ_RELKIND_COMPRESSED_CHUNKS "num_compressed_chunks"
-#define REQ_RELKIND_UNCOMPRESSED_TOTAL_RELATION_SIZE "pre_compressed_total_relation_size"
+#define REQ_RELKIND_COMPRESSED_HYPERTABLES "num_compressed_hypertables"
+#define REQ_RELKIND_COMPRESSED_CAGGS "num_compressed_caggs"
+#define REQ_RELKIND_REPLICATED_HYPERTABLES "num_replicated_distributed_hypertables"
+
+#define REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE "uncompressed_heap_size"
+#define REQ_RELKIND_UNCOMPRESSED_TOAST_SIZE "uncompressed_toast_size"
 #define REQ_RELKIND_UNCOMPRESSED_INDEXES_SIZE "pre_compressed_indexes_size"
-#define REQ_RELKIND_COMPRESSED_TOTAL_RELATION_SIZE "compressed_total_relation_size"
+#define REQ_RELKIND_UNCOMPRESSED_ROWCOUNT "pre_compressed_rowcount"
+#define REQ_RELKIND_COMPRESSED_HEAP_SIZE "compressed_heap_size"
+#define REQ_RELKIND_COMPRESSED_TOAST_SIZE "compressed_toast_size"
 #define REQ_RELKIND_COMPRESSED_INDEXES_SIZE "compressed_indexes_size"
+#define REQ_RELKIND_COMPRESSED_ROWCOUNT "compressed_row_count"
 
 static JsonbValue *
-add_compression_stats_object(JsonbParseState *parse_state, const HyperStats *hyper)
+add_compression_stats_object(JsonbParseState *parse_state, StatsRelType reltype,
+							 const HyperStats *hyper)
 {
 	JsonbValue name = {
 		.type = jbvString,
-		.val.string.val = pstrdup("compression_stats"),
-		.val.string.len = strlen("compression_stats"),
+		.val.string.val = pstrdup("compression"),
+		.val.string.len = strlen("compression"),
 	};
 	pushJsonbValue(&parse_state, WJB_KEY, &name);
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
-	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COMPRESSED_CHUNKS, hyper->compressed_chunkcount);
+	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COMPRESSED_CHUNKS, hyper->compressed_chunk_count);
+
+	if (reltype == RELTYPE_CONTINUOUS_AGG)
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_COMPRESSED_CAGGS,
+						   hyper->compressed_hypertable_count);
+	else
+		ts_jsonb_add_int64(parse_state,
+						   REQ_RELKIND_COMPRESSED_HYPERTABLES,
+						   hyper->compressed_hypertable_count);
+
+	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COMPRESSED_ROWCOUNT, hyper->compressed_row_count);
+	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COMPRESSED_HEAP_SIZE, hyper->compressed_heap_size);
 	ts_jsonb_add_int64(parse_state,
-					   REQ_RELKIND_COMPRESSED_TOTAL_RELATION_SIZE,
-					   hyper->compressed_heap_size + hyper->compressed_toast_size);
+					   REQ_RELKIND_COMPRESSED_TOAST_SIZE,
+					   hyper->compressed_toast_size);
 	ts_jsonb_add_int64(parse_state,
 					   REQ_RELKIND_COMPRESSED_INDEXES_SIZE,
 					   hyper->compressed_indexes_size);
 	ts_jsonb_add_int64(parse_state,
-					   REQ_RELKIND_UNCOMPRESSED_TOTAL_RELATION_SIZE,
-					   hyper->uncompressed_heap_size + hyper->uncompressed_toast_size);
+					   REQ_RELKIND_UNCOMPRESSED_ROWCOUNT,
+					   hyper->uncompressed_row_count);
+	ts_jsonb_add_int64(parse_state,
+					   REQ_RELKIND_UNCOMPRESSED_HEAP_SIZE,
+					   hyper->uncompressed_heap_size);
+	ts_jsonb_add_int64(parse_state,
+					   REQ_RELKIND_UNCOMPRESSED_TOAST_SIZE,
+					   hyper->uncompressed_toast_size);
 	ts_jsonb_add_int64(parse_state,
 					   REQ_RELKIND_UNCOMPRESSED_INDEXES_SIZE,
 					   hyper->uncompressed_indexes_size);
@@ -356,7 +386,7 @@ add_compression_stats_object(JsonbParseState *parse_state, const HyperStats *hyp
 
 static JsonbValue *
 add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
-						 const BaseStats *stats, StatsType type)
+						 const BaseStats *stats, StatsRelType reltype, StatsType statstype)
 {
 	JsonbValue name = {
 		.type = jbvString,
@@ -368,21 +398,27 @@ add_relkind_stats_object(JsonbParseState *parse_state, const char *relkindname,
 
 	ts_jsonb_add_int64(parse_state, REQ_RELKIND_COUNT, stats->relcount);
 
-	if (type >= STATS_TYPE_STORAGE)
+	if (statstype >= STATS_TYPE_STORAGE)
 	{
 		const StorageStats *storage = (StorageStats *) stats;
 		ts_jsonb_add_int64(parse_state, REQ_RELKIND_RELTUPLES, storage->reltuples);
-		ts_jsonb_add_int64(parse_state,
-						   REQ_RELKIND_TOTAL_RELATION_SIZE,
-						   storage->total_relation_size);
-		ts_jsonb_add_int64(parse_state, REQ_RELKIND_INDEXES_SIZE, storage->indexes_size);
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_HEAP_SIZE, storage->relsize.heap_size);
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_TOAST_SIZE, storage->relsize.toast_size);
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_INDEXES_SIZE, storage->relsize.index_size);
 	}
 
-	if (type >= STATS_TYPE_HYPER)
+	if (statstype >= STATS_TYPE_HYPER)
 	{
 		const HyperStats *hyper = (HyperStats *) stats;
-		ts_jsonb_add_int64(parse_state, REQ_RELKIND_CHUNKS, hyper->chunkcount);
-		add_compression_stats_object(parse_state, hyper);
+		ts_jsonb_add_int64(parse_state, REQ_RELKIND_CHILDREN, hyper->child_count);
+
+		if (reltype != RELTYPE_PARTITIONED_TABLE || reltype == RELTYPE_INHERITANCE_TABLE)
+			add_compression_stats_object(parse_state, reltype, hyper);
+
+		if (reltype == RELTYPE_DISTRIBUTED_HYPERTABLE)
+			ts_jsonb_add_int64(parse_state,
+							   REQ_RELKIND_REPLICATED_HYPERTABLES,
+							   hyper->replicated_hypertable_count);
 	}
 
 	return pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
@@ -394,7 +430,7 @@ build_telemetry_report()
 	JsonbParseState *parse_state = NULL;
 	JsonbValue key;
 	JsonbValue *result;
-	AllRelkindStats relstats;
+	TelemetryStats relstats;
 
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
@@ -419,61 +455,48 @@ build_telemetry_report()
 	ts_jsonb_add_str(parse_state, REQ_DATA_VOLUME, get_database_size());
 
 	/* Add relation stats */
-	ts_telemetry_relation_stats(&relstats);
+	ts_telemetry_stats_gather(&relstats);
 	key.type = jbvString;
-	key.val.string.val = "relkind_stats";
-	key.val.string.len = strlen("relkind_stats");
+	key.val.string.val = "relations";
+	key.val.string.len = strlen("relations");
 	pushJsonbValue(&parse_state, WJB_KEY, &key);
 	pushJsonbValue(&parse_state, WJB_BEGIN_OBJECT, NULL);
 
-	add_relkind_stats_object(parse_state, "tables", &relstats.tables.base, STATS_TYPE_STORAGE);
+	add_relkind_stats_object(parse_state,
+							 "tables",
+							 &relstats.tables.base,
+							 RELTYPE_TABLE,
+							 STATS_TYPE_STORAGE);
 	add_relkind_stats_object(parse_state,
 							 "materialized_views",
 							 &relstats.materialized_views.base,
+							 RELTYPE_MATVIEW,
 							 STATS_TYPE_STORAGE);
-	add_relkind_stats_object(parse_state, "views", &relstats.views, STATS_TYPE_BASE);
+	add_relkind_stats_object(parse_state, "views", &relstats.views, RELTYPE_VIEW, STATS_TYPE_BASE);
 	add_relkind_stats_object(parse_state,
 							 "hypertables",
 							 &relstats.hypertables.storage.base,
+							 RELTYPE_HYPERTABLE,
 							 STATS_TYPE_HYPER);
 	add_relkind_stats_object(parse_state,
 							 "distributed_hypertables",
 							 &relstats.distributed_hypertables.storage.base,
+							 RELTYPE_DISTRIBUTED_HYPERTABLE,
 							 STATS_TYPE_HYPER);
 	add_relkind_stats_object(parse_state,
 							 "continuous_aggregates",
 							 &relstats.continuous_aggs.storage.base,
+							 RELTYPE_CONTINUOUS_AGG,
 							 STATS_TYPE_HYPER);
+	add_relkind_stats_object(parse_state,
+							 "partitioned_tables",
+							 &relstats.partitioned_tables.storage.base,
+							 RELTYPE_PARTITIONED_TABLE,
+							 STATS_TYPE_HYPER);
+
 	pushJsonbValue(&parse_state, WJB_END_OBJECT, NULL);
 
-	/* Old stats */
-	ts_jsonb_add_str(parse_state, REQ_NUM_HYPERTABLES "_old", get_num_hypertables());
-	ts_jsonb_add_str(parse_state,
-					 REQ_NUM_COMPRESSED_HYPERTABLES "_old",
-					 get_num_compressed_hypertables());
-	ts_jsonb_add_str(parse_state, REQ_NUM_CONTINUOUS_AGGS "_old", get_num_continuous_aggs());
-
 	add_job_counts(parse_state);
-
-	TotalSizes sizes = ts_compression_chunk_size_totals();
-	ts_jsonb_add_str(parse_state,
-					 REQ_COMPRESSED_HEAP_SIZE "_old",
-					 get_size(sizes.compressed_heap_size));
-	ts_jsonb_add_str(parse_state,
-					 REQ_COMPRESSED_INDEX_SIZE "_old",
-					 get_size(sizes.compressed_index_size));
-	ts_jsonb_add_str(parse_state,
-					 REQ_COMPRESSED_TOAST_SIZE "_old",
-					 get_size(sizes.compressed_toast_size));
-	ts_jsonb_add_str(parse_state,
-					 REQ_UNCOMPRESSED_HEAP_SIZE "_old",
-					 get_size(sizes.uncompressed_heap_size));
-	ts_jsonb_add_str(parse_state,
-					 REQ_UNCOMPRESSED_INDEX_SIZE "_old",
-					 get_size(sizes.uncompressed_index_size));
-	ts_jsonb_add_str(parse_state,
-					 REQ_UNCOMPRESSED_TOAST_SIZE "_old",
-					 get_size(sizes.uncompressed_toast_size));
 
 	/* Add related extensions, which is a nested JSON */
 	key.type = jbvString;

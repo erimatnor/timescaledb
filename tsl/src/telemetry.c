@@ -13,41 +13,19 @@
 #include "data_node.h"
 
 #define DISTRIBUTED_DB_KEY "distributed_db"
-#define DISTRIBUTED_MEMBER_KEY "distributed_member"
-#define NUM_DISTRIBUTED_HYPERTABLES_KEY "num_distributed_hypertables"
-#define NUM_DISTRIBUTED_HYPERTABLES_MEMBERS_KEY "num_distributed_hypertables_members"
-#define NUM_REPLICATED_DISTRIBUTED_HYPERTABLES_KEY "num_replicated_distributed_hypertables"
 #define NUM_DATA_NODES_KEY "num_data_nodes"
 
 static void
 tsl_telemetry_add_distributed_database_info(JsonbParseState *parse_state)
 {
 	DistUtilMembershipStatus status = dist_util_membership();
-	HypertablesStat stat;
-
-	ts_jsonb_add_str(parse_state, DISTRIBUTED_MEMBER_KEY, dist_util_membership_str(status));
 
 	if (status == DIST_MEMBER_NONE)
 		return;
 
-	memset(&stat, 0, sizeof(stat));
-	ts_number_of_hypertables(&stat);
-
-	ts_jsonb_add_str(parse_state,
-					 NUM_DATA_NODES_KEY,
-					 psprintf("%d", list_length(data_node_get_node_name_list())));
-
-	ts_jsonb_add_str(parse_state,
-					 NUM_DISTRIBUTED_HYPERTABLES_KEY "_old",
-					 psprintf("%d", stat.num_hypertables_distributed));
-
-	ts_jsonb_add_str(parse_state,
-					 NUM_REPLICATED_DISTRIBUTED_HYPERTABLES_KEY "_old",
-					 psprintf("%d", stat.num_hypertables_distributed_and_replicated));
-
-	ts_jsonb_add_str(parse_state,
-					 NUM_DISTRIBUTED_HYPERTABLES_MEMBERS_KEY "_old",
-					 psprintf("%d", stat.num_hypertables_distributed_members));
+	ts_jsonb_add_int64(parse_state,
+					   NUM_DATA_NODES_KEY,
+					   list_length(data_node_get_node_name_list()));
 }
 
 void

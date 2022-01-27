@@ -8,6 +8,8 @@
 
 #include <postgres.h>
 
+#include "utils.h"
+
 typedef enum StatsType
 {
 	STATS_TYPE_BASE,
@@ -25,22 +27,25 @@ typedef struct StorageStats
 	BaseStats base;
 	int64 relpages;
 	int64 reltuples;
-	int64 total_relation_size;
-	int64 indexes_size;
+	RelationSize relsize;
 } StorageStats;
 
 typedef struct HyperStats
 {
 	StorageStats storage;
-	int64 chunkcount;
-	int64 compressed_chunkcount;
+	int64 replicated_hypertable_count;
+	int64 child_count;
+	int64 compressed_chunk_count;
+	int64 compressed_hypertable_count;
 	int64 compressed_size;
 	int64 compressed_heap_size;
 	int64 compressed_indexes_size;
 	int64 compressed_toast_size;
+	int64 compressed_row_count;
 	int64 uncompressed_heap_size;
 	int64 uncompressed_indexes_size;
 	int64 uncompressed_toast_size;
+	int64 uncompressed_row_count;
 } HyperStats;
 
 typedef enum StatsRelType
@@ -68,7 +73,7 @@ typedef enum StatsRelType
 	RELTYPE_OTHER,
 } StatsRelType;
 
-typedef struct AllRelkindStats
+typedef struct TelemetryStats
 {
 	HyperStats hypertables;
 	HyperStats distributed_hypertables;
@@ -78,11 +83,11 @@ typedef struct AllRelkindStats
 	HyperStats compression_hypertable;
 	HyperStats materialized_hypertable;
 	StorageStats tables;
-	StorageStats partitioned_tables;
+	HyperStats partitioned_tables;
 	StorageStats materialized_views;
 	BaseStats views;
-} AllRelkindStats;
+} TelemetryStats;
 
-extern void ts_telemetry_relation_stats(AllRelkindStats *stats);
+extern void ts_telemetry_stats_gather(TelemetryStats *stats);
 
 #endif /* TIMESCALEDB_TELEMETRY_STATS_H */
