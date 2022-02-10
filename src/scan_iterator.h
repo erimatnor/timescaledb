@@ -28,7 +28,6 @@ typedef struct ScanIterator
 		.ctx = {                                                                                   \
 			.internal = {													\
 				.ended = true,											\
-				.closed = true,											\
 			},															\
 			.table = catalog_get_table_id(ts_catalog_get(), catalog_table_id),                     \
 			.nkeys = 0,                                                                            \
@@ -98,6 +97,7 @@ ts_scan_iterator_scan_key_reset(ScanIterator *iterator)
 
 void TSDLLEXPORT ts_scan_iterator_set_index(ScanIterator *iterator, CatalogTable table,
 											int indexid);
+void TSDLLEXPORT ts_scan_iterator_end(ScanIterator *iterator);
 void TSDLLEXPORT ts_scan_iterator_close(ScanIterator *iterator);
 void TSDLLEXPORT ts_scan_iterator_scan_key_init(ScanIterator *iterator, AttrNumber attributeNumber,
 												StrategyNumber strategy, RegProcedure procedure,

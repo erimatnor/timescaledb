@@ -181,27 +181,14 @@ ts_scanner_rescan(ScannerCtx *ctx, const ScanKey scankey)
 	scanner->rescan(ctx);
 }
 
-/*
- * Perform either a heap or index scan depending on the information in the
- * ScannerCtx. ScannerCtx must be setup by caller with the proper information
- * for the scan, including filters and callbacks for found tuples.
- *
- * Return the number of tuples that where found.
- */
-TSDLLEXPORT void
-ts_scanner_start_scan(ScannerCtx *ctx)
+TSDLLEXPORT Relation
+ts_scanner_open(ScannerCtx *ctx)
 {
-	InternalScannerCtx *ictx = &ctx->internal;
-	TupleDesc tuple_desc;
-	Scanner *scanner;
+	Scanner *scanner = scanner_ctx_get_scanner(ctx);
 
-	ictx->closed = false;
-	ictx->ended = false;
-	ictx->registered_snapshot = false;
-
-	scanner = scanner_ctx_get_scanner(ctx);
-
-	scanner->openscan(ctx);
+	Assert(NULL == ctx->internal.tablerel);
+	ctx->internal.ended = false;
+	ctx->internal.registered_snapshot = false;
 
 	if (ctx->snapshot == NULL)
 	{
@@ -230,8 +217,33 @@ ts_scanner_start_scan(ScannerCtx *ctx)
 		 * mode.
 		 */
 		ctx->snapshot = RegisterSnapshot(GetSnapshotData(SnapshotSelf));
-		ictx->registered_snapshot = true;
+		ctx->internal.registered_snapshot = true;
 	}
+
+	return scanner->openscan(ctx);
+}
+
+/*
+ * Perform either a heap or index scan depending on the information in the
+ * ScannerCtx. ScannerCtx must be setup by caller with the proper information
+ * for the scan, including filters and callbacks for found tuples.
+ *
+ * Return the number of tuples that where found.
+ */
+TSDLLEXPORT void
+ts_scanner_start_scan(ScannerCtx *ctx)
+{
+	InternalScannerCtx *ictx = &ctx->internal;
+	Scanner *scanner = scanner_ctx_get_scanner(ctx);
+	TupleDesc tuple_desc;
+
+	if (ictx->tablerel == NULL)
+	{
+		ts_scanner_open(ctx);
+		ictx->autoclose = true;
+	}
+	else
+		ictx->autoclose = false;
 
 	scanner->beginscan(ctx);
 
@@ -270,18 +282,19 @@ ts_scanner_end_scan(ScannerCtx *ctx)
 }
 
 TSDLLEXPORT void
-ts_scanner_end_and_close_scan(ScannerCtx *ctx)
+ts_scanner_close(ScannerCtx *ctx)
 {
-	InternalScannerCtx *ictx = &ctx->internal;
 	Scanner *scanner = scanner_ctx_get_scanner(ctx);
+	InternalScannerCtx *ictx = &ctx->internal;
 
-	if (ictx->closed)
+	if (NULL == ictx->tablerel)
 	{
 		Assert(ictx->ended);
 		return;
 	}
 
-	ts_scanner_end_scan(ctx);
+	Assert(ictx->ended);
+	scanner->closescan(ctx);
 
 	if (ictx->registered_snapshot)
 	{
@@ -289,9 +302,9 @@ ts_scanner_end_and_close_scan(ScannerCtx *ctx)
 		ctx->snapshot = NULL;
 	}
 
-	scanner->closescan(ctx);
 	ExecDropSingleTupleTableSlot(ictx->tinfo.slot);
-	ictx->closed = true;
+	ictx->tablerel = NULL;
+	ictx->indexrel = NULL;
 }
 
 TSDLLEXPORT TupleInfo *
@@ -329,7 +342,10 @@ ts_scanner_next(ScannerCtx *ctx)
 		is_valid = ts_scanner_limit_reached(ctx) ? false : scanner->getnext(ctx);
 	}
 
-	ts_scanner_end_and_close_scan(ctx);
+	ts_scanner_end_scan(ctx);
+
+	if (ctx->internal.autoclose)
+		ts_scanner_close(ctx);
 
 	return NULL;
 }
@@ -353,7 +369,10 @@ ts_scanner_scan(ScannerCtx *ctx)
 		/* Call tuple_found handler. Abort the scan if the handler wants us to */
 		if (ctx->tuple_found != NULL && ctx->tuple_found(tinfo, ctx->data) == SCAN_DONE)
 		{
-			ts_scanner_end_and_close_scan(ctx);
+			ts_scanner_end_scan(ctx);
+
+			if (ctx->internal.autoclose)
+				ts_scanner_close(ctx);
 			break;
 		}
 	}

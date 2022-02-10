@@ -78,8 +78,8 @@ typedef struct InternalScannerCtx
 	Relation tablerel, indexrel;
 	TupleInfo tinfo;
 	ScanDesc scan;
+	bool autoclose;
 	bool registered_snapshot;
-	bool closed;
 	bool ended;
 } InternalScannerCtx;
 
@@ -132,12 +132,13 @@ typedef struct ScannerCtx
 
 /* Performs an index scan or heap scan and returns the number of matching
  * tuples. */
+extern TSDLLEXPORT Relation ts_scanner_open(ScannerCtx *ctx);
+extern TSDLLEXPORT void ts_scanner_close(ScannerCtx *ctx);
 extern TSDLLEXPORT int ts_scanner_scan(ScannerCtx *ctx);
 extern TSDLLEXPORT bool ts_scanner_scan_one(ScannerCtx *ctx, bool fail_if_not_found,
 											const char *item_type);
 extern TSDLLEXPORT void ts_scanner_start_scan(ScannerCtx *ctx);
 extern TSDLLEXPORT void ts_scanner_end_scan(ScannerCtx *ctx);
-extern TSDLLEXPORT void ts_scanner_end_and_close_scan(ScannerCtx *ctx);
 extern TSDLLEXPORT void ts_scanner_rescan(ScannerCtx *ctx, const ScanKey scankey);
 extern TSDLLEXPORT TupleInfo *ts_scanner_next(ScannerCtx *ctx);
 extern TSDLLEXPORT ItemPointer ts_scanner_get_tuple_tid(TupleInfo *ti);
