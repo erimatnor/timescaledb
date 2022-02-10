@@ -75,7 +75,6 @@ typedef union ScanDesc
  */
 typedef struct InternalScannerCtx
 {
-	Relation tablerel, indexrel;
 	TupleInfo tinfo;
 	ScanDesc scan;
 	bool autoclose;
@@ -89,6 +88,8 @@ typedef struct ScannerCtx
 	/* Fields below this line can be initialized by the user */
 	Oid table;
 	Oid index;
+	Relation tablerel;
+	Relation indexrel;
 	ScanKey scankey;
 	int nkeys, norderbys, limit; /* Limit on number of tuples to return. 0 or
 								  * less means no limit */
@@ -134,6 +135,7 @@ typedef struct ScannerCtx
  * tuples. */
 extern TSDLLEXPORT Relation ts_scanner_open(ScannerCtx *ctx);
 extern TSDLLEXPORT void ts_scanner_close(ScannerCtx *ctx);
+extern TSDLLEXPORT void ts_scanner_cleanup(ScannerCtx *ctx);
 extern TSDLLEXPORT int ts_scanner_scan(ScannerCtx *ctx);
 extern TSDLLEXPORT bool ts_scanner_scan_one(ScannerCtx *ctx, bool fail_if_not_found,
 											const char *item_type);
