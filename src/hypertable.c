@@ -9,11 +9,13 @@
 #include <access/relscan.h>
 #include <catalog/indexing.h>
 #include <catalog/namespace.h>
+#include <catalog/pg_am.h>
 #include <catalog/pg_collation.h>
 #include <catalog/pg_constraint.h>
 #include <catalog/pg_inherits.h>
 #include <catalog/pg_proc.h>
 #include <catalog/pg_type.h>
+#include <catalog/heap.h>
 #include <commands/dbcommands.h>
 #include <commands/schemacmds.h>
 #include <commands/tablecmds.h>
@@ -25,7 +27,10 @@
 #include <nodes/makefuncs.h>
 #include <nodes/memnodes.h>
 #include <nodes/value.h>
+#include <parser/parse_collate.h>
+#include <parser/parse_expr.h>
 #include <parser/parse_func.h>
+#include <parser/parse_relation.h>
 #include <storage/lmgr.h>
 #include <utils/acl.h>
 #include <utils/builtins.h>
@@ -1902,6 +1907,80 @@ ts_hypertable_distributed_create(PG_FUNCTION_ARGS)
 	return ts_hypertable_create_internal(fcinfo, true);
 }
 
+#if 0
+/*
+ * Transform any expressions present in the partition key
+ *
+ * Returns a transformed PartitionSpec, as well as the strategy code
+ */
+static PartitionSpec *
+transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
+{
+	PartitionSpec *newspec;
+	ParseState *pstate;
+	ParseNamespaceItem *nsitem;
+	ListCell   *l;
+
+	newspec = makeNode(PartitionSpec);
+
+	newspec->strategy = partspec->strategy;
+	newspec->partParams = NIL;
+	newspec->location = partspec->location;
+
+	/* Parse partitioning strategy name */
+	if (pg_strcasecmp(partspec->strategy, "hash") == 0)
+		*strategy = PARTITION_STRATEGY_HASH;
+	else if (pg_strcasecmp(partspec->strategy, "list") == 0)
+		*strategy = PARTITION_STRATEGY_LIST;
+	else if (pg_strcasecmp(partspec->strategy, "range") == 0)
+		*strategy = PARTITION_STRATEGY_RANGE;
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("unrecognized partitioning strategy \"%s\"",
+						partspec->strategy)));
+
+	/* Check valid number of columns for strategy */
+	if (*strategy == PARTITION_STRATEGY_LIST &&
+		list_length(partspec->partParams) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("cannot use \"list\" partition strategy with more than one column")));
+
+	/*
+	 * Create a dummy ParseState and insert the target relation as its sole
+	 * rangetable entry.  We need a ParseState for transformExpr.
+	 */
+	pstate = make_parsestate(NULL);
+	nsitem = addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
+										   NULL, false, true);
+	addNSItemToQuery(pstate, nsitem, true, true, true);
+
+	/* take care of any partition expressions */
+	foreach(l, partspec->partParams)
+	{
+		PartitionElem *pelem = castNode(PartitionElem, lfirst(l));
+
+		if (pelem->expr)
+		{
+			/* Copy, to avoid scribbling on the input */
+			pelem = copyObject(pelem);
+
+			/* Now do parse transformation of the expression */
+			pelem->expr = transformExpr(pstate, pelem->expr,
+										EXPR_KIND_PARTITION_EXPRESSION);
+
+			/* we have to fix its collations too */
+			assign_expr_collations(pstate, pelem->expr);
+		}
+
+		newspec->partParams = lappend(newspec->partParams, pelem);
+	}
+
+	return newspec;
+}
+#endif
+
 /* Creates a new hypertable.
  *
  * Flags are one of HypertableCreateFlags.
@@ -2112,6 +2191,140 @@ ts_hypertable_create_from_info(Oid table_relid, int32 hypertable_id, uint32 flag
 
 	/* Add validated dimensions */
 	ts_dimension_add_from_info(time_dim_info);
+
+	Relation pgclrel = table_open(RelationRelationId, RowExclusiveLock);
+	HeapTuple tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(table_relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", table_relid);
+	Form_pg_class clform = (Form_pg_class) GETSTRUCT(tuple);
+
+	clform->relkind = RELKIND_PARTITIONED_TABLE;
+	clform->relam = InvalidOid;
+
+	CatalogTupleUpdate(pgclrel, &tuple->t_self, tuple);
+
+	heap_freetuple(tuple);
+	table_close(pgclrel, RowExclusiveLock);
+
+	/* Make new relkind visible */
+	CommandCounterIncrement();
+
+	{
+		// ParseState *pstate;
+		int partnatts;
+		AttrNumber partattrs[PARTITION_MAX_KEYS];
+		Oid partopclass[PARTITION_MAX_KEYS];
+		Oid partcollation[PARTITION_MAX_KEYS];
+		List *partexprs = NIL;
+		PartitionElem pelem = {
+			.type = T_PartitionElem,
+			.location = -1,
+			.collation = NIL,
+			.opclass = NIL,
+			.name = NameStr(*time_dim_info->colname),
+			.expr = NULL,
+		};
+		/*
+		PartitionSpec partspec = {
+			.type = T_PartitionSpec,
+			.location = -1,
+			.partParams = list_make1(&pelem),
+			.strategy = "range",
+			}; */
+
+		// pstate = make_parsestate(NULL);
+		// pstate->p_sourcetext = queryString;
+
+		partnatts = 1;
+
+		/* Protect fixed-size arrays here and in executor */
+		if (partnatts > PARTITION_MAX_KEYS)
+			ereport(ERROR,
+					(errcode(ERRCODE_TOO_MANY_COLUMNS),
+					 errmsg("cannot partition using more than %d columns", PARTITION_MAX_KEYS)));
+
+		/*
+		 * We need to transform the raw parsetrees corresponding to partition
+		 * expressions into executable expression trees.  Like column defaults
+		 * and CHECK constraints, we could not have done the transformation
+		 * earlier.
+		 */
+		/*stmt->partspec = transformPartitionSpec(rel, &partspec,
+												&strategy);
+
+		ComputePartitionAttrs(pstate, rel, stmt->partspec->partParams,
+							  partattrs, &partexprs, partopclass,
+							  partcollation, strategy);
+		*/
+
+		HeapTuple atttuple =
+			SearchSysCacheAttName(RelationGetRelid(rel), NameStr(*time_dim_info->colname));
+		if (!HeapTupleIsValid(atttuple))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("column \"%s\" named in partition key does not exist",
+							NameStr(*time_dim_info->colname))));
+
+		Form_pg_attribute attform = (Form_pg_attribute) GETSTRUCT(atttuple);
+
+		if (attform->attnum <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("cannot use system column \"%s\" in partition key",
+							NameStr(*time_dim_info->colname))));
+
+		/*
+		 * Generated columns cannot work: They are computed after BEFORE
+		 * triggers, but partition routing is done before all triggers.
+		 */
+		if (attform->attgenerated)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("cannot use generated column in partition key"),
+					 errdetail("Column \"%s\" is a generated column.",
+							   NameStr(*time_dim_info->colname))));
+
+		partattrs[0] = attform->attnum;
+		Oid atttype = attform->atttypid;
+		partcollation[0] = attform->attcollation;
+		ReleaseSysCache(atttuple);
+
+		Oid am_oid = BTREE_AM_OID;
+
+		if (!pelem.opclass)
+		{
+			partopclass[0] = GetDefaultOpClass(atttype, am_oid);
+
+			if (!OidIsValid(partopclass[0]))
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("data type %s has no default operator class for access method "
+								"\"%s\"",
+								format_type_be(atttype),
+								"btree"),
+						 errhint("You must specify a btree operator class or define a default "
+								 "btree operator class for the data type.")));
+			}
+		}
+		else
+			partopclass[0] = ResolveOpClass(pelem.opclass,
+											atttype,
+											am_oid == HASH_AM_OID ? "hash" : "btree",
+											am_oid);
+
+		StorePartitionKey(rel,
+						  PARTITION_STRATEGY_RANGE,
+						  partnatts,
+						  partattrs,
+						  partexprs,
+						  partopclass,
+						  partcollation);
+
+		/* make it all visible */
+		CommandCounterIncrement();
+	}
 
 	if (DIMENSION_INFO_IS_SET(space_dim_info))
 	{

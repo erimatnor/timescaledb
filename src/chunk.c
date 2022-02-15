@@ -812,7 +812,36 @@ ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht, const char *tabl
 	Relation rel;
 	ObjectAddress objaddr;
 	int sec_ctx;
-
+	PartitionRangeDatum prd_lower = {
+		.type = T_PartitionRangeDatum,
+		.kind = PARTITION_RANGE_DATUM_MINVALUE,
+		.value = (Node *) makeConst(INT8OID,
+									-1,
+									InvalidOid,
+									sizeof(int64),
+									Int64GetDatum(chunk->cube->slices[0]->fd.range_start),
+									false,
+									true),
+	};
+	PartitionRangeDatum prd_upper = {
+		.type = T_PartitionRangeDatum,
+		.kind = PARTITION_RANGE_DATUM_MAXVALUE,
+		.value = (Node *) makeConst(INT8OID,
+									-1,
+									InvalidOid,
+									sizeof(int64),
+									Int64GetDatum(chunk->cube->slices[0]->fd.range_end),
+									false,
+									true),
+	};
+	PartitionBoundSpec pbspec = {
+		.type = T_PartitionBoundSpec,
+		.is_default = false,
+		.location = -1,
+		.strategy = PARTITION_STRATEGY_RANGE,
+		.lowerdatums = list_make1(&prd_lower),
+		.upperdatums = list_make1(&prd_upper),
+	};
 	/*
 	 * The CreateForeignTableStmt embeds a regular CreateStmt, so we can use
 	 * it to create both regular and foreign tables
@@ -833,6 +862,7 @@ ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht, const char *tabl
 		.base.accessMethod = (chunk->relkind == RELKIND_RELATION) ?
 								 get_am_name_for_rel(chunk->hypertable_relid) :
 								 NULL,
+		.base.partbound = &pbspec,
 	};
 	Oid uid, saved_uid;
 
