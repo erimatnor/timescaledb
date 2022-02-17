@@ -2073,112 +2073,10 @@ chunks_find_all_in_range_limit(const Hypertable *ht, const Dimension *time_dim,
 	*num_found += hash_get_num_entries(ctx->htab);
 }
 
-#if 0
-static ChunkResult
-append_chunk_common(ChunkScanCtx *scanctx, ChunkStub *stub, Chunk **chunk)
-{
-	ChunkStubScanCtx stubctx = {
-		.stub = stub,
-	};
-
-	*chunk = NULL;
-
-	if (!chunk_stub_is_complete(stub, scanctx->space))
-		return CHUNK_IGNORED;
-
-	/* Fill in the rest of the chunk's data from the chunk table */
-	*chunk = chunk_create_from_stub(&stubctx);
-
-	if (stubctx.is_dropped)
-		return CHUNK_IGNORED;
-
-	Assert(OidIsValid((*chunk)->table_id));
-
-	if (scanctx->lockmode != NoLock)
-		LockRelationOid((*chunk)->table_id, scanctx->lockmode);
-
-	return CHUNK_PROCESSED;
-}
-
-static ChunkResult
-append_chunk_oid(ChunkScanCtx *scanctx, ChunkStub *stub)
-{
-	Chunk *chunk;
-	ChunkResult res = append_chunk_common(scanctx, stub, &chunk);
-
-	if (res == CHUNK_PROCESSED)
-	{
-		Assert(chunk != NULL);
-		scanctx->data = lappend_oid(scanctx->data, chunk->table_id);
-	}
-
-	return res;
-}
-static ChunkResult
-append_chunk(ChunkScanCtx *scanctx, ChunkStub *stub)
-{
-	Chunk *chunk;
-	ChunkResult res = append_chunk_common(scanctx, stub, &chunk);
-
-	if (res == CHUNK_PROCESSED)
-	{
-		Chunk **chunks = scanctx->data;
-
-		Assert(chunk != NULL);
-		Assert(scanctx->num_processed < scanctx->num_complete_chunks);
-
-		if (NULL == chunks)
-		{
-			Assert(scanctx->num_complete_chunks > 0);
-			scanctx->data = chunks = palloc(sizeof(Chunk *) * scanctx->num_complete_chunks);
-		}
-
-		chunks[scanctx->num_processed] = chunk;
-	}
-
-	return res;
-}
-
-static void *
-chunk_find_all(const Hypertable *ht, const List *dimension_vecs, on_chunk_stub_func on_chunk,
-			   LOCKMODE lockmode, unsigned int *num_chunks)
-{
-	ChunkScanCtx ctx;
-	ListCell *lc;
-	int num_processed;
-
-	/* The scan context will keep the state accumulated during the scan */
-	chunk_scan_ctx_init(&ctx, ht->space, NULL);
-
-	/* Do not abort the scan when one chunk is found */
-	ctx.early_abort = false;
-	ctx.lockmode = lockmode;
-
-	/* Scan all dimensions for slices enclosing the point */
-	foreach (lc, dimension_vecs)
-	{
-		const DimensionVec *vec = lfirst(lc);
-
-		dimension_slice_and_chunk_constraint_join(&ctx, vec);
-	}
-
-	ctx.data = NULL;
-	num_processed = chunk_scan_ctx_foreach_chunk_stub(&ctx, on_chunk, 0);
-
-	if (NULL != num_chunks)
-		*num_chunks = num_processed;
-
-	chunk_scan_ctx_destroy(&ctx);
-
-	return ctx.data;
-}
-#endif
-
 Chunk **
 ts_chunk_find_all(const Hypertable *ht, const List *dimension_vecs, LOCKMODE lockmode,
 				  unsigned int *num_chunks)
 {
-	// Chunk **chunks = chunk_find_all(ht, dimension_vecs, append_chunk, lockmode, num_chunks);
 	Chunk **chunks = ts_chunk_scan_by_constraints(ht->space, dimension_vecs, lockmode, num_chunks);
 #ifdef USE_ASSERT_CHECKING
 	/* Assert that we never return dropped chunks */
@@ -2194,13 +2092,13 @@ ts_chunk_find_all(const Hypertable *ht, const List *dimension_vecs, LOCKMODE loc
 List *
 ts_chunk_find_all_oids(const Hypertable *ht, const List *dimension_vecs, LOCKMODE lockmode)
 {
-	// List *chunks = chunk_find_all(ht, dimension_vecs, append_chunk_oid, lockmode, NULL);
 	unsigned int num_oids = 0;
 	Oid *chunkoids =
 		ts_chunk_scan_oids_by_constraints(ht->space, dimension_vecs, lockmode, &num_oids);
-	int i;
 	List *oids = NIL;
+	int i;
 
+	/* Convert into list */
 	for (i = 0; i < num_oids; i++)
 		oids = lappend_oid(oids, chunkoids[i]);
 
