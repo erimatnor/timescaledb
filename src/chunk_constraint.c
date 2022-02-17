@@ -3,7 +3,6 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-APACHE for a copy of the license.
  */
-#include "scanner.h"
 #include <postgres.h>
 #include <access/heapam.h>
 #include <access/xact.h>
@@ -23,6 +22,7 @@
 
 #include "compat/compat.h"
 #include "export.h"
+#include "scanner.h"
 #include "scan_iterator.h"
 #include "chunk_constraint.h"
 #include "chunk_index.h"
@@ -213,8 +213,8 @@ chunk_constraint_insert(ChunkConstraint *constraint)
 	table_close(rel, RowExclusiveLock);
 }
 
-static ChunkConstraint *
-chunk_constraints_add_from_tuple(ChunkConstraints *ccs, TupleInfo *ti)
+ChunkConstraint *
+ts_chunk_constraints_add_from_tuple(ChunkConstraints *ccs, const TupleInfo *ti)
 {
 	bool nulls[Natts_chunk_constraint];
 	Datum values[Natts_chunk_constraint];
@@ -414,7 +414,7 @@ ts_chunk_constraint_scan_by_chunk_id(int32 chunk_id, Size num_constraints_hint, 
 	ts_scanner_foreach(&iterator)
 	{
 		num_found++;
-		chunk_constraints_add_from_tuple(constraints, ts_scan_iterator_tuple_info(&iterator));
+		ts_chunk_constraints_add_from_tuple(constraints, ts_scan_iterator_tuple_info(&iterator));
 	}
 
 	if (num_found != constraints->num_constraints)
@@ -470,7 +470,7 @@ ts_chunk_constraint_scan_by_dimension_slice(const DimensionSlice *slice, ChunkSc
 		else
 			stub = entry->stub;
 
-		chunk_constraints_add_from_tuple(stub->constraints, ti);
+		ts_chunk_constraints_add_from_tuple(stub->constraints, ti);
 
 		ts_hypercube_add_slice(stub->cube, slice);
 
@@ -540,7 +540,7 @@ ts_chunk_constraint_scan_by_dimension_slice_id(int32 dimension_slice_id, ChunkCo
 
 		count++;
 		if (ccs != NULL)
-			chunk_constraints_add_from_tuple(ccs, ts_scan_iterator_tuple_info(&iterator));
+			ts_chunk_constraints_add_from_tuple(ccs, ts_scan_iterator_tuple_info(&iterator));
 	}
 	return count;
 }
@@ -768,7 +768,7 @@ ts_chunk_constraint_delete_by_chunk_id(int32 chunk_id, ChunkConstraints *ccs)
 	{
 		count++;
 
-		chunk_constraints_add_from_tuple(ccs, ts_scan_iterator_tuple_info(&iterator));
+		ts_chunk_constraints_add_from_tuple(ccs, ts_scan_iterator_tuple_info(&iterator));
 		chunk_constraint_delete_metadata(ts_scan_iterator_tuple_info(&iterator));
 		chunk_constraint_drop_constraint(ts_scan_iterator_tuple_info(&iterator));
 	}

@@ -194,6 +194,16 @@ ts_chunk_data_node_scan_by_node_internal(const char *node_name, tuple_found_func
 }
 
 /* Returns a List of ChunkDataNode structs. */
+ScanIterator
+ts_chunk_data_node_iterator_by_chunk_id(LOCKMODE lockmode)
+{
+	ScanIterator it = ts_scan_iterator_create(CHUNK_DATA_NODE, lockmode, CurrentMemoryContext);
+	it.ctx.index = catalog_get_index(ts_catalog_get(),
+									 CHUNK_DATA_NODE,
+									 CHUNK_DATA_NODE_CHUNK_ID_NODE_NAME_IDX);
+	return it;
+}
+
 List *
 ts_chunk_data_node_scan_by_chunk_id(int32 chunk_id, MemoryContext mctx)
 {

@@ -8,6 +8,7 @@
 
 #include "ts_catalog/catalog.h"
 #include "export.h"
+#include "scan_iterator.h"
 
 typedef struct ChunkDataNode
 {
@@ -31,5 +32,6 @@ extern int ts_chunk_data_node_delete_by_node_name(const char *node_name);
 extern TSDLLEXPORT List *
 ts_chunk_data_node_scan_by_node_name_and_hypertable_id(const char *node_name, int32 hypertable_id,
 													   MemoryContext mctx);
+extern ScanIterator ts_chunk_data_node_iterator_by_chunk_id(LOCKMODE lockmode);
 
 #endif /* TIMESCALEDB_CHUNK_DATA_NODE_H */

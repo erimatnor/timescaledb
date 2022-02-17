@@ -99,6 +99,7 @@ typedef struct ChunkScanCtx
 	int num_processed;
 	bool early_abort;
 	LOCKMODE lockmode;
+
 	void *data;
 } ChunkScanCtx;
 
@@ -200,6 +201,8 @@ extern TSDLLEXPORT Chunk *ts_chunk_create_only_table(Hypertable *ht, Hypercube *
 extern TSDLLEXPORT int64 ts_chunk_primary_dimension_start(const Chunk *chunk);
 
 extern TSDLLEXPORT int64 ts_chunk_primary_dimension_end(const Chunk *chunk);
+extern Chunk *ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti,
+												 const ChunkStub *stub);
 
 #define chunk_get_by_name(schema_name, table_name, fail_if_not_found)                              \
 	ts_chunk_get_by_name_with_memory_context(schema_name,                                          \

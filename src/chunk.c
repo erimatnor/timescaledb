@@ -1518,8 +1518,8 @@ ts_chunk_create_base(int32 id, int16 num_constraints, const char relkind)
  * is not "valid", dimension slices and constraints are fully
  * rescanned/recreated.
  */
-static Chunk *
-chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkStub *stub)
+Chunk *
+ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkStub *stub)
 {
 	Chunk *chunk = NULL;
 	int num_constraints_hint = stub ? stub->constraints->num_constraints : 2;
@@ -1603,11 +1603,11 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 	ChunkStubScanCtx *stubctx = arg;
 	Chunk *chunk;
 
-	chunk = chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub);
+	chunk = ts_chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub);
 	Assert(!chunk->fd.dropped);
 
 	/* Fill in table relids. Note that we cannot do this in
-	 * chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
+	 * ts_chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
 	 * that function and, in that case, the chunk object is needed to create
 	 * the data table and related objects. */
 	chunk->table_id = get_relname_relid(chunk->fd.table_name.data,
@@ -1922,7 +1922,7 @@ chunk_resurrect(const Hypertable *ht, const ChunkStub *stub)
 		HeapTuple new_tuple;
 
 		Assert(count == 0 && chunk == NULL);
-		chunk = chunk_build_from_tuple_and_stub(NULL, ti, stub);
+		chunk = ts_chunk_build_from_tuple_and_stub(NULL, ti, stub);
 		Assert(chunk->fd.dropped);
 
 		/* Create data table and related objects */
@@ -2661,6 +2661,51 @@ ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
 						   fail_if_not_found,
 						   displaykey);
 }
+/*
+typedef struct ChunkScan
+{
+	ScannerCtx sctx;
+	Chunk *chunks;
+	int numchunks;
+} ChunkScan;
+
+static ScanTupleResult
+chunk_scan_found_chunk_by_id(TupleInfo *ti, void *data)
+{
+
+	return SCAN_CONTINUE;
+}
+
+ChunkScan *
+ts_chunk_scan_by_id_begin(int limit)
+{
+	Catalog *catalog = ts_catalog_get();
+	ChunkScan *cscan = palloc0(sizeof(ChunkScan));
+
+	cscan->sctx = (ScannerCtx) {
+		.table = catalog_get_table_id(catalog, CHUNK),
+		.index = catalog_get_index(catalog, CHUNK, CHUNK_ID_INDEX),
+		.nkeys = 1,
+		.tuple_found = chunk_scan_found_chunk_by_id,
+		.limit = limit,
+		.lockmode = AccessShareLock,
+		.scandirection = ForwardScanDirection,
+		.result_mctx = CurrentMemoryContext,
+	};
+
+	ts_scanner_open(&cscan->sctx);
+
+	return cscan;
+}
+
+void
+ts_chunk_scan_end(ChunkScan *cscan)
+{
+	ts_scanner_close(&cscan->sctx);
+	pfree(cscan);
+}
+
+*/
 
 /*
  * Number of chunks created after given chunk.

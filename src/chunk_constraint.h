@@ -75,5 +75,7 @@ extern int ts_chunk_constraint_adjust_meta(int32 chunk_id, const char *ht_constr
 extern char *
 ts_chunk_constraint_get_name_from_hypertable_constraint(Oid chunk_relid,
 														const char *hypertable_constraint_name);
+extern ChunkConstraint *ts_chunk_constraints_add_from_tuple(ChunkConstraints *ccs,
+															const TupleInfo *ti);
 
 #endif /* TIMESCALEDB_CHUNK_CONSTRAINT_H */
