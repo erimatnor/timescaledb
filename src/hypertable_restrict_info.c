@@ -19,6 +19,7 @@
 #include "hypercube.h"
 #include "dimension_vector.h"
 #include "partitioning.h"
+#include "chunk_scan.h"
 
 typedef struct DimensionRestrictInfo
 {
@@ -563,7 +564,6 @@ ts_hypertable_restrict_info_get_chunk_oids(HypertableRestrictInfo *hri, Hypertab
 	List *dimension_vecs = gather_restriction_dimension_vectors(hri);
 
 	Assert(hri->num_dimensions == ht->space->num_dimensions);
-
 	return ts_chunk_find_all_oids(ht, dimension_vecs, lockmode);
 }
 

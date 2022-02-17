@@ -64,6 +64,7 @@
 #include "scan_iterator.h"
 #include "ts_catalog/compression_chunk_size.h"
 #include "extension.h"
+#include "chunk_scan.h"
 
 TS_FUNCTION_INFO_V1(ts_chunk_show_chunks);
 TS_FUNCTION_INFO_V1(ts_chunk_drop_chunks);
@@ -2072,6 +2073,7 @@ chunks_find_all_in_range_limit(const Hypertable *ht, const Dimension *time_dim,
 	*num_found += hash_get_num_entries(ctx->htab);
 }
 
+#if 0
 static ChunkResult
 append_chunk_common(ChunkScanCtx *scanctx, ChunkStub *stub, Chunk **chunk)
 {
@@ -2112,7 +2114,6 @@ append_chunk_oid(ChunkScanCtx *scanctx, ChunkStub *stub)
 
 	return res;
 }
-
 static ChunkResult
 append_chunk(ChunkScanCtx *scanctx, ChunkStub *stub)
 {
@@ -2171,13 +2172,14 @@ chunk_find_all(const Hypertable *ht, const List *dimension_vecs, on_chunk_stub_f
 
 	return ctx.data;
 }
+#endif
 
 Chunk **
 ts_chunk_find_all(const Hypertable *ht, const List *dimension_vecs, LOCKMODE lockmode,
 				  unsigned int *num_chunks)
 {
-	Chunk **chunks = chunk_find_all(ht, dimension_vecs, append_chunk, lockmode, num_chunks);
-
+	// Chunk **chunks = chunk_find_all(ht, dimension_vecs, append_chunk, lockmode, num_chunks);
+	Chunk **chunks = ts_chunk_scan_by_constraints(ht->space, dimension_vecs, lockmode, num_chunks);
 #ifdef USE_ASSERT_CHECKING
 	/* Assert that we never return dropped chunks */
 	int i;
@@ -2192,20 +2194,19 @@ ts_chunk_find_all(const Hypertable *ht, const List *dimension_vecs, LOCKMODE loc
 List *
 ts_chunk_find_all_oids(const Hypertable *ht, const List *dimension_vecs, LOCKMODE lockmode)
 {
-	List *chunks = chunk_find_all(ht, dimension_vecs, append_chunk_oid, lockmode, NULL);
+	// List *chunks = chunk_find_all(ht, dimension_vecs, append_chunk_oid, lockmode, NULL);
+	unsigned int num_oids = 0;
+	Oid *chunkoids =
+		ts_chunk_scan_oids_by_constraints(ht->space, dimension_vecs, lockmode, &num_oids);
+	int i;
+	List *oids = NIL;
 
-#ifdef USE_ASSERT_CHECKING
-	/* Assert that we never return dropped chunks */
-	ListCell *lc;
+	for (i = 0; i < 0; i++)
+		oids = lappend_oid(oids, chunkoids[i]);
 
-	foreach (lc, chunks)
-	{
-		Chunk *chunk = ts_chunk_get_by_relid(lfirst_oid(lc), true);
-		ASSERT_IS_VALID_CHUNK(chunk);
-	}
-#endif
+	pfree(chunkoids);
 
-	return chunks;
+	return oids;
 }
 
 /* show_chunks SQL function handler */
