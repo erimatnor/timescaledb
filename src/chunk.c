@@ -2083,7 +2083,9 @@ ts_chunk_find_all(const Hypertable *ht, const List *dimension_vecs, LOCKMODE loc
 	int i;
 
 	for (i = 0; i < *num_chunks; i++)
+	{
 		ASSERT_IS_VALID_CHUNK(chunks[i]);
+	}
 #endif
 
 	return chunks;

@@ -34,6 +34,7 @@ typedef struct ScanIterator
 			.scandirection = ForwardScanDirection,                                                 \
 			.lockmode = lock_mode,                                                                 \
 			.result_mctx = mctx,                                                                   \
+			.flags = SCANNER_F_NOFLAGS,									\
 		},																\
 		.scankey_mcxt = CurrentMemoryContext, \
 	}
@@ -93,6 +94,12 @@ static inline void
 ts_scan_iterator_scan_key_reset(ScanIterator *iterator)
 {
 	iterator->ctx.nkeys = 0;
+}
+
+static inline bool
+ts_scan_iterator_is_started(ScanIterator *iterator)
+{
+	return iterator->ctx.internal.started;
 }
 
 void TSDLLEXPORT ts_scan_iterator_set_index(ScanIterator *iterator, CatalogTable table,

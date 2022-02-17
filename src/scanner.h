@@ -69,6 +69,14 @@ typedef union ScanDesc
 	TableScanDesc table_scan;
 } ScanDesc;
 
+typedef enum ScannerFlags
+{
+	SCANNER_F_NOFLAGS = 0x00,
+	SCANNER_F_KEEPLOCK = 0x01,
+	SCANNER_F_NOEND = 0x02,
+	SCANNER_F_NOEND_AND_NOCLOSE = 0x04 | SCANNER_F_NOEND,
+} ScannerFlags;
+
 /*
  * InternalScannerCtx is used for internal state during scanning and shouldn't
  * be initialized or touched by the user.
@@ -77,8 +85,8 @@ typedef struct InternalScannerCtx
 {
 	TupleInfo tinfo;
 	ScanDesc scan;
-	bool autoclose;
 	bool registered_snapshot;
+	bool started;
 	bool ended;
 } InternalScannerCtx;
 
@@ -91,10 +99,10 @@ typedef struct ScannerCtx
 	Relation tablerel;
 	Relation indexrel;
 	ScanKey scankey;
+	int flags;
 	int nkeys, norderbys, limit; /* Limit on number of tuples to return. 0 or
 								  * less means no limit */
 	bool want_itup;
-	bool keeplock; /* Keep the table lock after the scan finishes */
 	LOCKMODE lockmode;
 	MemoryContext result_mctx; /* The memory context to allocate the result
 								* on */
