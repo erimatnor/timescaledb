@@ -2201,7 +2201,7 @@ ts_chunk_find_all_oids(const Hypertable *ht, const List *dimension_vecs, LOCKMOD
 	int i;
 	List *oids = NIL;
 
-	for (i = 0; i < 0; i++)
+	for (i = 0; i < num_oids; i++)
 		oids = lappend_oid(oids, chunkoids[i]);
 
 	pfree(chunkoids);
