@@ -432,9 +432,9 @@ SELECT * FROM alter_test WHERE time > '2017-05-20T10:00:01';
                                        QUERY PLAN                                        
 -----------------------------------------------------------------------------------------
  Append
-   ->  Index Scan using _hyper_9_4_chunk_alter_test_time_idx on _hyper_9_4_chunk
-         Index Cond: ("time" > 'Sat May 20 10:00:01 2017 PDT'::timestamp with time zone)
    ->  Index Scan using _hyper_9_5_chunk_alter_test_time_idx on _hyper_9_5_chunk
+         Index Cond: ("time" > 'Sat May 20 10:00:01 2017 PDT'::timestamp with time zone)
+   ->  Index Scan using _hyper_9_4_chunk_alter_test_time_idx on _hyper_9_4_chunk
          Index Cond: ("time" > 'Sat May 20 10:00:01 2017 PDT'::timestamp with time zone)
 (5 rows)
 
@@ -487,9 +487,9 @@ SELECT * FROM alter_test WHERE time_us > '2017-05-20T10:00:01';
                                      QUERY PLAN                                      
 -------------------------------------------------------------------------------------
  Append
-   ->  Seq Scan on _hyper_9_4_chunk
-         Filter: (time_us > 'Sat May 20 10:00:01 2017'::timestamp without time zone)
    ->  Seq Scan on _hyper_9_5_chunk
+         Filter: (time_us > 'Sat May 20 10:00:01 2017'::timestamp without time zone)
+   ->  Seq Scan on _hyper_9_4_chunk
          Filter: (time_us > 'Sat May 20 10:00:01 2017'::timestamp without time zone)
 (5 rows)
 
