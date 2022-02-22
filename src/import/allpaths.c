@@ -582,13 +582,14 @@ ts_set_append_rel_size(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEn
 		if (IS_DUMMY_REL(childrel))
 			continue;
 
-		/*
-		 * We have to copy the parent's targetlist and quals to the child,
-		 * with appropriate substitution of variables.  However, the
-		 * baserestrictinfo quals were already copied/substituted when the
-		 * child RelOptInfo was built.  So we don't need any additional setup
-		 * before applying constraint exclusion.
-		 */
+			/*
+			 * We have to copy the parent's targetlist and quals to the child,
+			 * with appropriate substitution of variables.  However, the
+			 * baserestrictinfo quals were already copied/substituted when the
+			 * child RelOptInfo was built.  So we don't need any additional setup
+			 * before applying constraint exclusion.
+			 */
+#if 0
 		if (relation_excluded_by_constraints(root, childrel, childRTE))
 		{
 			/*
@@ -598,7 +599,7 @@ ts_set_append_rel_size(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeTblEn
 			set_dummy_rel_pathlist(childrel);
 			continue;
 		}
-
+#endif
 		/*
 		 * Constraint exclusion failed, so copy the parent's join quals and
 		 * targetlist to the child, with appropriate variable substitutions.

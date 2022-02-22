@@ -91,6 +91,12 @@ extern void ts_dimension_slice_scan_iterator_set_slice_id(ScanIterator *it, int3
 extern DimensionSlice *ts_dimension_slice_scan_iterator_get_by_id(ScanIterator *it, int32 slice_id,
 																  const ScanTupLock *tuplock);
 
+extern void ts_dimension_slice_scan_iterator_range_init(ScanIterator *it, int32 dimension_id,
+														StrategyNumber start_strategy,
+														int64 start_value,
+														StrategyNumber end_strategy,
+														int64 end_value);
+
 #define dimension_slice_insert(slice) ts_dimension_slice_insert_multi(&(slice), 1)
 
 #define dimension_slice_scan(dimension_id, coordinate, tuplock)                                    \

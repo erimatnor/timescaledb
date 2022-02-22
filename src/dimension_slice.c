@@ -264,6 +264,82 @@ ts_dimension_slice_scan_limit(int32 dimension_id, int64 coordinate, int limit,
 	return ts_dimension_vec_sort(&slices);
 }
 
+void
+ts_dimension_slice_scan_iterator_range_init(ScanIterator *it, int32 dimension_id,
+											StrategyNumber start_strategy, int64 start_value,
+											StrategyNumber end_strategy, int64 end_value)
+{
+	Catalog *catalog = ts_catalog_get();
+
+	it->ctx.index = catalog_get_index(catalog,
+									  DIMENSION_SLICE,
+									  DIMENSION_SLICE_DIMENSION_ID_RANGE_START_RANGE_END_IDX);
+	it->ctx.flags = SCANNER_F_NOEND_AND_NOCLOSE;
+	ts_scan_iterator_scan_key_reset(it);
+	ts_scan_iterator_scan_key_init(
+		it,
+		Anum_dimension_slice_dimension_id_range_start_range_end_idx_dimension_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(dimension_id));
+
+	/*
+	 * Perform an index scan for slices matching the dimension's ID and which
+	 * enclose the coordinate.
+	 */
+	if (start_strategy != InvalidStrategy)
+	{
+		Oid opno = get_opfamily_member(INTEGER_BTREE_FAM_OID, INT8OID, INT8OID, start_strategy);
+		Oid proc = get_opcode(opno);
+
+		Assert(OidIsValid(proc));
+
+		ts_scan_iterator_scan_key_init(
+			it,
+			Anum_dimension_slice_dimension_id_range_start_range_end_idx_range_start,
+			start_strategy,
+			proc,
+			Int64GetDatum(start_value));
+	}
+	if (end_strategy != InvalidStrategy)
+	{
+		Oid opno = get_opfamily_member(INTEGER_BTREE_FAM_OID, INT8OID, INT8OID, end_strategy);
+		Oid proc = get_opcode(opno);
+
+		Assert(OidIsValid(proc));
+
+		/*
+		 * range_end is stored as exclusive, so add 1 to the value being
+		 * searched. Also avoid overflow
+		 */
+		if (end_value != PG_INT64_MAX)
+		{
+			end_value++;
+
+			/*
+			 * If getting as input INT64_MAX-1, need to remap the incremented
+			 * value back to INT64_MAX-1
+			 */
+			end_value = REMAP_LAST_COORDINATE(end_value);
+		}
+		else
+		{
+			/*
+			 * The point with INT64_MAX gets mapped to INT64_MAX-1 so
+			 * incrementing that gets you to INT_64MAX
+			 */
+			end_value = PG_INT64_MAX;
+		}
+
+		ts_scan_iterator_scan_key_init(
+			it,
+			Anum_dimension_slice_dimension_id_range_start_range_end_idx_range_end,
+			end_strategy,
+			proc,
+			Int64GetDatum(end_value));
+	}
+}
+
 static void
 dimension_slice_scan_with_strategies(int32 dimension_id, StrategyNumber start_strategy,
 									 int64 start_value, StrategyNumber end_strategy,

@@ -20,6 +20,7 @@
 #include "dimension_vector.h"
 #include "partitioning.h"
 #include "chunk_scan.h"
+#include "scan_iterator.h"
 
 typedef struct DimensionRestrictInfo
 {
@@ -232,6 +233,7 @@ dimension_restrict_info_add(DimensionRestrictInfo *dri, int strategy, Oid collat
 	}
 }
 
+#if 0
 static DimensionVec *
 dimension_restrict_info_open_slices(DimensionRestrictInfoOpen *dri)
 {
@@ -296,6 +298,7 @@ dimension_restrict_info_slices(DimensionRestrictInfo *dri)
 			return NULL;
 	}
 }
+#endif
 
 typedef struct HypertableRestrictInfo
 {
@@ -525,20 +528,97 @@ ts_hypertable_restrict_info_has_restrictions(HypertableRestrictInfo *hri)
 	return hri->num_base_restrictions > 0;
 }
 
+static DimensionVec *
+scan_all_slices(ScanIterator *it, DimensionVec **dv)
+{
+	ts_scan_iterator_start_or_restart_scan(it);
+
+	while (ts_scan_iterator_next(it))
+	{
+		TupleInfo *ti = ts_scan_iterator_tuple_info(it);
+		DimensionSlice *slice = ts_dimension_slice_from_tuple(ti);
+		*dv = ts_dimension_vec_add_slice(dv, slice);
+	}
+
+	return *dv;
+}
+
 static List *
 gather_restriction_dimension_vectors(HypertableRestrictInfo *hri)
 {
+	Catalog *catalog = ts_catalog_get();
 	int i;
 	List *dimension_vecs = NIL;
+	ScanIterator it;
+
+	it = ts_scan_iterator_create(DIMENSION_SLICE, AccessShareLock, CurrentMemoryContext);
+	it.ctx.index = catalog_get_index(catalog,
+									 DIMENSION_SLICE,
+									 DIMENSION_SLICE_DIMENSION_ID_RANGE_START_RANGE_END_IDX);
 
 	for (i = 0; i < hri->num_dimensions; i++)
 	{
 		DimensionRestrictInfo *dri = hri->dimension_restriction[i];
-		DimensionVec *dv;
+		DimensionVec *dv = ts_dimension_vec_create(DIMENSION_VEC_DEFAULT_SIZE);
 
 		Assert(NULL != dri);
 
-		dv = dimension_restrict_info_slices(dri);
+		switch (dri->dimension->type)
+		{
+			case DIMENSION_TYPE_OPEN:
+			{
+				DimensionRestrictInfoOpen *open = (DimensionRestrictInfoOpen *) dri;
+
+				ts_dimension_slice_scan_iterator_range_init(&it,
+															open->base.dimension->fd.id,
+															open->upper_strategy,
+															open->upper_bound,
+															open->lower_strategy,
+															open->lower_bound);
+				dv = scan_all_slices(&it, &dv);
+				break;
+			}
+			case DIMENSION_TYPE_CLOSED:
+			{
+				DimensionRestrictInfoClosed *closed = (DimensionRestrictInfoClosed *) dri;
+
+				if (closed->strategy == BTEqualStrategyNumber)
+				{
+					/* slice_end >= value && slice_start <= value */
+					ListCell *cell;
+
+					foreach (cell, closed->partitions)
+					{
+						int32 partition = lfirst_int(cell);
+
+						ts_dimension_slice_scan_iterator_range_init(&it,
+																	dri->dimension->fd.id,
+																	BTLessEqualStrategyNumber,
+																	partition,
+																	BTGreaterEqualStrategyNumber,
+																	partition);
+
+						dv = scan_all_slices(&it, &dv);
+					}
+				}
+				else
+				{
+					ts_dimension_slice_scan_iterator_range_init(&it,
+																dri->dimension->fd.id,
+																InvalidStrategy,
+																-1,
+																InvalidStrategy,
+																-1);
+					dv = scan_all_slices(&it, &dv);
+				}
+				break;
+			}
+			default:
+				elog(ERROR, "unknown dimension type");
+				return NULL;
+		}
+
+		// dv = dimension_restrict_info_slices(dri);
 
 		Assert(dv->num_slices >= 0);
 
@@ -551,6 +631,8 @@ gather_restriction_dimension_vectors(HypertableRestrictInfo *hri)
 
 		dimension_vecs = lappend(dimension_vecs, dv);
 	}
+
+	ts_scan_iterator_close(&it);
 
 	Assert(list_length(dimension_vecs) == hri->num_dimensions);
 
