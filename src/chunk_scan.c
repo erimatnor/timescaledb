@@ -283,7 +283,7 @@ ts_chunk_scan_by_constraints(const Hyperspace *hs, const List *dimension_vecs,
 		{
 			MemoryContext old_mcxt = MemoryContextSwitchTo(orig_mcxt);
 			chunk = ts_chunk_copy(chunk);
-			elog(NOTICE, "Got chunk %d from cache", chunk->fd.id);
+			// elog(NOTICE, "Got chunk %d from cache", chunk->fd.id);
 			MemoryContextSwitchTo(old_mcxt);
 		}
 
