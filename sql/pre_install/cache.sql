@@ -6,6 +6,7 @@
 -- metadata caches kept in C. Please look at cache_invalidate.c for a
 -- description of how this works.
 CREATE TABLE _timescaledb_cache.cache_inval_hypertable();
+CREATE TABLE _timescaledb_cache.cache_inval_chunk();
 
 -- For notifying the scheduler of changes to the bgw_job table.
 CREATE TABLE _timescaledb_cache.cache_inval_bgw_job();
@@ -20,6 +21,7 @@ CREATE TABLE _timescaledb_cache.cache_inval_extension();
 
 -- not actually strictly needed but good for sanity as all tables should be dumped.
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_cache.cache_inval_hypertable', '');
+SELECT pg_catalog.pg_extension_config_dump('_timescaledb_cache.cache_inval_chunk', '');
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_cache.cache_inval_extension', '');
 SELECT pg_catalog.pg_extension_config_dump('_timescaledb_cache.cache_inval_bgw_job', '');
 

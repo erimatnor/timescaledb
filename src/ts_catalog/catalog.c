@@ -310,6 +310,7 @@ const static InternalFunctionDef internal_function_definitions[_MAX_INTERNAL_FUN
  * sql/cache.sql */
 static const char *cache_proxy_table_names[_MAX_CACHE_TYPES] = {
 	[CACHE_TYPE_HYPERTABLE] = "cache_inval_hypertable",
+	[CACHE_TYPE_CHUNK] = "cache_inval_chunk",
 	[CACHE_TYPE_BGW_JOB] = "cache_inval_bgw_job",
 };
 
@@ -735,6 +736,8 @@ ts_catalog_invalidate_cache(Oid catalog_relid, CmdType operation)
 			if (operation == CMD_UPDATE || operation == CMD_DELETE)
 			{
 				relid = ts_catalog_get_cache_proxy_id(catalog, CACHE_TYPE_HYPERTABLE);
+				CacheInvalidateRelcacheByRelid(relid);
+				relid = ts_catalog_get_cache_proxy_id(catalog, CACHE_TYPE_CHUNK);
 				CacheInvalidateRelcacheByRelid(relid);
 			}
 			break;

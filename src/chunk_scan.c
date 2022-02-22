@@ -14,6 +14,7 @@
 #include "scan_iterator.h"
 #include "chunk_scan.h"
 #include "chunk.h"
+#include "chunk_cache.h"
 #include "chunk_constraint.h"
 #include "ts_catalog/chunk_data_node.h"
 
@@ -198,93 +199,112 @@ ts_chunk_scan_by_constraints(const Hyperspace *hs, const List *dimension_vecs,
 
 	chunk_it = ts_chunk_scan_iterator_create(orig_mcxt);
 	data_node_it = ts_chunk_data_nodes_scan_iterator_create(orig_mcxt);
+	Cache *ccache = ts_chunk_cache_pin();
 
 	foreach (lc, chunk_stubs)
 	{
 		const ChunkStub *stub = lfirst(lc);
 		TupleInfo *ti;
+		Chunk *chunk;
 
 		Assert(CurrentMemoryContext == work_mcxt);
 		Assert(chunk_stub_is_complete(stub, hs));
 
-		ts_chunk_scan_iterator_set_chunk_id(&chunk_it, stub->id);
-		ts_scan_iterator_start_or_restart_scan(&chunk_it);
-		ti = ts_scan_iterator_next(&chunk_it);
+		chunk = ts_chunk_cache_get_entry_by_id(ccache,
+											   stub->id,
+											   CACHE_FLAG_NOCREATE | CACHE_FLAG_MISSING_OK);
 
-		if (ti)
+		if (NULL == chunk)
 		{
-			bool isnull;
-			Datum datum = slot_getattr(ti->slot, Anum_chunk_dropped, &isnull);
-			bool is_dropped = isnull ? false : DatumGetBool(datum);
+			ts_chunk_scan_iterator_set_chunk_id(&chunk_it, stub->id);
+			ts_scan_iterator_start_or_restart_scan(&chunk_it);
+			ti = ts_scan_iterator_next(&chunk_it);
 
-			MemoryContextSwitchTo(per_tuple_mcxt);
-			MemoryContextReset(per_tuple_mcxt);
-
-			if (!is_dropped)
+			if (ti)
 			{
-				Chunk *chunk = MemoryContextAllocZero(ti->mctx, sizeof(Chunk));
-				int num_constraints_hint = stub->constraints->num_constraints;
-				MemoryContext old_mcxt;
-				Oid schema_oid;
-
-				ts_chunk_formdata_fill(&chunk->fd, ti);
-
-				/*
-				 * The chunk stub scan only gave us dimensional
-				 * constraints. Scan again for all constraints.
-				 */
-				chunk->constraints = ts_chunk_constraints_alloc(num_constraints_hint, ti->mctx);
-
-				MemoryContextSwitchTo(work_mcxt);
-				ts_chunk_constraint_scan_iterator_set_chunk_id(&constr_it, chunk->fd.id);
-				ts_scan_iterator_rescan(&constr_it);
-
-				while (ts_scan_iterator_next(&constr_it) != NULL)
-				{
-					TupleInfo *constr_ti = ts_scan_iterator_tuple_info(&constr_it);
-					MemoryContextSwitchTo(per_tuple_mcxt);
-					ts_chunk_constraints_add_from_tuple(chunk->constraints, constr_ti);
-					MemoryContextSwitchTo(work_mcxt);
-				}
+				bool isnull;
+				Datum datum = slot_getattr(ti->slot, Anum_chunk_dropped, &isnull);
+				bool is_dropped = isnull ? false : DatumGetBool(datum);
 
 				MemoryContextSwitchTo(per_tuple_mcxt);
+				MemoryContextReset(per_tuple_mcxt);
 
-				/* Copy the hypercube into the result memory context */
-				old_mcxt = MemoryContextSwitchTo(ti->mctx);
-				chunk->cube = ts_hypercube_copy(stub->cube);
-				MemoryContextSwitchTo(old_mcxt);
-
-				/* Fill in table relids. Note that we cannot do this in
-				 * chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
-				 * that function and, in that case, the chunk object is needed to create
-				 * the data table and related objects. */
-				schema_oid = get_namespace_oid(NameStr(chunk->fd.schema_name), false);
-				chunk->table_id = get_relname_relid(NameStr(chunk->fd.table_name), schema_oid);
-				chunk->hypertable_relid = hs->main_table_relid;
-				chunk->relkind = get_rel_relkind(chunk->table_id);
-				Assert(OidIsValid(chunk->table_id));
-
-				if (lock_chunk_exists(chunk->table_id, chunk_lockmode))
+				if (!is_dropped)
 				{
-					/* Lazy initialize the chunks array */
-					if (NULL == chunks)
-						chunks = MemoryContextAllocZero(orig_mcxt,
-														sizeof(Chunk *) * list_length(chunk_stubs));
+					int num_constraints_hint = stub->constraints->num_constraints;
+					MemoryContext old_mcxt;
+					Oid schema_oid;
 
-					chunks[chunk_count] = chunk;
+					chunk = MemoryContextAllocZero(ti->mctx, sizeof(Chunk));
+					ts_chunk_formdata_fill(&chunk->fd, ti);
 
-					if (chunk->relkind == RELKIND_FOREIGN_TABLE)
-						remote_chunk_count++;
+					/*
+					 * The chunk stub scan only gave us dimensional
+					 * constraints. Scan again for all constraints.
+					 */
+					chunk->constraints = ts_chunk_constraints_alloc(num_constraints_hint, ti->mctx);
 
-					chunk_count++;
+					MemoryContextSwitchTo(work_mcxt);
+					ts_chunk_constraint_scan_iterator_set_chunk_id(&constr_it, chunk->fd.id);
+					ts_scan_iterator_rescan(&constr_it);
+
+					while (ts_scan_iterator_next(&constr_it) != NULL)
+					{
+						TupleInfo *constr_ti = ts_scan_iterator_tuple_info(&constr_it);
+						MemoryContextSwitchTo(per_tuple_mcxt);
+						ts_chunk_constraints_add_from_tuple(chunk->constraints, constr_ti);
+						MemoryContextSwitchTo(work_mcxt);
+					}
+
+					MemoryContextSwitchTo(per_tuple_mcxt);
+
+					/* Copy the hypercube into the result memory context */
+					old_mcxt = MemoryContextSwitchTo(ti->mctx);
+					chunk->cube = ts_hypercube_copy(stub->cube);
+					MemoryContextSwitchTo(old_mcxt);
+
+					/* Fill in table relids. Note that we cannot do this in
+					 * chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
+					 * that function and, in that case, the chunk object is needed to create
+					 * the data table and related objects. */
+					schema_oid = get_namespace_oid(NameStr(chunk->fd.schema_name), false);
+					chunk->table_id = get_relname_relid(NameStr(chunk->fd.table_name), schema_oid);
+					chunk->hypertable_relid = hs->main_table_relid;
+					chunk->relkind = get_rel_relkind(chunk->table_id);
+					Assert(OidIsValid(chunk->table_id));
 				}
-			}
 
-			/* Only one chunk should match */
-			Assert(ts_scan_iterator_next(&chunk_it) == NULL);
-			MemoryContextSwitchTo(work_mcxt);
+				/* Only one chunk should match */
+				Assert(ts_scan_iterator_next(&chunk_it) == NULL);
+				MemoryContextSwitchTo(work_mcxt);
+			}
+		}
+		else
+		{
+			MemoryContext old_mcxt = MemoryContextSwitchTo(orig_mcxt);
+			chunk = ts_chunk_copy(chunk);
+			elog(NOTICE, "Got chunk %d from cache", chunk->fd.id);
+			MemoryContextSwitchTo(old_mcxt);
+		}
+
+		if (chunk != NULL && lock_chunk_exists(chunk->table_id, chunk_lockmode))
+		{
+			/* Lazy initialize the chunks array */
+			if (NULL == chunks)
+				chunks =
+					MemoryContextAllocZero(orig_mcxt, sizeof(Chunk *) * list_length(chunk_stubs));
+
+			chunks[chunk_count] = chunk;
+			ts_chunk_cache_put_entry(ccache, chunk, true);
+
+			if (chunk->relkind == RELKIND_FOREIGN_TABLE)
+				remote_chunk_count++;
+
+			chunk_count++;
 		}
 	}
+
+	ts_cache_release(ccache);
 
 	Assert(chunks == NULL || chunk_count > 0);
 	Assert(chunk_count <= list_length(chunk_stubs));

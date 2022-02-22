@@ -17,6 +17,7 @@
 #include "compat/compat.h"
 #include "extension.h"
 #include "hypertable_cache.h"
+#include "chunk_cache.h"
 
 #include "bgw/scheduler.h"
 #include "cross_module_fn.h"
@@ -56,6 +57,7 @@ static inline void
 cache_invalidate_relcache_all(void)
 {
 	ts_hypertable_cache_invalidate_callback();
+	ts_chunk_cache_invalidate_callback();
 	ts_bgw_job_cache_invalidate_callback();
 }
 
@@ -95,6 +97,9 @@ cache_invalidate_callback(Datum arg, Oid relid)
 
 		if (relid == ts_catalog_get_cache_proxy_id(catalog, CACHE_TYPE_BGW_JOB))
 			ts_bgw_job_cache_invalidate_callback();
+
+		if (relid == ts_catalog_get_cache_proxy_id(catalog, CACHE_TYPE_CHUNK))
+			ts_chunk_cache_invalidate_callback();
 
 		if (relid == InvalidOid)
 			cache_invalidate_relcache_all();

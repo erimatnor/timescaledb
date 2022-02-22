@@ -1272,6 +1272,7 @@ enum Anum_chunk_copy_operation_pkey_idx
 typedef enum CacheType
 {
 	CACHE_TYPE_HYPERTABLE,
+	CACHE_TYPE_CHUNK,
 	CACHE_TYPE_BGW_JOB,
 	_MAX_CACHE_TYPES
 } CacheType;
