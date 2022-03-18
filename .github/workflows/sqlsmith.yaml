@@ -4,20 +4,63 @@ on:
     # run daily 20:00 on main branch
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      seed:
+        description: 'SQLsmith seed'
+        default: '\$((16#\$(openssl rand -hex 3)))'
+        type: string
+        required: true
+      os:
+        description: 'The OS to run on'
+        required: true
+        default: 'ubuntu-20.04'
+        type: choice
+        options:
+          - 'ubuntu-20.04'
+          - 'ubuntu-latest'
+      compiler:
+        description: 'Compiler to use'
+        required: true
+        type: choice
+        default: 'gcc'
+        options:
+          - 'gcc'
+          - 'clang'
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        default: 'Debug'
+        options:
+          - 'Debug'
+          - 'Release'
+      pg:
+        description: 'PostgreSQL version'
+        required: true
+        type: string
+        default: '14.2'
+      tsdb_build_args:
+        description: 'Extra CMake build arguments for TimescaleDB'
+        required: false
+        type: string
+        default: ''
+      number_of_runs:
+        description: 'Number of SQLsmith runs'
+        type: number
+        default: 10
+        required: true
+      max_queries:
+        description: 'Max number of SQLsmith queries'
+        type: number
+        default: 10000
+        required: true
   push:
     branches:
       - sqlsmith
 jobs:
   regress:
-    name: SQLsmith PG${{ matrix.pg }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: ["ubuntu-20.04"]
-        pg: ["14.2"]
-        cc: ["gcc"]
-        build_type: ["Debug"]
-      fail-fast: false
+    name: SQLsmith PG${{ github.event.inputs.pg }}
+    runs-on: ${{ github.event.inputs.os }}
     env:
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
@@ -30,20 +73,19 @@ jobs:
 
     # this workflow depends on the cached postgres build from the main regression
     # workflow since that workflow runs daily there should always be a cache hit
-    - name: Cache PostgreSQL ${{ matrix.pg }}
+    - name: Cache PostgreSQL ${{ github.event.inputs.pg }}
       id: cache-postgresql
       uses: actions/cache@v2
       with:
         path: ~/${{ env.PG_SRC_DIR }}
-        key: ${{ matrix.os }}-postgresql-${{ matrix.pg }}-${{ matrix.cc }}-${{ matrix.build_type }}
+        key: ${{ github.event.inputs.os }}-postgresql-${{ github.event.inputs.pg }}-${{ github.event.inputs.compiler }}-${{ github.event.inputs.build_type }}
 
-    # we abort on cache miss otherwise we would have to reproduce most variables
-    # of the main regression build matrix in this workflow
+    # we abort on cache miss 
     - name: Abort on cache miss
       if: steps.cache-postgresql.outputs.cache-hit != 'true'
       run: false
 
-    - name: Install PostgreSQL ${{ matrix.pg }} ${{ matrix.build_type }}
+    - name: Install PostgreSQL ${{ github.event.inputs.pg }} ${{ github.event.inputs.build_type }}
       run: |
         make -C ~/$PG_SRC_DIR install
         make -C ~/$PG_SRC_DIR/contrib/postgres_fdw install
@@ -53,7 +95,7 @@ jobs:
 
     - name: Build TimescaleDB
       run: |
-        ./bootstrap -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DPG_SOURCE_DIR=~/$PG_SRC_DIR -DPG_PATH=~/$PG_INSTALL_DIR ${{ matrix.tsdb_build_args }}
+        ./bootstrap -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -DPG_SOURCE_DIR=~/$PG_SRC_DIR -DPG_PATH=~/$PG_INSTALL_DIR ${{ github.event.inputs.tsdb_build_args }}
         make -C build
         make -C build install
 
@@ -85,7 +127,7 @@ jobs:
     - name: Run SQLsmith
       run: |
         cd sqlsmith
-        for i in `seq 1 10`; do ./sqlsmith --seed=$((16#$(openssl rand -hex 3))) --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=10000; done
+        for i in `seq 1 ${{ github.event.inputs.number_of_runs }}`; do ./sqlsmith --seed=${{ github.event.inputs.seed}} --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=${{ github.event.inputs.max_queries }} > tee queries-$i-${{ github.event.inputs-seed }}.log; done
 
     - name: Check for coredumps
       if: always()
@@ -107,7 +149,14 @@ jobs:
 
     - name: Upload Coredumps
       if: always() && steps.collectlogs.outputs.coredumps == 'true'
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
-        name: Coredumps sqlsmith ${{ matrix.os }} PG${{ matrix.pg }}
+        name: Coredumps sqlsmith ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
         path: coredumps
+
+    - name: Upload query logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: SQL query logs ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
+        path: queries-*.log
