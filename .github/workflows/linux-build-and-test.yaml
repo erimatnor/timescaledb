@@ -18,10 +18,25 @@ jobs:
     - name: Build matrix
       id: set-matrix
       run: python scripts/gh_matrix_builder.py ${{ github.event_name }}
-
+  install_postgresql:
+    uses: './.github/workflows/postgresql-build-and-cache.yaml'
+    needs: matrixbuilder    
+    with:
+      os: ${{ matrix.os }}
+      pg: ${{ matrix.pg }}
+      c_compiler: ${{ matrix.cc }}
+      cxx_compiler: ${{ matrix.cxx }}
+      variant: ${{ matrix.build_type }}
+      snapshot: ${{ matrix.snapshot }}
+      llvm_config: $${ matrix.llvm_config }}
+      build_args: ${{ matrix.pg_build_args }}
+      extra_build_args: ${{ matrix.pg_extra_args }}
+    strategy:
+      matrix: ${{ fromJson(needs.matrixbuilder.outputs.matrix) }}
+      fail-fast: false      
   regress:
     name: PG${{ matrix.pg }}${{ matrix.snapshot }} ${{ matrix.name }} ${{ matrix.os }}
-    needs: matrixbuilder
+    needs: install_postgresql
     runs-on: ${{ matrix.os }}
     strategy:
       matrix: ${{ fromJson(needs.matrixbuilder.outputs.matrix) }}
@@ -35,6 +50,20 @@ jobs:
       CXX: ${{ matrix.cxx }}
 
     steps:
+    # on macOS the path used is depending on the runner version leading to cache failure
+    # when the runner version changes so we extract runner version from path and add it
+    # as cache suffix
+    - name: Cache suffix
+      if: runner.os == 'macOS'
+      run: echo "CACHE_SUFFIX=-${ImageVersion}" >> $GITHUB_ENV
+
+    - name: Get PostgreSQL ${{ github.event.inputs.pg }} from cache
+      id: cache-postgresql
+      uses: actions/cache@v2
+      with:
+        path: ~/${{ env.PG_SRC_DIR }}
+        key: ${{ matrix.os }}-postgresql-${{ matrix.pg }}-${{ matrix.cc }}-${{ matrix.build_type }}${{ env.CACHE_SUFFIX }}
+
     - name: Install Linux Dependencies
       if: runner.os == 'Linux'
       run: |
@@ -50,45 +79,6 @@ jobs:
         brew install openssl
         sudo perl -MCPAN -e "CPAN::Shell->notest('install', 'IPC::Run')"
         sudo perl -MCPAN -e "CPAN::Shell->notest('install', 'Test::Most')"
-
-    # on macOS the path used is depending on the runner version leading to cache failure
-    # when the runner version changes so we extract runner version from path and add it
-    # as cache suffix
-    - name: Cache suffix
-      if: runner.os == 'macOS'
-      run: echo "CACHE_SUFFIX=-${ImageVersion}" >> $GITHUB_ENV
-
-    # we cache the build directory instead of the install directory here
-    # because extension installation will write files to install directory
-    # leading to a tainted cache
-    - name: Cache PostgreSQL ${{ matrix.pg }} ${{ matrix.build_type }}
-      id: cache-postgresql
-      if: matrix.snapshot != 'snapshot'
-      uses: actions/cache@v2
-      with:
-        path: ~/${{ env.PG_SRC_DIR }}
-        key: ${{ matrix.os }}-postgresql-${{ matrix.pg }}-${{ matrix.cc }}-${{ matrix.build_type }}${{ env.CACHE_SUFFIX }}
-
-    - name: Build PostgreSQL ${{ matrix.pg }}${{ matrix.snapshot }} ${{ matrix.build_type }}
-      if: steps.cache-postgresql.outputs.cache-hit != 'true'
-      run: |
-        if [ "${{ matrix.snapshot }}" = "snapshot" ]; then
-          wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/snapshot/${{ matrix.pg }}/postgresql-${{ matrix.pg }}-snapshot.tar.bz2
-        else
-          wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v${{ matrix.pg }}/postgresql-${{ matrix.pg }}.tar.bz2
-        fi
-        mkdir -p ~/$PG_SRC_DIR
-        tar --extract --file postgresql.tar.bz2 --directory ~/$PG_SRC_DIR --strip-components 1
-        cd ~/$PG_SRC_DIR
-        if [[ "${{ runner.os }}" == "Linux" ]]; then
-          ./configure --prefix=$HOME/$PG_INSTALL_DIR ${{ matrix.pg_build_args }} --with-llvm LLVM_CONFIG=${{ matrix.llvm_config }} --with-openssl --without-readline --without-zlib --without-libxml ${{ matrix.pg_extra_args }}
-        else
-          # the current github macos image has a buggy llvm installation so we build without llvm on mac
-          ./configure --prefix=$HOME/$PG_INSTALL_DIR ${{ matrix.pg_build_args }} --with-openssl --without-readline --without-zlib --without-libxml ${{ matrix.pg_extra_args }}
-        fi
-        make -j $MAKE_JOBS
-        make -j $MAKE_JOBS -C src/test/isolation
-        make -j $MAKE_JOBS -C contrib/postgres_fdw
 
     - name: Install PostgreSQL ${{ matrix.pg }} ${{ matrix.build_type }}
       run: |
