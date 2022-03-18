@@ -1,0 +1,154 @@
+# A reusable workflow to build and cache PostgreSQL. Avoids having to
+# include the same PostgreSQL build and cache job in multiple
+# workflows that need a specific PostgreSQL build.
+#
+# The workflow should not be invoked by itself, but instead called
+# from other workflows as follows:
+#
+# jobs:
+#  install_postgresql:
+#    uses: './.github/workflows/postgresql-build-and-cache.yaml'
+#    with:
+#      os: 'ubuntu-20.4'
+#      pg: '14.3'
+#      compiler: 'gcc'
+# job_using_postgresl:
+#    name: Test something using PostgreSQL
+#    runs-on: ubuntu-20.4
+#    needs: install_postgresql
+#
+
+name: Build and cache PostgreSQL
+on:
+  workflow_call:
+    inputs:
+      pg:
+        description: 'The PostgreSQL version to build'
+        required: false
+        type: string
+        default: '14.2'
+      c_compiler:
+        description: 'The C compiler to use'
+        required: false
+        type: string
+        default: 'gcc'
+      cxx_compiler:
+        description: 'The C++ compiler to use'
+        required: false
+        type: string
+        default: 'g++'
+      os:
+        description: 'Operating system to build for'
+        required: false
+        type: string
+        default: 'ubuntu-20.4'
+      snapshot:
+        description: 'Build a snapshot version of PostgreSQL'
+        required: false
+        type: string
+        default: ''
+      extra_install_packages:
+        description: 'Extra build packages to install (OS dependent)'
+        required: false
+        type: string
+        default: 'clang-9 llvm-9 llvm-9-dev llvm-9-tools'
+      clang:
+        description: 'Clang binary to use'
+        required: false
+        type: string
+        default: 'clang-9'
+      llvm_config:
+        description: 'LLVM config to use'
+        required: false
+        type: string
+        default: 'llvm-config-9'
+      build_args:
+        description: 'PostgreSQL build arguments'
+        required: false
+        type: string
+        default: '--enable-debug --enable-cassert'
+      extra_build_args:
+        description: 'PostgreSQL extra build arguments'
+        required: false
+        type: string
+        default: ''
+      variant:
+        description: 'Cache the build using this unique variant key'
+        required: false
+        type: string
+        default: 'Debug'
+jobs:
+  build_postgresql:
+    name: Build PG${{ inputs.pg }}${{ inputs.snapshot }} ${{ inputs.variant }} ${{ inputs.os }}
+    runs-on: ${{ inputs.os }}
+    env:
+      PG_SRC_DIR: pgbuild
+      PG_INSTALL_DIR: postgresql
+      MAKE_JOBS: 6
+      CC: ${{ inputs.c_compiler }}
+      CXX: ${{ inputs.cxx_compiler }}
+      CLANG: ${{ inputs.clang }}
+      LLVM_CONFIG: ${{ inputs.llvm_config }}
+    outputs:
+      pg_src_dir: ${ steps.pg_src_dir.outputs.pg_src_dir }}
+      pg_install_dir: ${ steps.pg_install_dir.outputs.pg_install_dir }}
+    steps:
+    - id: pg_src_dir
+      run: echo "::set-output name=pg_src_dir::$PG_SRC_DIR"
+    - id: pg_install_dir
+      run: echo "::set-output name=pg_install_dir::$PG_INSTALL_DIR"      
+
+    # on macOS the path used is depending on the runner version leading to cache failure
+    # when the runner version changes so we extract runner version from path and add it
+    # as cache suffix
+    - name: Cache suffix
+      if: runner.os == 'macOS'
+      run: echo "CACHE_SUFFIX=-${ImageVersion}" >> $GITHUB_ENV
+
+    # we cache the build directory instead of the install directory here
+    # because extension installation will write files to install directory
+    # leading to a tainted cache
+    - name: Cache PostgreSQL ${{ inputs.pg }} ${{ inputs.build_type }}
+      id: cache-postgresql
+      if: inputs.snapshot != 'snapshot'
+      uses: actions/cache@v2
+      with:
+        path: ~/${{ env.PG_SRC_DIR }}
+        key: ${{ inputs.os }}-postgresql-${{ inputs.pg }}-${{ inputs.c_compiler }}-${{ inputs.variant }}${{ env.CACHE_SUFFIX }}
+
+    - name: Install Linux Dependencies
+      if: runner.os == 'Linux' && steps.cache-postgresql.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install flex bison lcov systemd-coredump gdb libipc-run-perl libtest-most-perl ${{ inputs.extra_install_packages }}
+
+    - name: Install macOS Dependencies
+      if: runner.os == 'macOS' && steps.cache-postgresql.outputs.cache-hit != 'true'
+      run: |
+        # This is needed because GitHub image macos-10.15 version
+        # 20210927.1 did not install OpenSSL so we install openssl
+        # explicitly.
+        brew install openssl
+        sudo perl -MCPAN -e "CPAN::Shell->notest('install', 'IPC::Run')"
+        sudo perl -MCPAN -e "CPAN::Shell->notest('install', 'Test::Most')"
+        
+    - name: Build PostgreSQL ${{ inputs.pg }}${{ inputs.snapshot }} ${{ inputs.variant }}
+      if: steps.cache-postgresql.outputs.cache-hit != 'true'
+      run: |
+        if [ "${{ inputs.snapshot }}" = "snapshot" ]; then
+          wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/snapshot/${{ inputs.pg }}/postgresql-${{ inputs.pg }}-snapshot.tar.bz2
+        else
+          wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v${{ inputs.pg }}/postgresql-${{ inputs.pg }}.tar.bz2
+        fi
+        mkdir -p ~/$PG_SRC_DIR
+        tar --extract --file postgresql.tar.bz2 --directory ~/$PG_SRC_DIR --strip-components 1
+        cd ~/$PG_SRC_DIR
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          ./configure --prefix=$HOME/$PG_INSTALL_DIR ${{ inputs.build_args }} --with-llvm LLVM_CONFIG=${{ inputs.llvm_config }} --with-openssl --without-readline --without-zlib --without-libxml ${{ inputs.extra_build_args }}
+        else
+          # the current github macos image has a buggy llvm installation so we build without llvm on mac
+          ./configure --prefix=$HOME/$PG_INSTALL_DIR ${{ inputs.build_args }} --with-openssl --without-readline --without-zlib --without-libxml ${{ inputs.extra_build_args }}
+        fi
+        make -j $MAKE_JOBS
+        make -j $MAKE_JOBS -C src/test/isolation
+        make -j $MAKE_JOBS -C contrib/postgres_fdw

@@ -7,7 +7,7 @@ on:
     inputs:
       seed:
         description: 'SQLsmith seed'
-        default: '\$((16#\$(openssl rand -hex 3)))'
+        default: '$((16#$(openssl rand -hex 3)))'
         type: string
         required: true
       os:
@@ -18,14 +18,6 @@ on:
         options:
           - 'ubuntu-20.04'
           - 'ubuntu-latest'
-      compiler:
-        description: 'Compiler to use'
-        required: true
-        type: choice
-        default: 'gcc'
-        options:
-          - 'gcc'
-          - 'clang'
       build_type:
         description: 'Build type'
         required: true
@@ -58,33 +50,43 @@ on:
     branches:
       - sqlsmith
 jobs:
+  install_postgresql:
+    uses: './.github/workflows/postgresql-build-and-cache.yaml'
+    with:
+      os: ${{ github.event.inputs.os }}
+      pg: ${{ github.event.inputs.pg }}
+      variant: ${{ github.event.inputs.build_type }}
   regress:
     name: SQLsmith PG${{ github.event.inputs.pg }}
     runs-on: ${{ github.event.inputs.os }}
+    needs: install_postgresql
     env:
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
-
     steps:
-    - name: Install Linux Dependencies
+    - name: Show environment
       run: |
-        sudo apt-get update
-        sudo apt-get install flex bison systemd-coredump gdb clang-9 llvm-9 llvm-9-dev llvm-9-tools build-essential autoconf autoconf-archive libpqxx-dev libboost-regex-dev libsqlite3-dev
-
-    # this workflow depends on the cached postgres build from the main regression
-    # workflow since that workflow runs daily there should always be a cache hit
-    - name: Cache PostgreSQL ${{ github.event.inputs.pg }}
+        echo "PG_SRC_DIR=$PG_SRC_DIR PG_INSTALL_DIR=$PG_INSTALL_DIR"
+        
+    # this workflow depends on the cached postgres build from the install_postgresql job
+    - name: Get PostgreSQL ${{ github.event.inputs.pg }} from cache
       id: cache-postgresql
       uses: actions/cache@v2
       with:
         path: ~/${{ env.PG_SRC_DIR }}
-        key: ${{ github.event.inputs.os }}-postgresql-${{ github.event.inputs.pg }}-${{ github.event.inputs.compiler }}-${{ github.event.inputs.build_type }}
+        key: ${{ github.event.inputs.os }}-postgresql-${{ github.event.inputs.pg }}-gcc-${{ github.event.inputs.build_type }}
 
-    # we abort on cache miss 
+    # we abort on cache miss otherwise we would have to reproduce most variables
+    # of the main regression build matrix in this workflow
     - name: Abort on cache miss
       if: steps.cache-postgresql.outputs.cache-hit != 'true'
       run: false
 
+    - name: Install Linux Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install flex bison systemd-coredump gdb clang-9 llvm-9 llvm-9-dev llvm-9-tools build-essential autoconf autoconf-archive libpqxx-dev libboost-regex-dev libsqlite3-dev
+              
     - name: Install PostgreSQL ${{ github.event.inputs.pg }} ${{ github.event.inputs.build_type }}
       run: |
         make -C ~/$PG_SRC_DIR install
@@ -127,7 +129,9 @@ jobs:
     - name: Run SQLsmith
       run: |
         cd sqlsmith
-        for i in `seq 1 ${{ github.event.inputs.number_of_runs }}`; do ./sqlsmith --seed=${{ github.event.inputs.seed}} --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=${{ github.event.inputs.max_queries }} > tee queries-$i-${{ github.event.inputs-seed }}.log; done
+        for i in `seq 1 ${{ github.event.inputs.number_of_runs }}`; do
+            ./sqlsmith --seed=${{ github.event.inputs.seed}} --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=${{ github.event.inputs.max_queries }} --dump-all-queries > queries-$i-${{ github.event.inputs.seed }}.log; \
+        done
 
     - name: Check for coredumps
       if: always()
@@ -159,4 +163,4 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: SQL query logs ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
-        path: queries-*.log
+        path: sqlsmith/queries-*.log
