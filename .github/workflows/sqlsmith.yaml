@@ -10,30 +10,26 @@ on:
         # empty, "number_of_runs" seeds are randomly generated
         # instead.
         description: 'List of (space-separated) seed values'
-        default: ''
         type: string
         required: false
       os:
         description: 'The OS to run on'
         required: true
-        default: 'ubuntu-20.04'
         type: choice
         options:
           - 'ubuntu-20.04'
           - 'ubuntu-latest'
-      build_type:
-        description: 'Build type'
-        required: true
-        type: choice
-        default: 'Debug'
-        options:
-          - 'Debug'
-          - 'Release'
       pg:
         description: 'PostgreSQL version'
         required: true
         type: string
-        default: '14.2'
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        options:
+          - 'Debug'
+          - 'Release'
       tsdb_build_args:
         description: 'Extra CMake build arguments for TimescaleDB'
         required: false
@@ -42,32 +38,37 @@ on:
       number_of_runs:
         description: 'Number of SQLsmith runs (ignored if seeds is set)'
         type: number
-        default: 10
         required: true
       max_queries:
         description: 'Max number of SQLsmith queries per run'
         type: number
-        default: 10000
         required: true
   push:
     branches:
       - sqlsmith
 jobs:
   sqlsmith:
-    name: SQLsmith PG${{ github.event.inputs.pg }}
-    runs-on: ${{ github.event.inputs.os }}
+    name: SQLsmith PG${{ env.PG }}
+    runs-on: ${{ env.OS }}
     env:
+      SEEDS: ${{ github.event.inputs.seeds || '' }}
+      OS: ${{ github.event.inputs.os || 'ubuntu-20.04' }
+      PG: ${{ github.event.inputs.pg || '14.2' }
+      BUILD_TYPE: ${{ github.event.inputs.build_type || 'Debug' }
+      NUM_RUNS: ${{ github.event.inputs.number_of_runs || 10 }}
+      MAX_QUERIES: ${{ github.event.inputs.max_queries || 10000 }}
+      TSDB_BUILD_ARGS: ${{ github.event.inputs.tsdb_build_args || '' }
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
     steps:
     # this workflow depends on the cached postgres build from the main regression
     # workflow since that workflow runs daily there should always be a cache hit
-    - name: Get PostgreSQL ${{ github.event.inputs.pg }} from cache
+    - name: Get PostgreSQL ${{ env.pg }} from cache
       id: cache-postgresql
       uses: actions/cache@v2
       with:
         path: ~/${{ env.PG_SRC_DIR }}
-        key: ${{ github.event.inputs.os }}-postgresql-${{ github.event.inputs.pg }}-gcc-${{ github.event.inputs.build_type }}
+        key: ${{ env.os }}-postgresql-${{ env.pg }}-gcc-${{ env.build_type }}
 
     # we abort on cache miss otherwise we would have to reproduce most variables
     # of the main regression build matrix in this workflow
@@ -80,7 +81,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install flex bison systemd-coredump gdb clang-9 llvm-9 llvm-9-dev llvm-9-tools build-essential autoconf autoconf-archive libpqxx-dev libboost-regex-dev libsqlite3-dev
 
-    - name: Install PostgreSQL ${{ github.event.inputs.pg }} ${{ github.event.inputs.build_type }}
+    - name: Install PostgreSQL ${{ env.pg }} ${{ env.build_type }}
       run: |
         make -C ~/$PG_SRC_DIR install
         make -C ~/$PG_SRC_DIR/contrib/postgres_fdw install
@@ -90,7 +91,7 @@ jobs:
 
     - name: Build TimescaleDB
       run: |
-        ./bootstrap -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -DPG_SOURCE_DIR=~/$PG_SRC_DIR -DPG_PATH=~/$PG_INSTALL_DIR ${{ github.event.inputs.tsdb_build_args }}
+        ./bootstrap -DCMAKE_BUILD_TYPE=${{ env.build_type }} -DPG_SOURCE_DIR=~/$PG_SRC_DIR -DPG_PATH=~/$PG_INSTALL_DIR ${{ env.tsdb_build_args }}
         make -C build
         make -C build install
 
@@ -120,12 +121,12 @@ jobs:
     - name: Generate and show seeds
       run: |
         cd sqlsmith
-        if [ -z "${{ github.event.inputs.seeds }}" ]; then
-           for i in `seq 1 ${{ github.event.inputs.number_of_runs }}`; do
+        if [ -z "${{ env.seeds }}" ]; then
+           for i in `seq 1 ${{ env.number_of_runs }}`; do
                 echo -n "$((16#$(openssl rand -hex 3))) " >> seeds.txt;
             done
         else
-            echo "${{ github.event.inputs.seeds }}" > seeds.txt
+            echo "${{ env.seeds }}" > seeds.txt
         fi
         echo -n "Using seeds: "
         cat seeds.txt
@@ -136,7 +137,7 @@ jobs:
         for seed in $(cat seeds.txt); do
             echo "Running with seed $seed"
             TIMESTAMP=$(date +"%F %R")
-            ./sqlsmith --seed=$seed --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=${{ github.event.inputs.max_queries }} --dump-all-queries > queries-$seed.log;
+            ./sqlsmith --seed=$seed --exclude-catalog --target="host=/tmp dbname=smith" --max-queries=${{ env.max_queries }} --dump-all-queries > queries-$seed.log;
             coredumpctl list -r --no-pager --since $TIMESTAMP || true
         done
 
@@ -162,19 +163,19 @@ jobs:
       if: always() && steps.collectlogs.outputs.coredumps == 'true'
       uses: actions/upload-artifact@v3
       with:
-        name: Coredumps sqlsmith ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
+        name: Coredumps sqlsmith ${{ env.os }} PG${{ env.pg }}
         path: coredumps
 
     - name: Upload seeds
       if: always()
       uses: actions/upload-artifact@v3
       with:
-        name: Seeds ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
+        name: Seeds ${{ env.os }} PG${{ env.pg }}
         path: sqlsmith/seeds.txt
 
     - name: Upload query logs
       if: always()
       uses: actions/upload-artifact@v3
       with:
-        name: SQL query logs ${{ github.event.inputs.os }} PG${{ github.event.inputs.pg }}
+        name: SQL query logs ${{ env.os }} PG${{ env.pg }}
         path: sqlsmith/queries-*.log
