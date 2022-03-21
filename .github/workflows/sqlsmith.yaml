@@ -1,12 +1,4 @@
 name: SQLsmith
-env:
-  SEEDS: ''
-  OS: 'ubuntu-20.04'
-  PG: '14.2'
-  BUILD_TYPE: 'Debug'
-  NUM_RUNS: 10
-  MAX_QUERIES: 10000
-  TSDB_BUILD_ARGS: ''
 on:
   schedule:
     # run daily 20:00 on main branch
@@ -24,20 +16,20 @@ on:
         description: 'The OS to run on'
         required: true
         type: choice
-        default: ${{ env.OS }}
+        default: 'ubuntu-20.04'
         options:
           - 'ubuntu-20.04'
           - 'ubuntu-latest'
       pg:
         description: 'PostgreSQL version'
         required: true
-        default: ${{ env.PG }}        
+        default: '14.2'
         type: string
       build_type:
         description: 'Build type'
         required: true
         type: choice
-        default: ${{ env.BUILD_TYPE }}
+        default: 'Debug'
         options:
           - 'Debug'
           - 'Release'
@@ -49,30 +41,30 @@ on:
       number_of_runs:
         description: 'Number of SQLsmith runs (ignored if seeds is set)'
         type: number
-        default: ${{ env.NUM_RUNS }}
+        default: 10
         required: true
       max_queries:
         description: 'Max number of SQLsmith queries per run'
         type: number
-        default: ${{ env.MAX_QUERIES }}
+        default: 10000
         required: true
   push:
     branches:
       - sqlsmith
 jobs:
   sqlsmith:
-    name: SQLsmith PG${{ env.PG }}
-    runs-on: ${{ env.OS }}
     env:
-      SEEDS: ${{ github.event.inputs.seeds || '' }}
-      OS: ${{ github.event.inputs.os || env.OS }
-      PG: ${{ github.event.inputs.pg || env.PG }
-      BUILD_TYPE: ${{ github.event.inputs.build_type || env.BUILD_TYPE }
+      SEEDS: ${{ github.event.inputs.seeds }}
+      OS: ${{ github.event.inputs.os || 'ubuntu-20.04' }}
+      PG: ${{ github.event.inputs.pg || '14.2' }}
+      BUILD_TYPE: ${{ github.event.inputs.build_type || 'Debug' }}
       NUM_RUNS: ${{ github.event.inputs.number_of_runs || 10 }}
-      MAX_QUERIES: ${{ github.event.inputs.max_queries || env.MAX_QUERIES }}
-      TSDB_BUILD_ARGS: ${{ github.event.inputs.tsdb_build_args || '' }
+      MAX_QUERIES: ${{ github.event.inputs.max_queries || 10000 }}
+      TSDB_BUILD_ARGS: ${{ github.event.inputs.tsdb_build_args }}    
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
+    name: SQLsmith PG${{ env.PG }}
+    runs-on: ${{ env.OS }}
     steps:
     # this workflow depends on the cached postgres build from the main regression
     # workflow since that workflow runs daily there should always be a cache hit
