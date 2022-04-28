@@ -114,7 +114,29 @@ SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.dimension', '')
 
 SELECT pg_catalog.pg_extension_config_dump(pg_get_serial_sequence('_timescaledb_catalog.dimension', 'id'), '');
 
--- A dimension slice defines a keyspace range along a dimension axis.
+-- A dimension partition represents the current division of a (space)
+-- dimension into partitions, and the mapping of those partitions to
+-- data nodes. Normally, only closed/space dimensions are
+-- pre-partitioned and present in this table. When a chunk is created,
+-- it will use the partition and data nodes information in this table
+-- to decide range and node placement of the chunk.
+CREATE TABLE _timescaledb_catalog.dimension_partition (
+  id serial NOT NULL PRIMARY KEY,
+  dimension_id integer NOT NULL REFERENCES _timescaledb_catalog.dimension (id) ON DELETE CASCADE,
+  range_start bigint NOT NULL,
+  range_end bigint NOT NULL,
+  data_nodes name[] NULL,
+  CHECK (range_start <= range_end),
+  UNIQUE (dimension_id, range_start, range_end)
+);
+
+SELECT pg_catalog.pg_extension_config_dump('_timescaledb_catalog.dimension_partition', '');
+
+SELECT pg_catalog.pg_extension_config_dump(pg_get_serial_sequence('_timescaledb_catalog.dimension_partition', 'id'), '');
+
+-- A dimension slice defines a keyspace range along a dimension
+-- axis. A chunk references a slice in each of its dimensions, forming
+-- a hypercube.
 CREATE TABLE _timescaledb_catalog.dimension_slice (
   id serial NOT NULL PRIMARY KEY,
   dimension_id integer NOT NULL REFERENCES _timescaledb_catalog.dimension (id) ON DELETE CASCADE,
