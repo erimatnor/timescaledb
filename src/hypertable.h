@@ -17,6 +17,7 @@
 #include "scanner.h"
 #include "scan_iterator.h"
 #include "ts_catalog/tablespace.h"
+#include "dimension_partition.h"
 
 #define OLD_INSERT_BLOCKER_NAME "insert_blocker"
 #define INSERT_BLOCKER_NAME "ts_insert_blocker"

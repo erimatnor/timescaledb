@@ -295,6 +295,7 @@ ts_hypercube_calculate_from_point(const Hyperspace *hs, const Point *p, const Sc
 		/* Assert that dimensions are in ascending order */
 		Assert(i == 0 || dim->fd.id > hs->dimensions[i - 1].fd.id);
 
+
 		/*
 		 * If this is an aligned dimension, we'd like to reuse any existing
 		 * slice that covers the coordinate in the dimension

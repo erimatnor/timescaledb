@@ -302,9 +302,8 @@ enum
 enum Anum_dimension_partition
 {
 	Anum_dimension_partition_id = 1,
-	Anum_dimension_partition_dimension_id,
+ 	Anum_dimension_partition_dimension_id,	
 	Anum_dimension_partition_range_start,
-	Anum_dimension_partition_range_end,
 	Anum_dimension_partition_data_nodes,
 	_Anum_dimension_partition_max,
 };
@@ -316,7 +315,9 @@ typedef struct FormData_dimension_partition
 	int32 id;
 	int32 dimension_id;
 	int64 range_start;
-	int64 range_end;
+	/* Variable-length fields start here. The first variable-length field can
+	 * still be accessed directly via the C struct */
+	ArrayType *data_nodes;
 } FormData_dimension_partition;
 
 typedef FormData_dimension_partition *Form_dimension_partition;
@@ -329,21 +330,20 @@ enum Anum_dimension_partition_id_idx
 
 #define Natts_dimension_partition_id_idx (_Anum_dimension_partition_id_idx_max - 1)
 
-enum Anum_dimension_partition_dimension_id_range_start_range_end_idx
+enum Anum_dimension_partition_dimension_id_range_start_idx
 {
-	Anum_dimension_partition_dimension_id_range_start_range_end_idx_dimension_id = 1,
-	Anum_dimension_partition_dimension_id_range_start_range_end_idx_range_start,
-	Anum_dimension_partition_dimension_id_range_start_range_end_idx_range_end,
-	_Anum_dimension_partition_dimension_id_range_start_range_end_idx_max,
+	Anum_dimension_partition_dimension_id_range_start_idx_dimension_id = 1,
+	Anum_dimension_partition_dimension_id_range_start_idx_range_start,
+	_Anum_dimension_partition_dimension_id_range_start_idx_max,
 };
 
-#define Natts_dimension_partition_dimension_id_range_start_range_end_idx                               \
-	(_Anum_dimension_partition_dimension_id_range_start_range_end_idx_max - 1)
+#define Natts_dimension_partition_dimension_id_range_start_idx                               \
+	(_Anum_dimension_partition_dimension_id_range_start_idx_max - 1)
 
 enum
 {
 	DIMENSION_PARTITION_ID_IDX = 0,
-	DIMENSION_PARTITION_DIMENSION_ID_RANGE_START_RANGE_END_IDX,
+	DIMENSION_PARTITION_DIMENSION_ID_RANGE_START_IDX,
 	_MAX_DIMENSION_PARTITION_INDEX,
 };
 

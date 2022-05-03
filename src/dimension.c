@@ -194,6 +194,11 @@ dimension_fill_in_from_tuple(Dimension *d, TupleInfo *ti, Oid main_table_relid)
 													  NameStr(d->fd.column_name),
 													  d->type,
 													  main_table_relid);
+		if (IS_CLOSED_DIMENSION(d))
+			d->dimension_partitions = ts_dimension_partition_get_all_as_rbtree(d->fd.id, d->fd.column_type);
+		else
+			d->dimension_partitions = NULL;
+		
 		MemoryContextSwitchTo(old);
 	}
 

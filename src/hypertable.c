@@ -240,11 +240,11 @@ ts_hypertable_from_tupleinfo(const TupleInfo *ti)
 {
 	Oid namespace_oid;
 	Hypertable *h = MemoryContextAllocZero(ti->mctx, sizeof(Hypertable));
-
+	
 	ts_hypertable_formdata_fill(&h->fd, ti);
 	namespace_oid = get_namespace_oid(NameStr(h->fd.schema_name), false);
 	h->main_table_relid = get_relname_relid(NameStr(h->fd.table_name), namespace_oid);
-	h->space = ts_dimension_scan(h->fd.id, h->main_table_relid, h->fd.num_dimensions, ti->mctx);
+	h->space = ts_dimension_scan(h->fd.id, h->main_table_relid, h->fd.num_dimensions, ti->mctx);	
 	h->chunk_cache =
 		ts_subspace_store_init(h->space, ti->mctx, ts_guc_max_cached_chunks_per_hypertable);
 	h->chunk_sizing_func = get_chunk_sizing_func_oid(&h->fd);
@@ -2122,6 +2122,8 @@ ts_hypertable_create_from_info(Oid table_relid, int32 hypertable_id, uint32 flag
 	{
 		space_dim_info->ht = time_dim_info->ht;
 		ts_dimension_add_from_info(space_dim_info);
+		
+		ts_dimension_partition_recreate_partitioning(space_dim_info->dimension_id, space_dim_info->num_slices, data_node_names, replication_factor);
 	}
 
 	/* Refresh the cache to get the updated hypertable with added dimensions */

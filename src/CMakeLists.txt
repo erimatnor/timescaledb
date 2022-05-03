@@ -14,6 +14,7 @@ set(SOURCES
     copy.c
     compression_with_clause.c
     dimension.c
+	dimension_partition.c
     dimension_slice.c
     dimension_vector.c
     estimate.c
