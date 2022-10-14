@@ -13,6 +13,7 @@
 #include <access/htup_details.h>
 #include <access/xact.h>
 #include <nodes/makefuncs.h>
+#include <nodes/parsenodes.h>
 #include <utils/acl.h>
 #include <utils/builtins.h>
 #include <utils/syscache.h>
@@ -66,7 +67,7 @@ chunk_match_data_node_by_server(const Chunk *chunk, const ForeignServer *server)
 }
 
 static bool
-chunk_set_foreign_server(Chunk *chunk, ForeignServer *new_server)
+chunk_set_foreign_server(const Chunk *chunk, const ForeignServer *new_server)
 {
 	Relation ftrel;
 	HeapTuple tuple;
@@ -134,32 +135,72 @@ chunk_set_foreign_server(Chunk *chunk, ForeignServer *new_server)
 	return true;
 }
 
-void
-chunk_update_foreign_server_if_needed(int32 chunk_id, Oid existing_server_id)
+static bool
+data_node_is_available(const ForeignServer *server)
+{
+	ListCell *lc;
+
+	foreach (lc, server->options)
+	{
+		DefElem *elem = lfirst(lc);
+
+		if (strcmp(elem->defname, "available") == 0)
+		{
+			bool available = defGetBoolean(elem);
+
+			return available;
+		}
+	}
+
+	/* If no option is set, default to available=true */
+	return true;
+}
+
+bool
+chunk_update_foreign_server_if_needed(const Chunk *chunk, Oid existing_server_id)
 {
 	ListCell *lc;
 	ChunkDataNode *new_server = NULL;
-	Chunk *chunk = ts_chunk_get_by_id(chunk_id, true);
 	ForeignTable *foreign_table = NULL;
+	ForeignServer *server = NULL;
+	bool new_data_node_found = false;
 
 	Assert(chunk->relkind == RELKIND_FOREIGN_TABLE);
 	foreign_table = GetForeignTable(chunk->table_id);
 
+	/* Cannot switch to other data node if only one or none assigned */
+	if (list_length(chunk->data_nodes) < 2)
+		return false;
+
 	/* no need to update since foreign table doesn't reference server we try to remove */
 	if (existing_server_id != foreign_table->serverid)
-		return;
+		return false;
 
-	Assert(list_length(chunk->data_nodes) > 1);
-
+	/* Pick the first "available" data node referenced by the chunk, which is
+	 * not the existing data node. */
 	foreach (lc, chunk->data_nodes)
 	{
 		new_server = lfirst(lc);
-		if (new_server->foreign_server_oid != existing_server_id)
-			break;
-	}
-	Assert(new_server != NULL);
 
-	chunk_set_foreign_server(chunk, GetForeignServer(new_server->foreign_server_oid));
+		if (new_server->foreign_server_oid != existing_server_id)
+		{
+			server = GetForeignServer(new_server->foreign_server_oid);
+
+			if (data_node_is_available(server))
+			{
+				new_data_node_found = true;
+				break;
+			}
+		}
+	}
+
+	if (new_data_node_found)
+	{
+		Assert(server != NULL);
+		chunk_set_foreign_server(chunk, server);
+	}
+
+	return new_data_node_found;
 }
 
 Datum

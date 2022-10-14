@@ -767,3 +767,101 @@ DROP DATABASE :DN_DBNAME_3;
 DROP DATABASE :DN_DBNAME_4;
 DROP DATABASE :DN_DBNAME_5;
 DROP DATABASE :DN_DBNAME_6;
+
+
+-----------------------------------------------
+-- Test alter_data_node()
+-----------------------------------------------
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_1', host => 'localhost', database => :'DN_DBNAME_1');
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_2', host => 'localhost', database => :'DN_DBNAME_2');
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_3', host => 'localhost', database => :'DN_DBNAME_3');
+
+GRANT USAGE ON FOREIGN SERVER data_node_1, data_node_2, data_node_3 TO :ROLE_1;
+SET ROLE :ROLE_1;
+
+CREATE TABLE hyper1 (time timestamptz, location int, temp float);
+CREATE TABLE hyper2 (LIKE hyper1);
+CREATE TABLE hyper3 (LIKE hyper1);
+
+SELECT create_distributed_hypertable('hyper1', 'time', 'location', replication_factor=>1);
+SELECT create_distributed_hypertable('hyper2', 'time', 'location', replication_factor=>2);
+SELECT create_distributed_hypertable('hyper3', 'time', 'location', replication_factor=>3);
+
+INSERT INTO hyper1
+SELECT t, (abs(timestamp_hash(t::timestamp)) % 3) + 1, random() * 30
+FROM generate_series('2022-01-01 00:00:00'::timestamptz, '2022-01-05 00:00:00', '1 h') t;
+
+INSERT INTO hyper2 SELECT * FROM hyper1;
+INSERT INTO hyper3 SELECT * FROM hyper1;
+
+-- create view to see the data nodes and default data node of all
+-- chunks
+CREATE TEMPORARY VIEW chunk_default_data_node AS
+SELECT hypertable_name, format('%I.%I', ch.chunk_schema, ch.chunk_name)::regclass AS chunk, ch.data_nodes, fs.srvname default_data_node
+	   FROM timescaledb_information.chunks ch
+	   INNER JOIN pg_foreign_table ft ON (format('%I.%I', ch.chunk_schema, ch.chunk_name)::regclass = ft.ftrelid)
+	   INNER JOIN pg_foreign_server fs ON (ft.ftserver = fs.oid);
+
+SELECT * FROM chunk_default_data_node;
+
+-- test "switching over" to other data node when
+\set ON_ERROR_STOP 0
+-- must be owner to alter a data node
+SELECT alter_data_node('data_node_1', available=>false);
+SELECT alter_data_node('data_node_1', port=>8989);
+\set ON_ERROR_STOP 1
+
+RESET ROLE;
+--when altering a data node, related entries in the connection cache
+--should be invalidated
+SELECT node_name, host, port, invalidated
+FROM _timescaledb_internal.show_connection_cache()
+WHERE node_name = 'data_node_1';
+SELECT * FROM alter_data_node('data_node_1', available=>false);
+SELECT node_name, host, port, invalidated
+FROM _timescaledb_internal.show_connection_cache()
+WHERE node_name = 'data_node_1';
+
+-- the node that is not available for reads should no longer be
+-- default data node for chunks, except for those that have no
+-- alternative (i.e., the chunk only has one data node).
+SELECT * FROM chunk_default_data_node;
+
+-- save old port so that we can restore connectivity after
+-- we alter the data node
+WITH options AS (
+	 SELECT unnest(options) option
+	 FROM timescaledb_information.data_nodes
+	 WHERE node_name = 'data_node_1'
+)
+SELECT split_part(option, '=', 2) AS old_port
+FROM options WHERE option LIKE 'port%' \gset
+
+-- also test altering host, port and database
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+SELECT * FROM alter_data_node('data_node_1', available=>true, host=>'foo.bar', port=>8989, database=>'new_db');
+
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+-- just show current options:
+SELECT * FROM alter_data_node('data_node_1');
+
+\set ON_ERROR_STOP 0
+SELECT * FROM alter_data_node(NULL);
+SELECT * FROM alter_data_node('does_not_exist');
+SELECT * FROM alter_data_node('data_node_1', port=>89000);
+-- cannot delete data node with "drop_database" since configuration is wrong
+SELECT delete_data_node('data_node_1', drop_database=>true);
+\set ON_ERROR_STOP 0
+
+-- restore configuration for data_node_1
+SELECT * FROM alter_data_node('data_node_1', host=>'localhost', port=>:old_port, database=>:'DN_DBNAME_1');
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+
+DROP TABLE hyper1;
+DROP TABLE hyper2;
+DROP TABLE hyper3;
+-- create new session to clear out connection cache
+\c :TEST_DBNAME :ROLE_CLUSTER_SUPERUSER;
+SELECT delete_data_node('data_node_1', drop_database=>true);
+SELECT delete_data_node('data_node_2', drop_database=>true);
+SELECT delete_data_node('data_node_3', drop_database=>true);

@@ -596,6 +596,7 @@ enum
 {
 	CHUNK_DATA_NODE_CHUNK_ID_NODE_NAME_IDX,
 	CHUNK_DATA_NODE_NODE_CHUNK_ID_NODE_NAME_IDX,
+	CHUNK_DATA_NODE_NODE_NAME_IDX,
 	_MAX_CHUNK_DATA_NODE_INDEX,
 };
 
@@ -622,6 +623,17 @@ enum Anum_chunk_data_node_node_chunk_id_node_name_idx
 struct FormData_chunk_data_node_node_chunk_id_node_name_idx
 {
 	int32 node_chunk_id;
+	NameData node_name;
+};
+
+enum Anum_chunk_data_node_node_name_idx
+{
+	Anum_chunk_data_node_name_idx_node_name = 1,
+	_Anum_chunk_data_node_node_name_idx_max,
+};
+
+struct FormData_chunk_data_node_node_name_idx
+{
 	NameData node_name;
 };
 

@@ -175,3 +175,14 @@ $BODY$
          UNION ALL
          SELECT * FROM _chunk_sizes) AS sizes;
 $BODY$ SET search_path TO pg_catalog, pg_temp;
+
+
+CREATE INDEX chunk_data_node_node_name_idx ON _timescaledb_catalog.chunk_data_node (node_name);
+CREATE FUNCTION @extschema@.alter_data_node(
+    node_name              NAME,
+    host                   TEXT = NULL,
+    database               NAME = NULL,
+	port                   INTEGER = NULL,
+	available              BOOLEAN = NULL
+) RETURNS TABLE(node_name NAME, host TEXT, database NAME, port INTEGER, available BOOLEAN)
+AS '@MODULE_PATHNAME@', 'ts_data_node_alter' LANGUAGE C VOLATILE;

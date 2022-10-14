@@ -339,3 +339,16 @@ ts_chunk_data_nodes_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id)
 								   F_INT4EQ,
 								   Int32GetDatum(chunk_id));
 }
+
+void
+ts_chunk_data_nodes_scan_iterator_set_node_name(ScanIterator *it, const char *node_name)
+{
+	it->ctx.index =
+		catalog_get_index(ts_catalog_get(), CHUNK_DATA_NODE, CHUNK_DATA_NODE_NODE_NAME_IDX);
+	ts_scan_iterator_scan_key_reset(it);
+	ts_scan_iterator_scan_key_init(it,
+								   Anum_chunk_data_node_name_idx_node_name,
+								   BTEqualStrategyNumber,
+								   F_NAMEEQ,
+								   CStringGetDatum(node_name));
+}

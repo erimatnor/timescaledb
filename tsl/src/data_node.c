@@ -4,6 +4,11 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include "cache.h"
+#include "scan_iterator.h"
+#include "ts_catalog/catalog.h"
+#include <executor/tuptable.h>
+#include <nodes/nodes.h>
+#include <nodes/value.h>
 #include <postgres.h>
 
 #include <access/htup_details.h>
@@ -28,6 +33,7 @@
 #include <utils/builtins.h>
 #include <utils/guc.h>
 #include <utils/inval.h>
+#include <utils/palloc.h>
 #include <utils/syscache.h>
 
 #include "compat/compat.h"
@@ -679,6 +685,16 @@ get_server_port()
 	return pg_strtoint32(portstr);
 }
 
+static void
+validate_data_node_port(int port)
+{
+	if (port < 1 || port > PG_UINT16_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 (errmsg("invalid port number %d", port),
+				  errhint("The port number must be between 1 and %u.", PG_UINT16_MAX))));
+}
+
 /* set_distid may need to be false for some otherwise invalid configurations
  * that are useful for testing */
 static Datum
@@ -719,11 +735,7 @@ data_node_add_internal(PG_FUNCTION_ARGS, bool set_distid)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 (errmsg("data node name cannot be NULL"))));
 
-	if (port < 1 || port > PG_UINT16_MAX)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 (errmsg("invalid port number %d", port),
-				  errhint("The port number must be between 1 and %u.", PG_UINT16_MAX))));
+	validate_data_node_port(port);
 
 	result = get_database_info(MyDatabaseId, &database);
 	Assert(result);
@@ -1135,8 +1147,8 @@ data_node_modify_hypertable_data_nodes(const char *node_name, List *hypertable_d
 			foreach (cs_lc, chunk_data_nodes)
 			{
 				ChunkDataNode *cdn = lfirst(cs_lc);
-
-				chunk_update_foreign_server_if_needed(cdn->fd.chunk_id, cdn->foreign_server_oid);
+				const Chunk *chunk = ts_chunk_get_by_id(cdn->fd.chunk_id, true);
+				chunk_update_foreign_server_if_needed(chunk, cdn->foreign_server_oid);
 				ts_chunk_data_node_delete_by_chunk_id_and_node_name(cdn->fd.chunk_id,
 																	NameStr(cdn->fd.node_name));
 			}
@@ -1414,6 +1426,205 @@ data_node_detach(PG_FUNCTION_ARGS)
 													 OP_DETACH);
 
 	PG_RETURN_INT32(removed);
+}
+
+enum Anum_show_conn
+{
+	Anum_alter_data_node_node_name = 1,
+	Anum_alter_data_node_host,
+	Anum_alter_data_node_database,
+	Anum_alter_data_node_port,
+	Anum_alter_data_node_available,
+	_Anum_alter_data_node_max,
+};
+
+#define Natts_alter_data_node (_Anum_alter_data_node_max - 1)
+
+static HeapTuple
+create_alter_data_node_tuple(TupleDesc tupdesc, const char *node_name, List *options)
+{
+	Datum values[Natts_alter_data_node];
+	bool nulls[Natts_alter_data_node] = { false };
+	ListCell *lc;
+
+	MemSet(nulls, false, sizeof(nulls));
+
+	values[AttrNumberGetAttrOffset(Anum_alter_data_node_node_name)] = CStringGetDatum(node_name);
+	/* Default to true for "available" if not set in options */
+	values[AttrNumberGetAttrOffset(Anum_alter_data_node_available)] = BoolGetDatum(true);
+
+	foreach (lc, options)
+	{
+		DefElem *elem = lfirst(lc);
+
+		if (strcmp("host", elem->defname) == 0)
+		{
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_host)] =
+				CStringGetTextDatum(defGetString(elem));
+		}
+		else if (strcmp("dbname", elem->defname) == 0)
+		{
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_database)] =
+				CStringGetDatum(defGetString(elem));
+		}
+		else if (strcmp("port", elem->defname) == 0)
+		{
+			int port = atoi(defGetString(elem));
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_port)] = Int32GetDatum(port);
+		}
+		else if (strcmp("available", elem->defname) == 0)
+		{
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_available)] =
+				BoolGetDatum(defGetBoolean(elem));
+		}
+	}
+
+	return heap_form_tuple(tupdesc, values, nulls);
+}
+
+/*
+ * Switch default data node on chunks to avoid using the given data node.
+ */
+static void
+switch_default_data_node_on_chunks(const ForeignServer *datanode)
+{
+	unsigned int failed_update_count = 0;
+	ScanIterator it = ts_chunk_data_nodes_scan_iterator_create(CurrentMemoryContext);
+	ts_chunk_data_nodes_scan_iterator_set_node_name(&it, datanode->servername);
+
+	/* Scan for chunks that reference the given data node */
+	ts_scanner_foreach(&it)
+	{
+		TupleTableSlot *slot = ts_scan_iterator_slot(&it);
+		bool PG_USED_FOR_ASSERTS_ONLY isnull = false;
+		Datum chunk_id = slot_getattr(slot, Anum_chunk_data_node_chunk_id, &isnull);
+
+		Assert(!isnull);
+
+		const Chunk *chunk = ts_chunk_get_by_id(DatumGetInt32(chunk_id), true);
+
+		if (!chunk_update_foreign_server_if_needed(chunk, datanode->serverid))
+			failed_update_count++;
+	}
+
+	ts_scan_iterator_close(&it);
+
+	if (failed_update_count > 0)
+		elog(WARNING, "could not switch default data node on %u chunks", failed_update_count);
+}
+
+/*
+ * Alter a data node.
+ *
+ * Change the configuration of a data node, including host, port, and
+ * database.
+ *
+ * Can also be used to mark a data node "unavailable", which ensures it is no
+ * longer used for reads as long as there are replica chunks on other data
+ * nodes to use for reads instead. If it is not possible to fail over all
+ * chunks, a warning will be raised.
+ */
+Datum
+data_node_alter(PG_FUNCTION_ARGS)
+{
+	const char *node_name = PG_ARGISNULL(0) ? NULL : NameStr(*PG_GETARG_NAME(0));
+	const char *host = PG_ARGISNULL(1) ? NULL : TextDatumGetCString(PG_GETARG_TEXT_P(1));
+	const char *database = PG_ARGISNULL(2) ? NULL : NameStr(*PG_GETARG_NAME(2));
+	int port = PG_ARGISNULL(3) ? -1 : PG_GETARG_INT32(3);
+	bool available = PG_ARGISNULL(4) ? true : PG_GETARG_BOOL(4);
+	bool available_is_null = PG_ARGISNULL(4);
+	ForeignServer *server = NULL;
+	TupleDesc tupdesc;
+	AlterForeignServerStmt alter_server_stmt = {
+		.type = T_AlterForeignServerStmt,
+		.servername = node_name ? pstrdup(node_name) : NULL,
+		.has_version = false,
+		.version = NULL,
+		.options = NIL,
+	};
+
+	TS_PREVENT_FUNC_IF_READ_ONLY();
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("function returning record called in context "
+						"that cannot accept type record")));
+
+	tupdesc = BlessTupleDesc(tupdesc);
+
+	/* Check if a data node with the given name actually exists, or raise an error. */
+	server = data_node_get_foreign_server(node_name, ACL_NO_CHECK, false, false /* missing_ok */);
+
+	if (host == NULL && database == NULL && port == -1 && available_is_null)
+		PG_RETURN_DATUM(
+			HeapTupleGetDatum(create_alter_data_node_tuple(tupdesc, node_name, server->options)));
+
+	if (host != NULL)
+	{
+		DefElem *elem =
+			makeDefElemExtended(NULL, "host", (Node *) makeString((char *) host), DEFELEM_SET, -1);
+		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
+	}
+
+	if (database != NULL)
+	{
+		DefElem *elem = makeDefElemExtended(NULL,
+											"dbname",
+											(Node *) makeString((char *) database),
+											DEFELEM_SET,
+											-1);
+		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
+	}
+
+	if (port != -1)
+	{
+		DefElem *elem;
+
+		validate_data_node_port(port);
+		elem = makeDefElemExtended(NULL, "port", (Node *) makeInteger(port), DEFELEM_SET, -1);
+		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
+	}
+
+	if (!available_is_null)
+	{
+		/* "available" is not a mandatory option so it might not exist
+		 * previously. Therefore, need to figure out if the action is SET or
+		 * ADD. */
+		DefElem *elem;
+		ListCell *lc;
+		bool available_found = false;
+
+		foreach (lc, server->options)
+		{
+			elem = lfirst(lc);
+
+			if (strcmp(elem->defname, "available") == 0)
+			{
+				available_found = true;
+				break;
+			}
+		}
+
+		elem = makeDefElemExtended(NULL,
+								   "available",
+								   (Node *) (available ? makeString("true") : makeString("false")),
+								   available_found ? DEFELEM_SET : DEFELEM_ADD,
+								   -1);
+		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
+	}
+
+	if (!available_is_null && !available)
+		switch_default_data_node_on_chunks(server);
+
+	AlterForeignServer(&alter_server_stmt);
+
+	/* Add updated options last as they will take precedence over old options
+	 * when creating the result tuple. */
+	List *merged_options = list_concat(server->options, alter_server_stmt.options);
+
+	PG_RETURN_DATUM(
+		HeapTupleGetDatum(create_alter_data_node_tuple(tupdesc, node_name, merged_options)));
 }
 
 /*

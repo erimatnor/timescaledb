@@ -115,3 +115,5 @@ $BODY$
          SELECT * FROM _chunk_sizes) AS sizes;
 $BODY$ SET search_path TO pg_catalog, pg_temp;
 
+
+DROP INDEX IF EXISTS chunk_data_node_node_name_idx;

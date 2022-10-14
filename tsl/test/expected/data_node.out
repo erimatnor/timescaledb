@@ -1579,3 +1579,216 @@ DROP DATABASE :DN_DBNAME_3;
 DROP DATABASE :DN_DBNAME_4;
 DROP DATABASE :DN_DBNAME_5;
 DROP DATABASE :DN_DBNAME_6;
+-----------------------------------------------
+-- Test alter_data_node()
+-----------------------------------------------
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_1', host => 'localhost', database => :'DN_DBNAME_1');
+  node_name  |    database    | node_created | database_created | extension_created 
+-------------+----------------+--------------+------------------+-------------------
+ data_node_1 | db_data_node_1 | t            | t                | t
+(1 row)
+
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_2', host => 'localhost', database => :'DN_DBNAME_2');
+  node_name  |    database    | node_created | database_created | extension_created 
+-------------+----------------+--------------+------------------+-------------------
+ data_node_2 | db_data_node_2 | t            | t                | t
+(1 row)
+
+SELECT node_name, database, node_created, database_created, extension_created FROM add_data_node('data_node_3', host => 'localhost', database => :'DN_DBNAME_3');
+  node_name  |    database    | node_created | database_created | extension_created 
+-------------+----------------+--------------+------------------+-------------------
+ data_node_3 | db_data_node_3 | t            | t                | t
+(1 row)
+
+GRANT USAGE ON FOREIGN SERVER data_node_1, data_node_2, data_node_3 TO :ROLE_1;
+SET ROLE :ROLE_1;
+CREATE TABLE hyper1 (time timestamptz, location int, temp float);
+CREATE TABLE hyper2 (LIKE hyper1);
+CREATE TABLE hyper3 (LIKE hyper1);
+SELECT create_distributed_hypertable('hyper1', 'time', 'location', replication_factor=>1);
+NOTICE:  adding not-null constraint to column "time"
+ create_distributed_hypertable 
+-------------------------------
+ (10,public,hyper1,t)
+(1 row)
+
+SELECT create_distributed_hypertable('hyper2', 'time', 'location', replication_factor=>2);
+NOTICE:  adding not-null constraint to column "time"
+ create_distributed_hypertable 
+-------------------------------
+ (11,public,hyper2,t)
+(1 row)
+
+SELECT create_distributed_hypertable('hyper3', 'time', 'location', replication_factor=>3);
+NOTICE:  adding not-null constraint to column "time"
+ create_distributed_hypertable 
+-------------------------------
+ (12,public,hyper3,t)
+(1 row)
+
+INSERT INTO hyper1
+SELECT t, (abs(timestamp_hash(t::timestamp)) % 3) + 1, random() * 30
+FROM generate_series('2022-01-01 00:00:00'::timestamptz, '2022-01-05 00:00:00', '1 h') t;
+INSERT INTO hyper2 SELECT * FROM hyper1;
+INSERT INTO hyper3 SELECT * FROM hyper1;
+-- create view to see the data nodes and default data node of all
+-- chunks
+CREATE TEMPORARY VIEW chunk_default_data_node AS
+SELECT hypertable_name, format('%I.%I', ch.chunk_schema, ch.chunk_name)::regclass AS chunk, ch.data_nodes, fs.srvname default_data_node
+	   FROM timescaledb_information.chunks ch
+	   INNER JOIN pg_foreign_table ft ON (format('%I.%I', ch.chunk_schema, ch.chunk_name)::regclass = ft.ftrelid)
+	   INNER JOIN pg_foreign_server fs ON (ft.ftserver = fs.oid);
+SELECT * FROM chunk_default_data_node;
+ hypertable_name |                     chunk                     |              data_nodes               | default_data_node 
+-----------------+-----------------------------------------------+---------------------------------------+-------------------
+ hyper1          | _timescaledb_internal._dist_hyper_10_12_chunk | {data_node_1}                         | data_node_1
+ hyper1          | _timescaledb_internal._dist_hyper_10_13_chunk | {data_node_2}                         | data_node_2
+ hyper1          | _timescaledb_internal._dist_hyper_10_14_chunk | {data_node_3}                         | data_node_3
+ hyper2          | _timescaledb_internal._dist_hyper_11_15_chunk | {data_node_1,data_node_2}             | data_node_1
+ hyper2          | _timescaledb_internal._dist_hyper_11_16_chunk | {data_node_2,data_node_3}             | data_node_2
+ hyper2          | _timescaledb_internal._dist_hyper_11_17_chunk | {data_node_1,data_node_3}             | data_node_3
+ hyper3          | _timescaledb_internal._dist_hyper_12_18_chunk | {data_node_1,data_node_2,data_node_3} | data_node_1
+ hyper3          | _timescaledb_internal._dist_hyper_12_19_chunk | {data_node_1,data_node_2,data_node_3} | data_node_2
+ hyper3          | _timescaledb_internal._dist_hyper_12_20_chunk | {data_node_1,data_node_2,data_node_3} | data_node_3
+(9 rows)
+
+-- test "switching over" to other data node when
+\set ON_ERROR_STOP 0
+-- must be owner to alter a data node
+SELECT alter_data_node('data_node_1', available=>false);
+WARNING:  could not switch default data node on 4 chunks
+ERROR:  must be owner of foreign server data_node_1
+SELECT alter_data_node('data_node_1', port=>8989);
+ERROR:  must be owner of foreign server data_node_1
+\set ON_ERROR_STOP 1
+RESET ROLE;
+--when altering a data node, related entries in the connection cache
+--should be invalidated
+SELECT node_name, host, port, invalidated
+FROM _timescaledb_internal.show_connection_cache()
+WHERE node_name = 'data_node_1';
+  node_name  |   host    | port  | invalidated 
+-------------+-----------+-------+-------------
+ data_node_1 | localhost | 55432 | f
+(1 row)
+
+SELECT * FROM alter_data_node('data_node_1', available=>false);
+WARNING:  could not switch default data node on 4 chunks
+  node_name  |   host    |    database    | port  | available 
+-------------+-----------+----------------+-------+-----------
+ data_node_1 | localhost | db_data_node_1 | 55432 | f
+(1 row)
+
+SELECT node_name, host, port, invalidated
+FROM _timescaledb_internal.show_connection_cache()
+WHERE node_name = 'data_node_1';
+  node_name  |   host    | port  | invalidated 
+-------------+-----------+-------+-------------
+ data_node_1 | localhost | 55432 | t
+(1 row)
+
+-- the node that is not available for reads should no longer be
+-- default data node for chunks, except for those that have no
+-- alternative (i.e., the chunk only has one data node).
+SELECT * FROM chunk_default_data_node;
+ hypertable_name |                     chunk                     |              data_nodes               | default_data_node 
+-----------------+-----------------------------------------------+---------------------------------------+-------------------
+ hyper1          | _timescaledb_internal._dist_hyper_10_12_chunk | {data_node_1}                         | data_node_1
+ hyper1          | _timescaledb_internal._dist_hyper_10_13_chunk | {data_node_2}                         | data_node_2
+ hyper1          | _timescaledb_internal._dist_hyper_10_14_chunk | {data_node_3}                         | data_node_3
+ hyper2          | _timescaledb_internal._dist_hyper_11_15_chunk | {data_node_1,data_node_2}             | data_node_2
+ hyper2          | _timescaledb_internal._dist_hyper_11_16_chunk | {data_node_2,data_node_3}             | data_node_2
+ hyper2          | _timescaledb_internal._dist_hyper_11_17_chunk | {data_node_1,data_node_3}             | data_node_3
+ hyper3          | _timescaledb_internal._dist_hyper_12_18_chunk | {data_node_1,data_node_2,data_node_3} | data_node_2
+ hyper3          | _timescaledb_internal._dist_hyper_12_19_chunk | {data_node_1,data_node_2,data_node_3} | data_node_2
+ hyper3          | _timescaledb_internal._dist_hyper_12_20_chunk | {data_node_1,data_node_2,data_node_3} | data_node_3
+(9 rows)
+
+-- save old port so that we can restore connectivity after
+-- we alter the data node
+WITH options AS (
+	 SELECT unnest(options) option
+	 FROM timescaledb_information.data_nodes
+	 WHERE node_name = 'data_node_1'
+)
+SELECT split_part(option, '=', 2) AS old_port
+FROM options WHERE option LIKE 'port%' \gset
+-- also test altering host, port and database
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+  node_name  |                              options                              
+-------------+-------------------------------------------------------------------
+ data_node_2 | {host=localhost,port=55432,dbname=db_data_node_2}
+ data_node_3 | {host=localhost,port=55432,dbname=db_data_node_3}
+ data_node_1 | {host=localhost,port=55432,dbname=db_data_node_1,available=false}
+(3 rows)
+
+SELECT * FROM alter_data_node('data_node_1', available=>true, host=>'foo.bar', port=>8989, database=>'new_db');
+  node_name  |  host   | database | port | available 
+-------------+---------+----------+------+-----------
+ data_node_1 | foo.bar | new_db   | 8989 | t
+(1 row)
+
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+  node_name  |                        options                        
+-------------+-------------------------------------------------------
+ data_node_2 | {host=localhost,port=55432,dbname=db_data_node_2}
+ data_node_3 | {host=localhost,port=55432,dbname=db_data_node_3}
+ data_node_1 | {host=foo.bar,port=8989,dbname=new_db,available=true}
+(3 rows)
+
+-- just show current options:
+SELECT * FROM alter_data_node('data_node_1');
+  node_name  |  host   | database | port | available 
+-------------+---------+----------+------+-----------
+ data_node_1 | foo.bar | new_db   | 8989 | t
+(1 row)
+
+\set ON_ERROR_STOP 0
+SELECT * FROM alter_data_node(NULL);
+ERROR:  data node name cannot be NULL
+SELECT * FROM alter_data_node('does_not_exist');
+ERROR:  server "does_not_exist" does not exist
+SELECT * FROM alter_data_node('data_node_1', port=>89000);
+ERROR:  invalid port number 89000
+-- cannot delete data node with "drop_database" since configuration is wrong
+SELECT delete_data_node('data_node_1', drop_database=>true);
+ERROR:  could not connect to data node "data_node_1"
+\set ON_ERROR_STOP 0
+-- restore configuration for data_node_1
+SELECT * FROM alter_data_node('data_node_1', host=>'localhost', port=>:old_port, database=>:'DN_DBNAME_1');
+  node_name  |   host    |    database    | port  | available 
+-------------+-----------+----------------+-------+-----------
+ data_node_1 | localhost | db_data_node_1 | 55432 | t
+(1 row)
+
+SELECT node_name, options FROM timescaledb_information.data_nodes;
+  node_name  |                             options                              
+-------------+------------------------------------------------------------------
+ data_node_1 | {host=localhost,port=55432,dbname=db_data_node_1,available=true}
+ data_node_2 | {host=localhost,port=55432,dbname=db_data_node_2}
+ data_node_3 | {host=localhost,port=55432,dbname=db_data_node_3}
+(3 rows)
+
+DROP TABLE hyper1;
+DROP TABLE hyper2;
+DROP TABLE hyper3;
+-- create new session to clear out connection cache
+\c :TEST_DBNAME :ROLE_CLUSTER_SUPERUSER;
+SELECT delete_data_node('data_node_1', drop_database=>true);
+ delete_data_node 
+------------------
+ t
+(1 row)
+
+SELECT delete_data_node('data_node_2', drop_database=>true);
+ delete_data_node 
+------------------
+ t
+(1 row)
+
+SELECT delete_data_node('data_node_3', drop_database=>true);
+ delete_data_node 
+------------------
+ t
+(1 row)
+
