@@ -222,6 +222,7 @@ CREATE OR REPLACE FUNCTION @extschema@.alter_data_node(
     host                   TEXT = NULL,
     database               NAME = NULL,
 	port                   INTEGER = NULL,
-	available              BOOLEAN = NULL
-) RETURNS TABLE(node_name NAME, host TEXT, database NAME, port INTEGER, available BOOLEAN)
+	readable               BOOLEAN = NULL,
+	writable               BOOLEAN = NULL
+) RETURNS TABLE(node_name NAME, host TEXT, database NAME, port INTEGER, readable BOOLEAN, writable BOOLEAN)
 AS '@MODULE_PATHNAME@', 'ts_data_node_alter' LANGUAGE C VOLATILE;

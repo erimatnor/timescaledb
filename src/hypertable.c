@@ -2740,6 +2740,17 @@ typedef bool (*hypertable_data_node_filter)(const HypertableDataNode *hdn);
 static bool
 filter_non_blocked_data_nodes(const HypertableDataNode *node)
 {
+	const ForeignServer *server = GetForeignServer(node->foreign_server_oid);
+	ListCell *lc;
+
+	foreach (lc, server->options)
+	{
+		DefElem *elem = lfirst(lc);
+
+		if (strcmp(elem->defname, "writable") == 0 && !defGetBoolean(elem))
+			return false;
+	}
+
 	return !node->fd.block_chunks;
 }
 

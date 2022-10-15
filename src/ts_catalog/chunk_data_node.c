@@ -106,16 +106,32 @@ chunk_data_node_tuple_found(TupleInfo *ti, void *data)
 	bool should_free;
 	HeapTuple tuple = ts_scanner_fetch_heap_tuple(ti, false, &should_free);
 	Form_chunk_data_node form = (Form_chunk_data_node) GETSTRUCT(tuple);
-	ChunkDataNode *chunk_data_node;
-	MemoryContext old;
+	ForeignServer *server;
+	ListCell *lc;
+	bool data_node_is_writable = true;
 
-	old = MemoryContextSwitchTo(ti->mctx);
-	chunk_data_node = palloc(sizeof(ChunkDataNode));
-	memcpy(&chunk_data_node->fd, form, sizeof(FormData_chunk_data_node));
-	chunk_data_node->foreign_server_oid =
-		get_foreign_server_oid(NameStr(form->node_name), /* missing_ok = */ false);
-	*nodes = lappend(*nodes, chunk_data_node);
-	MemoryContextSwitchTo(old);
+	server = GetForeignServerByName(NameStr(form->node_name), false);
+
+	foreach (lc, server->options)
+	{
+		DefElem *elem = lfirst(lc);
+
+		if (strcmp(elem->defname, "writable") == 0 && !defGetBoolean(elem))
+			data_node_is_writable = false;
+	}
+
+	if (data_node_is_writable)
+	{
+		ChunkDataNode *chunk_data_node;
+		MemoryContext old;
+
+		old = MemoryContextSwitchTo(ti->mctx);
+		chunk_data_node = palloc(sizeof(ChunkDataNode));
+		memcpy(&chunk_data_node->fd, form, sizeof(FormData_chunk_data_node));
+		chunk_data_node->foreign_server_oid = server->serverid;
+		*nodes = lappend(*nodes, chunk_data_node);
+		MemoryContextSwitchTo(old);
+	}
 
 	if (should_free)
 		heap_freetuple(tuple);

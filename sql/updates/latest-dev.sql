@@ -182,7 +182,8 @@ CREATE FUNCTION @extschema@.alter_data_node(
     node_name              NAME,
     host                   TEXT = NULL,
     database               NAME = NULL,
-	port                   INTEGER = NULL,
-	available              BOOLEAN = NULL
-) RETURNS TABLE(node_name NAME, host TEXT, database NAME, port INTEGER, available BOOLEAN)
+	port                   INTEGER = NULL,	
+	readable               BOOLEAN = NULL,
+	writable               BOOLEAN = NULL
+) RETURNS TABLE(node_name NAME, host TEXT, database NAME, port INTEGER, readable BOOLEAN, writable BOOLEAN)
 AS '@MODULE_PATHNAME@', 'ts_data_node_alter' LANGUAGE C VOLATILE;

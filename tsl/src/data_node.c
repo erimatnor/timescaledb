@@ -1434,7 +1434,8 @@ enum Anum_show_conn
 	Anum_alter_data_node_host,
 	Anum_alter_data_node_database,
 	Anum_alter_data_node_port,
-	Anum_alter_data_node_available,
+	Anum_alter_data_node_readable,
+	Anum_alter_data_node_writable,
 	_Anum_alter_data_node_max,
 };
 
@@ -1451,7 +1452,8 @@ create_alter_data_node_tuple(TupleDesc tupdesc, const char *node_name, List *opt
 
 	values[AttrNumberGetAttrOffset(Anum_alter_data_node_node_name)] = CStringGetDatum(node_name);
 	/* Default to true for "available" if not set in options */
-	values[AttrNumberGetAttrOffset(Anum_alter_data_node_available)] = BoolGetDatum(true);
+	values[AttrNumberGetAttrOffset(Anum_alter_data_node_readable)] = BoolGetDatum(true);
+	values[AttrNumberGetAttrOffset(Anum_alter_data_node_writable)] = BoolGetDatum(true);
 
 	foreach (lc, options)
 	{
@@ -1472,9 +1474,14 @@ create_alter_data_node_tuple(TupleDesc tupdesc, const char *node_name, List *opt
 			int port = atoi(defGetString(elem));
 			values[AttrNumberGetAttrOffset(Anum_alter_data_node_port)] = Int32GetDatum(port);
 		}
-		else if (strcmp("available", elem->defname) == 0)
+		else if (strcmp("readable", elem->defname) == 0)
 		{
-			values[AttrNumberGetAttrOffset(Anum_alter_data_node_available)] =
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_readable)] =
+				BoolGetDatum(defGetBoolean(elem));
+		}
+		else if (strcmp("writable", elem->defname) == 0)
+		{
+			values[AttrNumberGetAttrOffset(Anum_alter_data_node_writable)] =
 				BoolGetDatum(defGetBoolean(elem));
 		}
 	}
@@ -1513,6 +1520,32 @@ switch_default_data_node_on_chunks(const ForeignServer *datanode)
 		elog(WARNING, "could not switch default data node on %u chunks", failed_update_count);
 }
 
+static List *
+append_data_node_option(List *options, const ForeignServer *server, const char *name, Node *value)
+{
+	DefElem *elem;
+	ListCell *lc;
+	bool option_found = false;
+
+	foreach (lc, server->options)
+	{
+		elem = lfirst(lc);
+
+		if (strcmp(elem->defname, name) == 0)
+		{
+			option_found = true;
+			break;
+		}
+	}
+
+	elem = makeDefElemExtended(NULL,
+							   pstrdup(name),
+							   value,
+							   option_found ? DEFELEM_SET : DEFELEM_ADD,
+							   -1);
+	return lappend(options, elem);
+}
+
 /*
  * Alter a data node.
  *
@@ -1531,8 +1564,12 @@ data_node_alter(PG_FUNCTION_ARGS)
 	const char *host = PG_ARGISNULL(1) ? NULL : TextDatumGetCString(PG_GETARG_TEXT_P(1));
 	const char *database = PG_ARGISNULL(2) ? NULL : NameStr(*PG_GETARG_NAME(2));
 	int port = PG_ARGISNULL(3) ? -1 : PG_GETARG_INT32(3);
-	bool available = PG_ARGISNULL(4) ? true : PG_GETARG_BOOL(4);
-	bool available_is_null = PG_ARGISNULL(4);
+	bool readable = PG_ARGISNULL(4) ? true : PG_GETARG_BOOL(4);
+	bool readable_is_null = PG_ARGISNULL(4);
+	bool writable = PG_ARGISNULL(5) ? true : PG_GETARG_BOOL(5);
+	bool writable_is_null = PG_ARGISNULL(5);
+	List *options = NIL;
+
 	ForeignServer *server = NULL;
 	TupleDesc tupdesc;
 	AlterForeignServerStmt alter_server_stmt = {
@@ -1556,75 +1593,60 @@ data_node_alter(PG_FUNCTION_ARGS)
 	/* Check if a data node with the given name actually exists, or raise an error. */
 	server = data_node_get_foreign_server(node_name, ACL_NO_CHECK, false, false /* missing_ok */);
 
-	if (host == NULL && database == NULL && port == -1 && available_is_null)
+	if (host == NULL && database == NULL && port == -1 && readable_is_null && writable_is_null)
 		PG_RETURN_DATUM(
 			HeapTupleGetDatum(create_alter_data_node_tuple(tupdesc, node_name, server->options)));
 
 	if (host != NULL)
-	{
-		DefElem *elem =
-			makeDefElemExtended(NULL, "host", (Node *) makeString((char *) host), DEFELEM_SET, -1);
-		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
-	}
+		options =
+			append_data_node_option(options, server, "host", (Node *) makeString((char *) host));
 
 	if (database != NULL)
-	{
-		DefElem *elem = makeDefElemExtended(NULL,
-											"dbname",
-											(Node *) makeString((char *) database),
-											DEFELEM_SET,
-											-1);
-		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
-	}
+		options = append_data_node_option(options,
+										  server,
+										  "dbname",
+										  (Node *) makeString((char *) database));
 
 	if (port != -1)
 	{
-		DefElem *elem;
-
 		validate_data_node_port(port);
-		elem = makeDefElemExtended(NULL, "port", (Node *) makeInteger(port), DEFELEM_SET, -1);
-		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
+		options = append_data_node_option(options, server, "port", (Node *) makeInteger(port));
 	}
 
-	if (!available_is_null)
-	{
-		/* "available" is not a mandatory option so it might not exist
-		 * previously. Therefore, need to figure out if the action is SET or
-		 * ADD. */
-		DefElem *elem;
-		ListCell *lc;
-		bool available_found = false;
+	if (!readable_is_null)
+		options = append_data_node_option(options,
+										  server,
+										  "readable",
+										  (Node *) makeString(readable ? "true" : "false"));
 
-		foreach (lc, server->options)
-		{
-			elem = lfirst(lc);
+	if (!writable_is_null)
+		options = append_data_node_option(options,
+										  server,
+										  "writable",
+										  (Node *) makeString(writable ? "true" : "false"));
 
-			if (strcmp(elem->defname, "available") == 0)
-			{
-				available_found = true;
-				break;
-			}
-		}
-
-		elem = makeDefElemExtended(NULL,
-								   "available",
-								   (Node *) (available ? makeString("true") : makeString("false")),
-								   available_found ? DEFELEM_SET : DEFELEM_ADD,
-								   -1);
-		alter_server_stmt.options = lappend(alter_server_stmt.options, elem);
-	}
-
-	if (!available_is_null && !available)
+	if (!readable_is_null && !readable)
 		switch_default_data_node_on_chunks(server);
 
+	if (!writable_is_null && !writable)
+	{
+		/* Invalidate hypertable cache since we cache a data node's
+		 * writability there. */
+		ts_catalog_invalidate_cache(ts_catalog_get()->tables[HYPERTABLE].id, CMD_UPDATE);
+
+		/* TODO: need to check that we don't make more nodes unwritable than
+		 * is sustainable under current replication factor and previously
+		 * unwritable nodes. */
+	}
+
+	alter_server_stmt.options = options;
 	AlterForeignServer(&alter_server_stmt);
 
 	/* Add updated options last as they will take precedence over old options
 	 * when creating the result tuple. */
-	List *merged_options = list_concat(server->options, alter_server_stmt.options);
+	options = list_concat(server->options, alter_server_stmt.options);
 
-	PG_RETURN_DATUM(
-		HeapTupleGetDatum(create_alter_data_node_tuple(tupdesc, node_name, merged_options)));
+	PG_RETURN_DATUM(HeapTupleGetDatum(create_alter_data_node_tuple(tupdesc, node_name, options)));
 }
 
 /*

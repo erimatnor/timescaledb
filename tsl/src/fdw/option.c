@@ -154,7 +154,8 @@ init_ts_fdw_options(void)
 		/* fetch_size is available on both foreign data wrapper and server */
 		{ "fetch_size", ForeignDataWrapperRelationId },
 		{ "fetch_size", ForeignServerRelationId },
-		{ "available", ForeignServerRelationId },
+		{ "readable", ForeignServerRelationId },
+		{ "writable", ForeignServerRelationId },
 		{ NULL, InvalidOid }
 	};
 

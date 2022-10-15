@@ -8,6 +8,7 @@
 #include <access/xact.h>
 #include <catalog/catalog.h>
 #include <commands/tablecmds.h>
+#include <foreign/foreign.h>
 #include <nodes/parsenodes.h>
 #include <utils/array.h>
 #include <utils/palloc.h>
@@ -107,7 +108,21 @@ dimpart_create(const HeapTuple tup, const TupleDesc tupdesc)
 			if (!elem_isnull)
 			{
 				const char *dn = NameStr(*DatumGetName(elem));
-				dp->data_nodes = lappend(dp->data_nodes, pstrdup(dn));
+				ForeignServer *server = GetForeignServerByName(dn, false);
+				bool data_node_is_writable = true;
+				ListCell *lc;
+
+				/* Exclude data nodes that aren't writable */
+				foreach (lc, server->options)
+				{
+					DefElem *elem = lfirst(lc);
+
+					if (strcmp(elem->defname, "writable") == 0 && !defGetBoolean(elem))
+						data_node_is_writable = false;
+				}
+
+				if (data_node_is_writable)
+					dp->data_nodes = lappend(dp->data_nodes, pstrdup(dn));
 			}
 		}
 
