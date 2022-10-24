@@ -96,7 +96,7 @@ set(extschema "@extschema@")
 project(
   timescaledb
   VERSION ${VERSION}
-  LANGUAGES C)
+  LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE)
   # Default to Release builds
@@ -201,21 +201,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|AppleClang|Clang")
     -Wvla
     -Wall
     -Wundef
-    -Wmissing-prototypes
     -Wpointer-arith
     -Werror=vla
     -Wendif-labels
     -fno-strict-aliasing
     -fno-omit-frame-pointer)
-
-  # These flags are just supported on some of the compilers, so we check them
-  # before adding them.
-  check_c_compiler_flag(-Wno-unused-command-line-argument
-                        CC_SUPPORTS_NO_UNUSED_CLI_ARG)
-  if(CC_SUPPORTS_NO_UNUSED_CLI_ARG)
-    add_compile_options(-Wno-unused-command-line-argument)
-  endif()
-
+ 
   check_c_compiler_flag(-Wno-format-truncation CC_SUPPORTS_NO_FORMAT_TRUNCATION)
   if(CC_SUPPORTS_NO_FORMAT_TRUNCATION)
     add_compile_options(-Wno-format-truncation)
@@ -608,6 +599,17 @@ if(TAP_CHECKS)
     set(TAP_CHECKS OFF)
   endif()
 endif()
+
+find_package(CURL)
+find_package(opentelemetry-cpp CONFIG)
+
+if (OPENTELEMETRY-CPP_FOUND AND CURL_FOUND)
+  message(STATUS "Compiling with OpenTelemetry support")
+  set(USE_OPENTELEMETRY ON)
+else ()
+  message(STATUS "Compiling without OpenTelemetry support")
+  set(USE_OPENTELEMETRY OFF)
+endif ()
 
 if(UNIX)
   add_subdirectory(scripts)
