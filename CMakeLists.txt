@@ -7,6 +7,7 @@ include(CheckSymbolExists)
 include(GitCommands)
 include(GenerateScripts)
 include(CMakeDependentOption)
+include(FindThrift)
 
 # This requires all tests to run. This defaults to OFF but can be enabled to
 # ensure that no tests are skipped because of missing tools.
@@ -600,10 +601,15 @@ if(TAP_CHECKS)
   endif()
 endif()
 
-find_package(CURL)
+# Check for OpenTelemetry build support
 find_package(opentelemetry-cpp CONFIG)
+find_package(CURL)
+find_package(nlohmann_json)
+find_package(Protobuf)
+find_package(gRPC REQUIRED)
+find_package(Thrift)
 
-if (OPENTELEMETRY-CPP_FOUND AND CURL_FOUND)
+if (OPENTELEMETRY-CPP_FOUND AND CURL_FOUND AND NLOHMANN_JSON_FOUND AND PROTOBUF_FOUND AND THRIFT_FOUND)
   message(STATUS "Compiling with OpenTelemetry support")
   set(USE_OPENTELEMETRY ON)
 else ()

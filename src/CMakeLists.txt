@@ -117,7 +117,7 @@ if(USE_OPENSSL)
 endif(USE_OPENSSL)
 
 if (USE_OPENTELEMETRY)
-  target_link_libraries(${PROJECT_NAME} opentelemetry/opentelemetry-c)
+  target_link_libraries(${PROJECT_NAME} opentelemetry-c)
 endif (USE_OPENTELEMETRY)
   
 configure_file(config.h.in config.h)
