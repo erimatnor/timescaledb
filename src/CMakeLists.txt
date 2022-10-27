@@ -82,18 +82,17 @@ else()
   add_library(${PROJECT_NAME} MODULE ${SOURCES} ${GITCOMMIT_H})
 endif()
 
-
-if (CMAKE_C_COMPILER_ID MATCHES "GNU|AppleClang|Clang")
-  target_compile_options(${PROJECT_NAME} PUBLIC
-	-Wmissing-prototypes)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|AppleClang|Clang")
+  target_compile_options(${PROJECT_NAME} PUBLIC -Wmissing-prototypes)
   # These flags are just supported on some of the compilers, so we check them
   # before adding them.
   check_c_compiler_flag(-Wno-unused-command-line-argument
                         CC_SUPPORTS_NO_UNUSED_CLI_ARG)
   if(CC_SUPPORTS_NO_UNUSED_CLI_ARG)
-    target_compile_options(${PROJECT_NAME} PUBLIC -Wno-unused-command-line-argument)
+    target_compile_options(${PROJECT_NAME}
+                           PUBLIC -Wno-unused-command-line-argument)
   endif()
-endif ()
+endif()
 
 if(USE_TELEMETRY)
   if(SEND_TELEMETRY_DEFAULT)
@@ -116,21 +115,24 @@ if(USE_OPENSSL)
   target_link_libraries(${PROJECT_NAME} ${OPENSSL_LIBRARIES})
 endif(USE_OPENSSL)
 
-if (USE_OPENTELEMETRY)
+if(USE_OPENTELEMETRY)
   target_link_libraries(${PROJECT_NAME} opentelemetry-c)
-endif (USE_OPENTELEMETRY)
-  
+  target_include_directories(${PROJECT_NAME} SYSTEM
+                             PUBLIC ${OPENTELEMETRY_CPP_INCLUDE_DIR})
+endif(USE_OPENTELEMETRY)
+
 configure_file(config.h.in config.h)
 add_dependencies(${PROJECT_NAME} gitcheck)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-if (USE_OPENTELEMETRY)
+if(USE_OPENTELEMETRY)
   add_subdirectory(opentelemetry)
-endif (USE_OPENTELEMETRY)
+endif(USE_OPENTELEMETRY)
 add_subdirectory(bgw)
 add_subdirectory(net)
 if(USE_TELEMETRY)
   add_subdirectory(telemetry)
+  add_subdirectory(trace)
 endif()
 add_subdirectory(loader)
 add_subdirectory(bgw_policy)

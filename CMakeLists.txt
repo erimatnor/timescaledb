@@ -207,7 +207,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|AppleClang|Clang")
     -Wendif-labels
     -fno-strict-aliasing
     -fno-omit-frame-pointer)
- 
+
   check_c_compiler_flag(-Wno-format-truncation CC_SUPPORTS_NO_FORMAT_TRUNCATION)
   if(CC_SUPPORTS_NO_FORMAT_TRUNCATION)
     add_compile_options(-Wno-format-truncation)
@@ -609,13 +609,17 @@ find_package(Protobuf)
 find_package(gRPC REQUIRED)
 find_package(Thrift)
 
-if (OPENTELEMETRY-CPP_FOUND AND CURL_FOUND AND NLOHMANN_JSON_FOUND AND PROTOBUF_FOUND AND THRIFT_FOUND)
+if(OPENTELEMETRY-CPP_FOUND
+   AND CURL_FOUND
+   AND NLOHMANN_JSON_FOUND
+   AND PROTOBUF_FOUND
+   AND THRIFT_FOUND)
   message(STATUS "Compiling with OpenTelemetry support")
-  set(USE_OPENTELEMETRY ON)
-else ()
+  set(USE_OPENTELEMETRY 1)
+else()
   message(STATUS "Compiling without OpenTelemetry support")
-  set(USE_OPENTELEMETRY OFF)
-endif ()
+  set(USE_OPENTELEMETRY 0)
+endif()
 
 if(UNIX)
   add_subdirectory(scripts)

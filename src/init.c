@@ -60,6 +60,11 @@ extern void _conn_mock_fini();
 
 extern void _chunk_append_init();
 
+#if USE_OPENTELEMETRY
+extern void _tracing_init(void);
+extern void _tracing_fini(void);
+#endif
+
 extern void TSDLLEXPORT _PG_init(void);
 
 TS_FUNCTION_INFO_V1(ts_post_load_init);
@@ -77,6 +82,9 @@ cleanup_on_pg_proc_exit(int code, Datum arg)
 #endif
 #ifdef TS_USE_OPENSSL
 	_conn_ssl_fini();
+#endif
+#if USE_OPENTELEMETRY
+	_tracing_fini();
 #endif
 	_conn_plain_fini();
 	_guc_fini();
@@ -109,6 +117,9 @@ _PG_init(void)
 	_process_utility_init();
 	_guc_init();
 	_conn_plain_init();
+#if USE_OPENTELEMETRY
+	_tracing_init();
+#endif
 #ifdef TS_USE_OPENSSL
 	_conn_ssl_init();
 #endif
