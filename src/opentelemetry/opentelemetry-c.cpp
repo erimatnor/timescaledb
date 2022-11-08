@@ -3,6 +3,7 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-APACHE for a copy of the license.
  */
+
 #include <opentelemetry/exporters/otlp/otlp_http_exporter_factory.h>
 #include <opentelemetry/exporters/otlp/otlp_http_exporter_options.h>
 #include <opentelemetry/sdk/trace/simple_processor_factory.h>
@@ -11,11 +12,13 @@
 #include <opentelemetry/trace/provider.h>
 
 #include "opentelemetry-c.h"
+#include "config.h"
 
 namespace trace = opentelemetry::trace;
 namespace nostd = opentelemetry::nostd;
 namespace trace_sdk = opentelemetry::sdk::trace;
 namespace otlp = opentelemetry::exporter::otlp;
+namespace resource = opentelemetry::sdk::resource;
 
 struct TracerProvider
 {
@@ -51,10 +54,15 @@ opentelemetry::exporter::otlp::OtlpHttpExporterOptions opts;
 void
 ts_opentelemetry_tracer_init(void)
 {
+	resource::ResourceAttributes resource_attributes = {
+		{ "service.name", "timescaledb" }, { "service.version", TIMESCALEDB_VERSION_MOD }
+	};
+
+	auto resource = resource::Resource::Create(resource_attributes);
 	auto exporter = otlp::OtlpHttpExporterFactory::Create(opts);
 	auto processor = trace_sdk::SimpleSpanProcessorFactory::Create(std::move(exporter));
 	std::shared_ptr<opentelemetry::trace::TracerProvider> provider =
-		trace_sdk::TracerProviderFactory::Create(std::move(processor));
+		trace_sdk::TracerProviderFactory::Create(std::move(processor), resource);
 	// Set the global trace provider
 	trace::Provider::SetTracerProvider(provider);
 }

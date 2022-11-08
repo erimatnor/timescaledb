@@ -46,11 +46,17 @@ ts_post_parse_analyze_hook(ParseState *pstate, Query *query
 		ts_opentelemetry_span_set_attribute(span,
 											"CommandId",
 											psprintf("%u", GetCurrentCommandId(false)));
+		if (pstate->p_sourcetext)
+			ts_opentelemetry_span_set_attribute(span, "Query", pstate->p_sourcetext);
+
 		tx_trace_context = palloc(sizeof(struct TxTraceContext));
 		tx_trace_context->tx_span = span;
 		tx_trace_context->tx_scope = scope;
 		MemoryContextSwitchTo(oldmcxt);
 	}
+
+	Assert(tx_trace_context != NULL);
+	ts_opentelemetry_span_add_event(tx_trace_context->tx_span, "post_parse_analyze");
 
 	// struct Span *query_span = ts_opentelemetry_span_start(tracer, psprintf("Query %u",
 	// GetCurrentTransactionId())); struct Scope *query_scope =
