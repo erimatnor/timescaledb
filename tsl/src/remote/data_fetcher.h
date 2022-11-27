@@ -33,6 +33,15 @@ typedef struct DataFetcherFuncs
 	void (*close)(DataFetcher *data_fetcher);
 } DataFetcherFuncs;
 
+typedef enum DataFetcherState
+{
+	DF_INIT,
+	DF_OPEN,
+	DF_FILE_TRAILER_RECEIVED, /* Only for copy fetcher */
+	DF_EOF,
+	DF_CLOSED,
+} DataFetcherState;
+
 typedef struct DataFetcher
 {
 	DataFetcherType type;
@@ -54,9 +63,7 @@ typedef struct DataFetcher
 	int fetch_size;		/* # of tuples to fetch */
 	int batch_count;	/* how many batches (parts of result set) we've done */
 
-	bool open;
-	bool eof;
-
+	DataFetcherState state;
 	AsyncRequest *data_req; /* a request to fetch data */
 } DataFetcher;
 
@@ -64,7 +71,7 @@ void data_fetcher_free(DataFetcher *df);
 
 extern void data_fetcher_init(DataFetcher *df, TSConnection *conn, const char *stmt,
 							  StmtParams *params, TupleFactory *tf);
-
+extern void data_fetcher_transition(DataFetcher *df, DataFetcherState new_state);
 extern void data_fetcher_store_tuple(DataFetcher *df, int row, TupleTableSlot *slot);
 extern void data_fetcher_store_next_tuple(DataFetcher *df, TupleTableSlot *slot);
 extern void data_fetcher_set_fetch_size(DataFetcher *df, int fetch_size);

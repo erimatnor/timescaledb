@@ -26,6 +26,7 @@ data_fetcher_init(DataFetcher *df, TSConnection *conn, const char *stmt, StmtPar
 	df->stmt = pstrdup(stmt);
 	df->stmt_params = params;
 	df->tf = tf;
+	df->state = DF_INIT;
 
 	tuplefactory_set_per_tuple_mctx_reset(df->tf, false);
 	df->batch_mctx =
@@ -34,6 +35,27 @@ data_fetcher_init(DataFetcher *df, TSConnection *conn, const char *stmt, StmtPar
 	df->req_mctx =
 		AllocSetContextCreate(CurrentMemoryContext, "async req/resp", ALLOCSET_DEFAULT_SIZES);
 	df->fetch_size = DEFAULT_FETCH_SIZE;
+}
+
+static const char *statenames[] = {
+	[DF_INIT] = "INIT",
+	[DF_OPEN] = "OPEN",
+	[DF_FILE_TRAILER_RECEIVED] = "FILE TRAILER",
+	[DF_EOF] = "EOF",
+	[DF_CLOSED] = "CLOSED",
+};
+
+void
+data_fetcher_transition(DataFetcher *df, DataFetcherState new_state)
+{
+	Assert((df->state == DF_INIT && new_state == DF_OPEN) ||
+		   (df->state == DF_EOF && new_state == DF_CLOSED) ||
+		   (df->state == DF_FILE_TRAILER_RECEIVED && (new_state == DF_EOF || new_state == DF_CLOSED)) ||
+		   (df->state == DF_OPEN && (new_state == DF_FILE_TRAILER_RECEIVED || new_state == DF_EOF || new_state == DF_CLOSED)));
+
+	elog(LOG, "[%s]: DF transitioning from %s to %s",
+		 remote_connection_node_name(df->conn), statenames[df->state], statenames[new_state]);
+	df->state = new_state;
 }
 
 void
@@ -54,7 +76,7 @@ data_fetcher_store_tuple(DataFetcher *df, int row, TupleTableSlot *slot)
 	if (row >= df->num_tuples)
 	{
 		/* No point in another fetch if we already detected EOF, though. */
-		if (df->eof || df->funcs->fetch_data(df) == 0)
+		if (df->state == DF_EOF || df->funcs->fetch_data(df) == 0)
 		{
 			ExecClearTuple(slot);
 			return;
@@ -107,7 +129,7 @@ data_fetcher_reset(DataFetcher *df)
 	df->num_tuples = 0;
 	df->next_tuple_idx = 0;
 	df->batch_count = 0;
-	df->eof = false;
+	df->state = DF_INIT;
 	MemoryContextReset(df->req_mctx);
 	MemoryContextReset(df->batch_mctx);
 }

@@ -110,7 +110,7 @@ cursor_fetcher_wait_until_open(DataFetcher *df)
 {
 	CursorFetcher *cursor = cast_fetcher(CursorFetcher, df);
 
-	if (cursor->state.open)
+	if (df->state == DF_OPEN)
 	{
 		Assert(cursor->create_req == NULL);
 		/* nothing to do */
@@ -124,7 +124,7 @@ cursor_fetcher_wait_until_open(DataFetcher *df)
 				 errdetail("Cannot wait on unsent cursor request.")));
 
 	async_request_wait_ok_command(cursor->create_req);
-	cursor->state.open = true;
+	df->state = DF_OPEN;
 	pfree(cursor->create_req);
 	cursor->create_req = NULL;
 }
@@ -180,7 +180,7 @@ cursor_fetcher_send_fetch_request(DataFetcher *df)
 	MemoryContext oldcontext;
 	CursorFetcher *cursor = cast_fetcher(CursorFetcher, df);
 
-	Assert(cursor->state.open);
+	Assert(df->state == DF_OPEN);
 
 	if (cursor->state.data_req != NULL)
 		ereport(ERROR,
@@ -230,7 +230,7 @@ cursor_fetcher_fetch_data_complete(CursorFetcher *cursor)
 	Assert(cursor != NULL);
 	Assert(cursor->state.data_req != NULL);
 
-	Assert(cursor->state.open);
+	Assert(cursor->state.state == DF_OPEN);
 	data_fetcher_validate(&cursor->state);
 
 	/*
@@ -290,7 +290,7 @@ cursor_fetcher_fetch_data_complete(CursorFetcher *cursor)
 			cursor->state.batch_count++;
 
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
-		cursor->state.eof = (numrows < cursor->state.fetch_size);
+		cursor->state.state = (numrows < cursor->state.fetch_size);
 
 		pfree(cursor->state.data_req);
 		cursor->state.data_req = NULL;
@@ -323,13 +323,13 @@ cursor_fetcher_fetch_data(DataFetcher *df)
 {
 	CursorFetcher *cursor = cast_fetcher(CursorFetcher, df);
 
-	if (cursor->state.eof)
+	if (df->state == DF_EOF)
 		return 0;
 
-	if (!cursor->state.open)
+	if (df->state != DF_OPEN)
 		cursor_fetcher_wait_until_open(df);
 
-	if (cursor->state.data_req == NULL)
+	if (df->data_req == NULL)
 		cursor_fetcher_send_fetch_request(df);
 
 	return cursor_fetcher_fetch_data_complete(cursor);
@@ -371,9 +371,9 @@ cursor_fetcher_rewind(DataFetcher *df)
 	{
 		char sql[64];
 
-		Assert(cursor->state.eof || cursor->state.data_req != NULL);
+		Assert(df->state == DF_EOF || cursor->state.data_req != NULL);
 
-		if (!cursor->state.eof)
+		if (df->state != DF_EOF)
 			async_request_discard_response(cursor->state.data_req);
 		/* We are beyond the first fetch, so need to rewind the remote end */
 		snprintf(sql, sizeof(sql), "MOVE BACKWARD ALL IN c%u", cursor->id);
@@ -393,16 +393,16 @@ cursor_fetcher_close(DataFetcher *df)
 	CursorFetcher *cursor = cast_fetcher(CursorFetcher, df);
 	char sql[64];
 
-	if (!cursor->state.open && cursor->create_req != NULL)
+	if (df->state != DF_OPEN && cursor->create_req != NULL)
 	{
 		async_request_discard_response(cursor->create_req);
 		return;
 	}
 
-	if (!cursor->state.eof && cursor->state.data_req != NULL)
+	if (df->state != DF_EOF && cursor->state.data_req != NULL)
 		async_request_discard_response(cursor->state.data_req);
 
 	snprintf(sql, sizeof(sql), "CLOSE c%u", cursor->id);
-	cursor->state.open = false;
+	df->state = DF_CLOSED;
 	remote_cursor_exec_cmd(cursor, sql);
 }
