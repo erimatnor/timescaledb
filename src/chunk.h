@@ -147,6 +147,7 @@ extern void ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti);
 extern Chunk *ts_chunk_find_for_point(const Hypertable *ht, const Point *p);
 extern Chunk *ts_chunk_create_for_point(const Hypertable *ht, const Point *p, bool *found,
 										const char *schema, const char *prefix);
+extern Chunk *ts_chunk_create_from_tuple(TupleInfo *ti);
 List *ts_chunk_id_find_in_subspace(Hypertable *ht, List *dimension_vecs);
 
 extern TSDLLEXPORT Chunk *ts_chunk_create_base(int32 id, int16 num_constraints, const char relkind);
@@ -232,6 +233,9 @@ extern Chunk *ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti
 
 extern ScanIterator ts_chunk_scan_iterator_create(MemoryContext result_mcxt);
 extern void ts_chunk_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id);
+extern void ts_chunk_scan_iterator_set_chunk_id_range(ScanIterator *it, int32 chunk_id_start,
+													  bool infinite_startt, int32 chunk_id_end,
+													  bool infinite_end);
 extern bool ts_chunk_lock_if_exists(Oid chunk_oid, LOCKMODE chunk_lockmode);
 extern int ts_chunk_oid_cmp(const void *p1, const void *p2);
 int ts_chunk_get_osm_chunk_id(int hypertable_id);

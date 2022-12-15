@@ -1754,6 +1754,14 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 	return SCAN_DONE;
 }
 
+Chunk *
+ts_chunk_create_from_tuple(TupleInfo *ti)
+{
+	ChunkStubScanCtx ctx = { 0 };
+	chunk_tuple_found(ti, &ctx);
+	return ctx.chunk;
+}
+
 /* Create a chunk by scanning on chunk ID. A stub must be provided as input. */
 static Chunk *
 chunk_create_from_stub(ChunkStubScanCtx *stubctx)
@@ -4311,8 +4319,8 @@ ts_chunks_in(PG_FUNCTION_ARGS)
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			 errmsg("illegal invocation of %s function", funcname),
-			 errhint("The %s function must appear in the WHERE clause and can only"
-					 " be combined with AND operator.",
+			 errhint("The %s function must appear in the WHERE clause when querying a hypertable"
+					 " and can only be combined with AND operator.",
 					 funcname)));
 	pg_unreachable();
 }
@@ -4572,6 +4580,29 @@ ts_chunk_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id)
 								   BTEqualStrategyNumber,
 								   F_INT4EQ,
 								   Int32GetDatum(chunk_id));
+}
+
+void
+ts_chunk_scan_iterator_set_chunk_id_range(ScanIterator *it, int32 chunk_id_start,
+										  bool infinite_start, int32 chunk_id_end,
+										  bool infinite_end)
+{
+	it->ctx.index = catalog_get_index(ts_catalog_get(), CHUNK, CHUNK_ID_INDEX);
+	ts_scan_iterator_scan_key_reset(it);
+
+	if (!infinite_start)
+		ts_scan_iterator_scan_key_init(it,
+									   Anum_chunk_idx_id,
+									   BTGreaterEqualStrategyNumber,
+									   F_INT4GE,
+									   Int32GetDatum(chunk_id_start));
+
+	if (!infinite_end)
+		ts_scan_iterator_scan_key_init(it,
+									   Anum_chunk_idx_id,
+									   BTLessEqualStrategyNumber,
+									   F_INT4LE,
+									   Int32GetDatum(chunk_id_end));
 }
 
 #include "hypercube.h"

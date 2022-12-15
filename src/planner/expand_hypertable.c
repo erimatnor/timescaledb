@@ -20,6 +20,7 @@
  * HypertableRestrictInfo.
  * */
 
+#include <catalog/pg_type_d.h>
 #include <postgres.h>
 #include <catalog/pg_constraint.h>
 #include <catalog/pg_inherits.h>
@@ -37,11 +38,14 @@
 #include <parser/parse_func.h>
 #include <parser/parsetree.h>
 #include <partitioning/partbounds.h>
+#include <stdint.h>
 #include <utils/date.h>
 #include <utils/errcodes.h>
 #include <utils/fmgroids.h>
 #include <utils/fmgrprotos.h>
 #include <utils/syscache.h>
+#include <utils/rangetypes.h>
+#include <utils/multirangetypes.h>
 
 #include "chunk.h"
 #include "compat/compat.h"
@@ -71,10 +75,12 @@ typedef struct CollectQualCtx
 } CollectQualCtx;
 
 static void propagate_join_quals(PlannerInfo *root, RelOptInfo *rel, CollectQualCtx *ctx);
+static Chunk **get_chunks(CollectQualCtx *ctx, PlannerInfo *root, RelOptInfo *rel, Hypertable *ht,
+						  unsigned int *num_chunks);
 
 static Oid chunk_exclusion_func = InvalidOid;
 
-static Oid ts_chunks_arg_types[] = { RECORDOID, INT4ARRAYOID };
+static Oid ts_chunks_arg_types[] = { RECORDOID, INT4MULTIRANGEOID };
 
 static void
 init_chunk_exclusion_func()
@@ -990,77 +996,112 @@ get_explicit_chunks(CollectQualCtx *ctx, PlannerInfo *root, RelOptInfo *rel, Hyp
 					unsigned int *num_chunks)
 {
 	Const *chunks_arg;
-	ArrayIterator chunk_id_iterator;
-	ArrayType *chunk_id_arr;
-	unsigned int chunk_id_arr_size;
-	Datum elem = (Datum) NULL;
-	bool isnull;
+	MultirangeType *multirange;
+	Oid mltrngtypoid;
 	Expr *expr;
 	bool reverse;
 	int order_attno;
 	Chunk **unlocked_chunks = NULL;
 	Chunk **chunks = NULL;
-	int unlocked_chunk_count = 0;
+	uint32 unlocked_chunk_count = 0;
 	Oid prev_chunk_oid = InvalidOid;
 	bool chunk_sort_needed = false;
-	int i;
+	uint32 i;
+	uint32 chunk_alloc_count = 0;
+	TypeCacheEntry *typcache;
 
 	*num_chunks = 0;
 
 	Assert(ctx->chunk_exclusion_func->args->length == 2);
 	expr = lsecond(ctx->chunk_exclusion_func->args);
+
 	if (!IsA(expr, Const))
 		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("second argument to chunk_in should contain only integer consts")));
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("second argument to chunks_in should be an integer multirange constant")));
 
 	chunks_arg = (Const *) expr;
 
 	/* function marked as STRICT so argument can't be NULL */
 	Assert(!chunks_arg->constisnull);
 
-	chunk_id_arr = DatumGetArrayTypeP(chunks_arg->constvalue);
-	if (ARR_NDIM(chunk_id_arr) != 1)
+	multirange = DatumGetMultirangeTypeP(chunks_arg->constvalue);
+	mltrngtypoid = MultirangeTypeGetOid(multirange);
+
+	if (mltrngtypoid != INT4MULTIRANGEOID)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid number of array dimensions for chunks_in")));
+				 errmsg("invalid type %d for chunks_in", mltrngtypoid)));
 
-	chunk_id_arr_size = ArrayGetNItems(ARR_NDIM(chunk_id_arr), ARR_DIMS(chunk_id_arr));
-
-	if (chunk_id_arr_size == 0)
+	if (MultirangeIsEmpty(multirange))
 		return NULL;
 
-	/* allocate an array of "Chunk *" and set it up below */
-	unlocked_chunks = (Chunk **) palloc(sizeof(Chunk *) * chunk_id_arr_size);
+	typcache = lookup_type_cache(mltrngtypoid, TYPECACHE_MULTIRANGE_INFO);
 
-	chunk_id_iterator = array_create_iterator(chunk_id_arr, 0, NULL);
-	while (array_iterate(chunk_id_iterator, &elem, &isnull))
+	/* Allocate an array of "Chunk *" and set it up below. Make a rough
+	 * estimate of the required chunk array size based on assuming 5 chunks
+	 * per range. */
+	chunk_alloc_count = multirange->rangeCount * 5;
+	unlocked_chunks = (Chunk **) palloc(sizeof(Chunk *) * chunk_alloc_count);
+
+	/* Multi-ranges are always sorted and merged, so need not check for
+	 * that */
+	for (i = 0; i < multirange->rangeCount; i++)
 	{
-		if (!isnull)
-		{
-			int32 chunk_id = DatumGetInt32(elem);
-			Chunk *chunk = ts_chunk_get_by_id(chunk_id, false);
+		RangeBound lower;
+		RangeBound upper;
 
-			if (chunk == NULL)
-				ereport(ERROR, (errmsg("chunk id %d not found", chunk_id)));
+		multirange_get_bounds(typcache->rngtype, multirange, i, &lower, &upper);
+
+		if (lower.infinite && upper.infinite)
+		{
+			/* Need to expand all chunks, so same thing as if no explicit exclusion */
+			ctx->chunk_exclusion_func = NULL;
+			return get_chunks(ctx, root, rel, ht, num_chunks);
+		}
+
+		int32 chunk_id_start =
+			lower.infinite ? INT32_MIN : (DatumGetInt32(lower.val) + (lower.inclusive ? 0 : 1));
+		int32 chunk_id_end =
+			upper.infinite ? INT32_MAX : (DatumGetInt32(upper.val) + (upper.inclusive ? 1 : 0));
+		ScanIterator it = ts_chunk_scan_iterator_create(CurrentMemoryContext);
+
+		if (chunk_id_start == chunk_id_end)
+			ts_chunk_scan_iterator_set_chunk_id(&it, chunk_id_start);
+		else
+			ts_chunk_scan_iterator_set_chunk_id_range(&it,
+													  chunk_id_start,
+													  lower.infinite,
+													  chunk_id_end,
+													  upper.infinite);
+
+		ts_scanner_foreach(&it)
+		{
+			Chunk *chunk = ts_chunk_create_from_tuple(it.tinfo);
 
 			if (chunk->fd.hypertable_id != ht->fd.id)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("chunk id %d does not belong to hypertable \"%s\"",
-								chunk_id,
+								chunk->fd.id,
 								NameStr(ht->fd.table_name))));
 
 			if (OidIsValid(prev_chunk_oid) && prev_chunk_oid > chunk->table_id)
 				chunk_sort_needed = true;
 
+			/* resize array if necessary */
+			if (chunk_alloc_count == unlocked_chunk_count)
+			{
+				chunk_alloc_count = chunk_alloc_count + 100;
+				unlocked_chunks = repalloc(unlocked_chunks, chunk_alloc_count);
+			}
+
 			prev_chunk_oid = chunk->table_id;
 			unlocked_chunks[unlocked_chunk_count++] = chunk;
 		}
-		else
-			elog(ERROR, "chunk id can't be NULL");
+
+		ts_scan_iterator_close(&it);
 	}
-	array_free_iterator(chunk_id_iterator);
 
 	/*
 	 * Sort chunks if needed for locking in Oid order in order to avoid

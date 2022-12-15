@@ -25,14 +25,13 @@ CREATE OR REPLACE FUNCTION _timescaledb_internal.calculate_chunk_interval(
 CREATE OR REPLACE FUNCTION _timescaledb_internal.chunk_status(REGCLASS) RETURNS INT
 AS '@MODULE_PATHNAME@', 'ts_chunk_status' LANGUAGE C;
 
--- Function for explicit chunk exclusion. Supply a record and an array
--- of chunk ids as input.
--- Intended to be used in WHERE clause.
--- An example: SELECT * FROM hypertable WHERE _timescaledb_internal.chunks_in(hypertable, ARRAY[1,2]);
+-- Function for explicit chunk exclusion. Supply a record and a
+-- multirange of chunk ids as input.  Intended to be used in WHERE
+-- clause.  An example: SELECT * FROM hypertable WHERE _timescaledb_internal.chunks_in(hypertable, '{[1,2], [5,8]}');
 --
 -- Use it with care as this function directly affects what chunks are being scanned for data.
 -- This is a marker function and should never be executed (we remove it from the plan)
-CREATE OR REPLACE FUNCTION _timescaledb_internal.chunks_in(record RECORD, chunks INTEGER[]) RETURNS BOOL
+CREATE OR REPLACE FUNCTION _timescaledb_internal.chunks_in(record RECORD, chunks int4multirange) RETURNS BOOL
 AS '@MODULE_PATHNAME@', 'ts_chunks_in' LANGUAGE C STABLE STRICT PARALLEL SAFE;
 
 --given a chunk's relid, return the id. Error out if not a chunk relid.

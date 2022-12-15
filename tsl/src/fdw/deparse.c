@@ -1293,13 +1293,20 @@ deparseLockingClause(deparse_expr_cxt *context)
 }
 
 static void
+append_range(StringInfo buf, int32 range_start, int32 range_end, bool add_comma)
+{
+	appendStringInfo(buf, "[%d,%d]%s", range_start, range_end, add_comma ? "," : "");
+}
+
+static void
 append_chunk_exclusion_condition(deparse_expr_cxt *context, bool use_alias)
 {
 	StringInfo buf = context->buf;
 	DataNodeChunkAssignment *sca = context->sca;
 	RelOptInfo *scanrel = context->scanrel;
+	int32 range_start = INT32_MIN;
+	int32 range_end = INT32_MIN;
 	ListCell *lc;
-	bool first = true;
 
 	appendStringInfoString(buf, INTERNAL_SCHEMA_NAME "." CHUNK_EXCL_FUNC_NAME "(");
 
@@ -1318,18 +1325,38 @@ append_chunk_exclusion_condition(deparse_expr_cxt *context, bool use_alias)
 		appendStringInfoString(buf, ".*, ");
 	}
 
-	appendStringInfo(buf, "ARRAY[");
+	appendStringInfoString(buf, "'{");
+
 	foreach (lc, sca->remote_chunk_ids)
 	{
 		int remote_chunk_id = lfirst_int(lc);
 
-		if (!first)
-			appendStringInfo(buf, ", ");
-		appendStringInfo(buf, "%d", remote_chunk_id);
-
-		first = false;
+		if (range_start == INT32_MIN)
+		{
+			range_start = remote_chunk_id;
+			range_end = remote_chunk_id;
+		}
+		else if (remote_chunk_id == (range_end + 1))
+		{
+			range_end = remote_chunk_id;
+		}
+		else
+		{
+			append_range(buf, range_start, range_end, true);
+			range_start = remote_chunk_id;
+			range_end = remote_chunk_id;
+		}
 	}
-	appendStringInfo(buf, "])"); /* end array and function call */
+
+	if (range_start != INT32_MIN)
+	{
+		Assert(range_end != INT32_MIN);
+		append_range(buf, range_start, range_end, false);
+	}
+	else if (buf->data[buf->len - 1] == ',')
+		buf->len--;
+
+	appendStringInfoString(buf, "}')"); /* end of multirange and function call */
 }
 
 /*
