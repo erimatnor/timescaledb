@@ -1,6 +1,11 @@
 Parsed test spec with 3 sessions
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_insert s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -56,6 +61,11 @@ t
 step s2_insert: <... completed>
 
 starting permutation: s2_begin s2_insert s3_lock_enable s1_create_dist_rp s3_lock_count s2_commit s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -122,6 +132,11 @@ t
 step s2_commit: <... completed>
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_create_dist_rp s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -185,6 +200,11 @@ t
 
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_dist_exec s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -240,6 +260,11 @@ t
 step s2_dist_exec: <... completed>
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_create_dist_ht s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -303,6 +328,11 @@ t
 
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_drop_dist_ht s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -358,6 +388,11 @@ t
 step s2_drop_dist_ht: <... completed>
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_add_dn s3_lock_count s3_lock_count_fs s3_lock_release s3_lock_count_fs
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -385,7 +420,7 @@ debug_waitpoint_enable
 (1 row)
 
 step s1_create_dist_rp: SELECT restore_point > pg_lsn('0/0') as valid_lsn FROM create_distributed_restore_point('s1_test'); <waiting ...>
-step s2_add_dn: SELECT node_name FROM add_data_node('data_node_4', host => 'localhost', database => 'cdrp_4'); <waiting ...>
+step s2_add_dn: SELECT node_name FROM add_data_node('data_node_n', host => 'localhost', database => 'cdrp_4'); <waiting ...>
 step s3_lock_count: 
 	SELECT waitpoint_locks('create_distributed_restore_point_lock') as cdrp_locks, 
 	       remote_txn_locks() as remote_txn_locks;
@@ -419,7 +454,7 @@ t
 step s2_add_dn: <... completed>
 node_name  
 -----------
-data_node_4
+data_node_n
 (1 row)
 
 step s3_lock_count_fs: SELECT foreign_server_locks() as foreign_server_locks;
@@ -430,6 +465,11 @@ foreign_server_locks
 
 
 starting permutation: s3_lock_enable s1_create_dist_rp s2_del_dn s3_lock_count s3_lock_release
+bool
+----
+t   
+(1 row)
+
 node_name  
 -----------
 data_node_1
@@ -457,7 +497,7 @@ debug_waitpoint_enable
 (1 row)
 
 step s1_create_dist_rp: SELECT restore_point > pg_lsn('0/0') as valid_lsn FROM create_distributed_restore_point('s1_test'); <waiting ...>
-step s2_del_dn: SELECT * FROM delete_data_node('data_node_4'); <waiting ...>
+step s2_del_dn: SELECT * FROM delete_data_node('data_node_n'); <waiting ...>
 step s3_lock_count: 
 	SELECT waitpoint_locks('create_distributed_restore_point_lock') as cdrp_locks, 
 	       remote_txn_locks() as remote_txn_locks;

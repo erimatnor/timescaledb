@@ -19,6 +19,7 @@
 #include "hypertable_cache.h"
 #include "scanner.h"
 #include "chunk.h"
+#include "debug_point.h"
 
 static void
 chunk_data_node_insert_relation(const Relation rel, int32 chunk_id, int32 node_chunk_id,
@@ -83,7 +84,7 @@ ts_chunk_data_node_insert_multi(List *chunk_data_nodes)
 static int
 chunk_data_node_scan_limit_internal(ScanKeyData *scankey, int num_scankeys, int indexid,
 									tuple_found_func on_tuple_found, void *scandata, int limit,
-									LOCKMODE lock, MemoryContext mctx)
+									LOCKMODE lock, ScanTupLock *tuplock, MemoryContext mctx)
 {
 	Catalog *catalog = ts_catalog_get();
 	ScannerCtx scanctx = {
@@ -94,6 +95,7 @@ chunk_data_node_scan_limit_internal(ScanKeyData *scankey, int num_scankeys, int 
 		.data = scandata,
 		.limit = limit,
 		.tuple_found = on_tuple_found,
+		.tuplock = tuplock,
 		.lockmode = lock,
 		.scandirection = ForwardScanDirection,
 		.result_mctx = mctx,
@@ -162,7 +164,8 @@ static int
 ts_chunk_data_node_scan_by_chunk_id_and_node_internal(int32 chunk_id, const char *node_name,
 													  bool scan_by_remote_chunk_id,
 													  tuple_found_func tuple_found, void *data,
-													  LOCKMODE lockmode, MemoryContext mctx)
+													  LOCKMODE lockmode, ScanTupLock *tuplock,
+													  MemoryContext mctx)
 {
 	ScanKeyData scankey[2];
 	int nkeys = 0;
@@ -203,12 +206,14 @@ ts_chunk_data_node_scan_by_chunk_id_and_node_internal(int32 chunk_id, const char
 											   data,
 											   0,
 											   lockmode,
+											   tuplock,
 											   mctx);
 }
 
 static int
 ts_chunk_data_node_scan_by_node_internal(const char *node_name, tuple_found_func tuple_found,
-										 void *data, LOCKMODE lockmode, MemoryContext mctx)
+										 void *data, LOCKMODE lockmode, ScanTupLock *tuplock,
+										 MemoryContext mctx)
 {
 	ScanKeyData scankey[1];
 
@@ -225,6 +230,7 @@ ts_chunk_data_node_scan_by_node_internal(const char *node_name, tuple_found_func
 											   data,
 											   0,
 											   lockmode,
+											   tuplock,
 											   mctx);
 }
 
@@ -233,13 +239,17 @@ List *
 ts_chunk_data_node_scan_by_chunk_id(int32 chunk_id, MemoryContext mctx)
 {
 	List *chunk_data_nodes = NIL;
-
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+	};
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  NULL,
 														  false,
 														  chunk_data_node_tuple_found,
 														  &chunk_data_nodes,
 														  AccessShareLock,
+														  &tuplock,
 														  mctx);
 	return chunk_data_nodes;
 }
@@ -249,13 +259,17 @@ List *
 ts_chunk_data_node_scan_by_chunk_id_filter(int32 chunk_id, MemoryContext mctx)
 {
 	List *chunk_data_nodes = NIL;
-
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+	};
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  NULL,
 														  false,
 														  chunk_data_node_tuple_found_filter,
 														  &chunk_data_nodes,
 														  AccessShareLock,
+														  &tuplock,
 														  mctx);
 	return chunk_data_nodes;
 }
@@ -267,12 +281,18 @@ chunk_data_node_scan_by_chunk_id_and_node_name(int32 chunk_id, const char *node_
 {
 	List *chunk_data_nodes = NIL;
 
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+	};
+
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  node_name,
 														  scan_by_remote_chunk_id,
 														  chunk_data_node_tuple_found,
 														  &chunk_data_nodes,
 														  AccessShareLock,
+														  &tuplock,
 														  mctx);
 	Assert(list_length(chunk_data_nodes) <= 1);
 
@@ -312,34 +332,53 @@ chunk_data_node_tuple_delete(TupleInfo *ti, void *data)
 int
 ts_chunk_data_node_delete_by_chunk_id(int32 chunk_id)
 {
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleExclusive,
+		.waitpolicy = LockWaitBlock,
+	};
+
 	return ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 																 NULL,
 																 false,
 																 chunk_data_node_tuple_delete,
 																 NULL,
 																 RowExclusiveLock,
+																 &tuplock,
 																 CurrentMemoryContext);
 }
 
 int
 ts_chunk_data_node_delete_by_chunk_id_and_node_name(int32 chunk_id, const char *node_name)
 {
-	return ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
-																 node_name,
-																 false,
-																 chunk_data_node_tuple_delete,
-																 NULL,
-																 RowExclusiveLock,
-																 CurrentMemoryContext);
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleExclusive,
+		.waitpolicy = LockWaitBlock,
+	};
+	int count;
+	count = ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
+																  node_name,
+																  false,
+																  chunk_data_node_tuple_delete,
+																  NULL,
+																  RowExclusiveLock,
+																  &tuplock,
+																  CurrentMemoryContext);
+	DEBUG_WAITPOINT("chunk_data_node_delete");
+	return count;
 }
 
 int
 ts_chunk_data_node_delete_by_node_name(const char *node_name)
 {
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleExclusive,
+		.waitpolicy = LockWaitBlock,
+	};
 	return ts_chunk_data_node_scan_by_node_internal(node_name,
 													chunk_data_node_tuple_delete,
 													NULL,
 													RowExclusiveLock,
+													&tuplock,
 													CurrentMemoryContext);
 }
 
