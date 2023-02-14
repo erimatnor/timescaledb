@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include <access/tableam.h>
 #include <catalog/pg_foreign_table.h>
 #include <catalog/pg_foreign_server.h>
 #include <catalog/dependency.h>
@@ -239,17 +240,14 @@ List *
 ts_chunk_data_node_scan_by_chunk_id(int32 chunk_id, MemoryContext mctx)
 {
 	List *chunk_data_nodes = NIL;
-	ScanTupLock tuplock = {
-		.lockmode = LockTupleKeyShare,
-		.waitpolicy = LockWaitBlock,
-	};
+
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  NULL,
 														  false,
 														  chunk_data_node_tuple_found,
 														  &chunk_data_nodes,
 														  AccessShareLock,
-														  &tuplock,
+														  NULL,
 														  mctx);
 	return chunk_data_nodes;
 }
@@ -259,17 +257,14 @@ List *
 ts_chunk_data_node_scan_by_chunk_id_filter(int32 chunk_id, MemoryContext mctx)
 {
 	List *chunk_data_nodes = NIL;
-	ScanTupLock tuplock = {
-		.lockmode = LockTupleKeyShare,
-		.waitpolicy = LockWaitBlock,
-	};
+
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  NULL,
 														  false,
 														  chunk_data_node_tuple_found_filter,
 														  &chunk_data_nodes,
 														  AccessShareLock,
-														  &tuplock,
+														  NULL,
 														  mctx);
 	return chunk_data_nodes;
 }
@@ -281,18 +276,13 @@ chunk_data_node_scan_by_chunk_id_and_node_name(int32 chunk_id, const char *node_
 {
 	List *chunk_data_nodes = NIL;
 
-	ScanTupLock tuplock = {
-		.lockmode = LockTupleKeyShare,
-		.waitpolicy = LockWaitBlock,
-	};
-
 	ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 														  node_name,
 														  scan_by_remote_chunk_id,
 														  chunk_data_node_tuple_found,
 														  &chunk_data_nodes,
 														  AccessShareLock,
-														  &tuplock,
+														  NULL,
 														  mctx);
 	Assert(list_length(chunk_data_nodes) <= 1);
 
@@ -322,9 +312,20 @@ chunk_data_node_tuple_delete(TupleInfo *ti, void *data)
 {
 	CatalogSecurityContext sec_ctx;
 
-	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-	ts_catalog_delete_tid(ti->scanrel, ts_scanner_get_tuple_tid(ti));
-	ts_catalog_restore_user(&sec_ctx);
+	switch (ti->lockresult)
+	{
+		case TM_Ok:
+			ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
+			ts_catalog_delete_tid(ti->scanrel, ts_scanner_get_tuple_tid(ti));
+			ts_catalog_restore_user(&sec_ctx);
+			break;
+		case TM_Deleted:
+			/* Already deleted, do nothing. */
+			break;
+		default:
+			Assert(false);
+			break;
+	}
 
 	return SCAN_CONTINUE;
 }
@@ -336,7 +337,6 @@ ts_chunk_data_node_delete_by_chunk_id(int32 chunk_id)
 		.lockmode = LockTupleExclusive,
 		.waitpolicy = LockWaitBlock,
 	};
-
 	return ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 																 NULL,
 																 false,
@@ -350,11 +350,12 @@ ts_chunk_data_node_delete_by_chunk_id(int32 chunk_id)
 int
 ts_chunk_data_node_delete_by_chunk_id_and_node_name(int32 chunk_id, const char *node_name)
 {
+	int count;
+
 	ScanTupLock tuplock = {
 		.lockmode = LockTupleExclusive,
 		.waitpolicy = LockWaitBlock,
 	};
-	int count;
 	count = ts_chunk_data_node_scan_by_chunk_id_and_node_internal(chunk_id,
 																  node_name,
 																  false,
