@@ -12,6 +12,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dist_ddl.c
     ${CMAKE_CURRENT_SOURCE_DIR}/prepared_statement_fetcher.c
     ${CMAKE_CURRENT_SOURCE_DIR}/copy_fetcher.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/libpq-ts.c
     ${CMAKE_CURRENT_SOURCE_DIR}/healthcheck.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stmt_params.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tuplefactory.c
@@ -21,4 +22,5 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/txn_store.c
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.c)
 target_sources(${TSL_LIBRARY_NAME} PRIVATE ${SOURCES})
-target_include_directories(${TSL_LIBRARY_NAME} PRIVATE ${PG_INCLUDEDIR})
+target_include_directories(${TSL_LIBRARY_NAME}
+                           PRIVATE ${PG_INCLUDEDIR} ${PG_INCLUDEDIR}/postgresql)
