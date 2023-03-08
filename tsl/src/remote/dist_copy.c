@@ -3,8 +3,6 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-TIMESCALE for a copy of the license.
  */
-#include "dist_copy.h"
-
 #include <postgres.h>
 #include <access/tupdesc.h>
 #include <catalog/namespace.h>
@@ -16,6 +14,7 @@
 #include <utils/builtins.h>
 #include <utils/lsyscache.h>
 
+#include "dist_copy.h"
 #include "compat/compat.h"
 #include "chunk.h"
 #include "copy.h"
@@ -25,9 +24,11 @@
 #include "guc.h"
 #include "hypercube.h"
 #include "hypertable.h"
+#include <lib/stringinfo.h>
 #include "nodes/chunk_dispatch/chunk_dispatch.h"
 #include "nodes/chunk_dispatch/chunk_insert_state.h"
 #include "partitioning.h"
+#include "remote/connection.h"
 #include "remote/connection_cache.h"
 #include "remote/dist_txn.h"
 #include "ts_catalog/chunk_data_node.h"
@@ -85,7 +86,7 @@ typedef struct CopyConnectionState
 	 * the dist_txn layer. Chunks are created interleaved with the actual COPY
 	 * operation, so we would have to somehow maintain these two layers in sync.
 	 */
-	List *data_node_connections;
+	HTAB *data_node_connections;
 
 	/*
 	 * Connections to which we have written something and have to finalize them.
@@ -126,6 +127,7 @@ typedef struct RemoteCopyContext
 	/* Operation data */
 	CopyConnectionState connection_state;
 	Hypertable *ht;
+	Oid user_id;
 	List *attnums;
 	void *data_context; /* TextCopyContext or BinaryCopyContext */
 	bool binary_operation;
@@ -136,10 +138,10 @@ typedef struct RemoteCopyContext
 	 * Incoming rows are batched before creating the chunks and sending them to
 	 * data nodes. The following fields contain the current batch of rows.
 	 */
-	StringInfo *batch_row_data;
+	StringInfo batch_row_data[MAX_BATCH_ROWS];
 	int batch_row_count;
 	int batch_size_bytes;
-	Point **batch_points;
+	Point *batch_points[MAX_BATCH_ROWS];
 	int batch_ordinal;
 } RemoteCopyContext;
 
@@ -269,25 +271,17 @@ calculate_hyperspace_point_from_fields(char **data, CopyDimensionInfo *dimension
 /*
  * Look up or set up a COPY connection to the data node.
  */
-static TSConnection *
-get_copy_connection_to_data_node(RemoteCopyContext *context, TSConnectionId required_id)
+static DataNodeConnection *
+get_copy_connection_to_data_node(RemoteCopyContext *context, Oid data_node_oid)
 {
-	MemoryContext old = MemoryContextSwitchTo(context->mctx);
 	CopyConnectionState *state = &context->connection_state;
-	TSConnection *connection = NULL;
-	ListCell *lc;
-	foreach (lc, state->data_node_connections)
-	{
-		DataNodeConnection *entry = (DataNodeConnection *) lfirst(lc);
-		if (required_id.server_id == entry->id.server_id &&
-			required_id.user_id == entry->id.user_id)
-		{
-			connection = entry->connection;
-			break;
-		}
-	}
+	TSConnectionId required_id = remote_connection_id(data_node_oid, context->user_id);
+	DataNodeConnection *entry;
+	bool found;
 
-	if (connection == NULL)
+	entry = hash_search(state->data_node_connections, &required_id, HASH_ENTER, &found);
+
+	if (!found)
 	{
 		/*
 		 * Did not find a cached connection, create a new one and cache it.
@@ -298,27 +292,26 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, TSConnectionId requ
 		 * uses faster functions that do this for several connections in
 		 * parallel.
 		 */
-		connection = remote_dist_txn_get_connection(required_id, REMOTE_TXN_NO_PREP_STMT);
-
-		DataNodeConnection *entry = palloc(sizeof(DataNodeConnection));
-		entry->connection = connection;
+		MemoryContext old = MemoryContextSwitchTo(context->mctx);
+		MemSet(entry, 0, sizeof(*entry));
+		entry->connection = remote_dist_txn_get_connection(required_id, REMOTE_TXN_NO_PREP_STMT);
 		entry->id = required_id;
-
-		state->data_node_connections = lappend(state->data_node_connections, entry);
+		MemoryContextSwitchTo(old);
 	}
 
 	/*
 	 * Begin COPY on the connection if needed.
 	 */
-	TSConnectionStatus status = remote_connection_get_status(connection);
+	TSConnectionStatus status = remote_connection_get_status(entry->connection);
 	if (status == CONN_IDLE)
 	{
 		TSConnectionError err;
-		if (!remote_connection_begin_copy(connection,
+		if (!remote_connection_begin_copy(entry->connection,
 										  psprintf("%s /* batch %d conn %p */",
 												   state->outgoing_copy_cmd,
 												   context->batch_ordinal,
-												   remote_connection_get_pg_conn(connection)),
+												   remote_connection_get_pg_conn(
+													   entry->connection)),
 										  state->using_binary,
 										  &err))
 		{
@@ -334,15 +327,17 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, TSConnectionId requ
 		 * created a new chunk, but it will still be in the list of
 		 * active connections. Don't add duplicates.
 		 */
-		if (!list_member(state->connections_in_use, connection))
+		if (!list_member(state->connections_in_use, entry->connection))
 		{
-			state->connections_in_use = lappend(state->connections_in_use, connection);
+			MemoryContext old = MemoryContextSwitchTo(context->mctx);
+			state->connections_in_use = lappend(state->connections_in_use, entry->connection);
+			MemoryContextSwitchTo(old);
 		}
 	}
 	else if (status == CONN_COPY_IN)
 	{
 		/* Ready to use. */
-		Assert(list_member(state->connections_in_use, connection));
+		Assert(list_member(state->connections_in_use, entry->connection));
 	}
 	else
 	{
@@ -353,9 +348,7 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, TSConnectionId requ
 			 required_id.server_id);
 	}
 
-	MemoryContextSwitchTo(old);
-
-	return connection;
+	return entry;
 }
 
 /*
@@ -664,8 +657,7 @@ end_copy_on_failure(CopyConnectionState *state)
 }
 
 static const List *
-get_connections_for_chunk(RemoteCopyContext *context, int32 chunk_id, const List *chunk_data_nodes,
-						  Oid userid)
+get_connections_for_chunk(RemoteCopyContext *context, const List *chunk_data_nodes)
 {
 	List *conns = NIL;
 
@@ -673,8 +665,10 @@ get_connections_for_chunk(RemoteCopyContext *context, int32 chunk_id, const List
 	foreach (lc, chunk_data_nodes)
 	{
 		ChunkDataNode *cdn = lfirst(lc);
-		TSConnectionId required_id = remote_connection_id(cdn->foreign_server_oid, userid);
-		conns = lappend(conns, get_copy_connection_to_data_node(context, required_id));
+		DataNodeConnection *dnstate =
+			get_copy_connection_to_data_node(context, cdn->foreign_server_oid);
+
+		conns = lappend(conns, dnstate->connection);
 	}
 
 	return conns;
@@ -1016,21 +1010,29 @@ remote_copy_begin(const CopyStmt *stmt, Hypertable *ht, ExprContext *per_tuple_c
 		AllocSetContextCreate(CurrentMemoryContext, "Remote COPY", ALLOCSET_DEFAULT_SIZES);
 	RemoteCopyContext *context;
 	MemoryContext oldmctx;
+	struct HASHCTL hctl = {
+		.keysize = sizeof(TSConnectionId),
+		.entrysize = sizeof(DataNodeConnection),
+		.hcxt = mctx,
+	};
 
 	oldmctx = MemoryContextSwitchTo(mctx);
 	context = palloc0(sizeof(RemoteCopyContext));
 	context->ht = ht;
+	context->user_id = GetUserId();
 	context->attnums = attnums;
 	context->mctx = mctx;
 	context->binary_operation = binary_copy;
 	context->connection_state.connections_in_use = NIL;
-	context->connection_state.data_node_connections = NIL;
+	context->connection_state.data_node_connections =
+		hash_create("COPY connections",
+					list_length(ht->data_nodes),
+					&hctl,
+					HASH_ELEM | HASH_CONTEXT | HASH_BLOBS);
 	context->connection_state.using_binary = binary_copy;
 	context->connection_state.outgoing_copy_cmd = deparse_copy_cmd(stmt, ht, binary_copy);
 	context->dns_unavailable = data_node_some_unavailable();
 
-	context->batch_row_data = palloc0(sizeof(StringInfo) * MAX_BATCH_ROWS);
-	context->batch_points = palloc0(sizeof(Point *) * MAX_BATCH_ROWS);
 	context->batch_row_count = 0;
 	context->batch_size_bytes = 0;
 	context->batch_ordinal = 0;
@@ -1291,43 +1293,11 @@ read_next_copy_row(RemoteCopyContext *context, CopyFromState cstate)
 	Assert(context->batch_row_count < MAX_BATCH_ROWS);
 	context->batch_row_data[context->batch_row_count] = row_data;
 	context->batch_points[context->batch_row_count] = point;
-
 	context->batch_row_count++;
 	context->batch_size_bytes += row_data->len;
 
 	return true;
 }
-
-static bool
-send_copy_data(StringInfo row_data, const List *connections)
-{
-	ListCell *lc;
-
-	foreach (lc, connections)
-	{
-		TSConnection *conn = lfirst(lc);
-		TSConnectionError err;
-
-		if (!remote_connection_put_copy_data(conn, row_data->data, row_data->len, &err))
-			remote_connection_error_elog(&err, ERROR);
-	}
-
-	return true;
-}
-
-/*
- * Rows for sending to a particular data node.
- */
-typedef struct DataNodeRows
-{
-	int data_node_id;
-	Oid server_oid;
-	TSConnection *connection;
-	int rows_total;
-
-	/* Array of indices into the batch row array. */
-	int *row_indices;
-} DataNodeRows;
 
 static void
 remote_copy_process_and_send_data(RemoteCopyContext *context)
@@ -1339,13 +1309,23 @@ remote_copy_process_and_send_data(RemoteCopyContext *context)
 	List *chunk_data_nodes = NIL;
 
 	/*
-	 * This list tracks the per-batch insert states of the data nodes
-	 * (DataNodeRows).
+	 * Flush the previous batch to avoid growing the outgoing buffers
+	 * indefinitely if some data node is not keeping up. It would be more
+	 * efficient to check for buffer growth and only flush then, but libpq
+	 * doesn't provide a way to know the outgoing buffer size. It also doesn't
+	 * provide any way to control the outgoing buffer size.
+	 * Don't do it if we have ended the COPY above to create new chunks.
+	 * The number 11 is an arbitrary prime, growing the output buffer to at
+	 * most 11ki rows sounds reasonable.
 	 */
-	List *data_nodes = NIL;
+	if (context->batch_ordinal % 11 == 0)
+	{
+		flush_active_connections(&context->connection_state);
+	}
 
 	/* For each row, find or create the destination chunk. */
 	bool did_end_copy = false;
+
 	for (int row_in_batch = 0; row_in_batch < n; row_in_batch++)
 	{
 		Point *point = context->batch_points[row_in_batch];
@@ -1424,102 +1404,39 @@ remote_copy_process_and_send_data(RemoteCopyContext *context)
 			ts_chunk_set_partial(chunk);
 
 		/*
-		 * Schedule the row for sending to the data nodes containing the chunk.
+		 * Send the row to all the chunk's data nodes.
 		 */
 		ListCell *lc;
 		foreach (lc, chunk->data_nodes)
 		{
 			ChunkDataNode *chunk_data_node = lfirst(lc);
 			/* Find the existing insert state for this data node. */
-			DataNodeRows *data_node_rows = NULL;
-			ListCell *lc2;
-			foreach (lc2, data_nodes)
+			DataNodeConnection *dnstate =
+				get_copy_connection_to_data_node(context, chunk_data_node->foreign_server_oid);
+			PGconn *pg_conn = remote_connection_get_pg_conn(dnstate->connection);
+			StringInfo row_data = context->batch_row_data[row_in_batch];
+
+			/*
+			 * Send the copy data to the remote server. PQputCopyData() uses a
+			 * per-connection buffering internally, and any written data will
+			 * be flushed when enough data has been accumulated. Therefore,
+			 * there is no need to accumulate bigger writes before we call
+			 * PQputCopyData().
+			 *
+			 * PQputCopyData() can't really return 0 ("would block") until it
+			 * runs out of memory. It just grows the buffer and tries to flush
+			 * in pqPutMsgEnd().
+			 */
+			int res = PQputCopyData(pg_conn, row_data->data, row_data->len);
+
+			if (res == -1)
 			{
-				data_node_rows = lfirst(lc2);
-				if (chunk_data_node->foreign_server_oid == data_node_rows->server_oid)
-				{
-					break;
-				}
+				ereport(ERROR,
+						(errcode(ERRCODE_CONNECTION_EXCEPTION),
+						 errmsg("could not send COPY data"),
+						 errdetail("%s", PQerrorMessage(pg_conn))));
 			}
-
-			if (lc2 == NULL)
-			{
-				/* No insert state for this data node yet. Create it. */
-				data_node_rows = palloc(sizeof(DataNodeRows));
-				data_node_rows->connection = NULL;
-				data_node_rows->server_oid = chunk_data_node->foreign_server_oid;
-				data_node_rows->rows_total = 0;
-				/*
-				 * Not every tuple in a batch might be sent to every data node,
-				 * but we allocate the maximum possible size to avoid resizing.
-				 */
-				data_node_rows->row_indices = palloc(sizeof(int) * context->batch_row_count);
-				data_nodes = lappend(data_nodes, data_node_rows);
-			}
-
-			Assert(data_node_rows->server_oid == chunk_data_node->foreign_server_oid);
-
-			data_node_rows->row_indices[data_node_rows->rows_total] = row_in_batch;
-			data_node_rows->rows_total++;
 		}
-	}
-
-	/*
-	 * Flush the previous batch to avoid growing the outgoing buffers
-	 * indefinitely if some data node is not keeping up. It would be more
-	 * efficient to check for buffer growth and only flush then, but libpq
-	 * doesn't provide a way to know the outgoing buffer size. It also doesn't
-	 * provide any way to control the outgoing buffer size.
-	 * Don't do it if we have ended the COPY above to create new chunks.
-	 * The number 11 is an arbitrary prime, growing the output buffer to at
-	 * most 11ki rows sounds reasonable.
-	 */
-	if (!did_end_copy && context->batch_ordinal % 11 == 0)
-	{
-		flush_active_connections(&context->connection_state);
-	}
-
-	/*
-	 * Actually send the data to the data nodes. We don't interleave the data
-	 * nodes here, because the batches are relatively small.
-	 */
-	StringInfoData copy_data = { .data = palloc(MAX_BATCH_BYTES), .maxlen = MAX_BATCH_BYTES };
-	ListCell *lc;
-	foreach (lc, data_nodes)
-	{
-		DataNodeRows *dn = lfirst(lc);
-		TSConnectionId required_id = remote_connection_id(dn->server_oid, GetUserId());
-		Assert(dn->connection == NULL);
-		dn->connection = get_copy_connection_to_data_node(context, required_id);
-		PGconn *pg_conn = remote_connection_get_pg_conn(dn->connection);
-
-		resetStringInfo(&copy_data);
-		for (int row = 0; row < dn->rows_total; row++)
-		{
-			StringInfo row_data = context->batch_row_data[dn->row_indices[row]];
-			appendBinaryStringInfo(&copy_data, row_data->data, row_data->len);
-		}
-
-		/*
-		 * Send the copy data to the remote server.
-		 * It can't really return 0 ("would block") until it runs out
-		 * of memory. It just grows the buffer and tries to flush in
-		 * pqPutMsgEnd().
-		 */
-		int res = PQputCopyData(pg_conn, copy_data.data, copy_data.len);
-
-		if (res == -1)
-		{
-			ereport(ERROR,
-					(errcode(ERRCODE_CONNECTION_EXCEPTION),
-					 errmsg("could not send COPY data"),
-					 errdetail("%s", PQerrorMessage(pg_conn))));
-		}
-
-		/*
-		 * We don't have to specially flush the data here, because the flush is
-		 * attempted after finishing each protocol message (pqPutMsgEnd()).
-		 */
 	}
 
 	/* reset static vars before returning */
@@ -1620,11 +1537,10 @@ remote_distributed_copy(const CopyStmt *stmt, CopyChunkState *ccstate, List *att
  * data is already "routed" to the "right" chunk as indicated by the chunk
  * insert state.
  */
-bool
+void
 remote_copy_send_slot(RemoteCopyContext *context, TupleTableSlot *slot, const ChunkInsertState *cis)
 {
 	ListCell *lc;
-	bool result;
 	StringInfo row_data;
 
 	/* Pre-materialize all attributes since we will access all of them */
@@ -1680,13 +1596,17 @@ remote_copy_send_slot(RemoteCopyContext *context, TupleTableSlot *slot, const Ch
 
 	PG_TRY();
 	{
-		const List *connections;
+		const List *connections = get_connections_for_chunk(context, cis->chunk_data_nodes);
+		ListCell *lc;
 
-		connections =
-			get_connections_for_chunk(context, cis->chunk_id, cis->chunk_data_nodes, cis->user_id);
-		Assert(list_length(connections) == list_length(cis->chunk_data_nodes));
-		Assert(list_length(connections) > 0);
-		result = send_copy_data(row_data, connections);
+		foreach (lc, connections)
+		{
+			TSConnection *conn = lfirst(lc);
+			TSConnectionError err;
+
+			if (!remote_connection_put_copy_data(conn, row_data->data, row_data->len, &err))
+				remote_connection_error_elog(&err, ERROR);
+		}
 	}
 	PG_CATCH();
 	{
@@ -1696,6 +1616,4 @@ remote_copy_send_slot(RemoteCopyContext *context, TupleTableSlot *slot, const Ch
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
-
-	return result;
 }
