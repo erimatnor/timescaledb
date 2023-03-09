@@ -12,6 +12,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dist_ddl.c
     ${CMAKE_CURRENT_SOURCE_DIR}/prepared_statement_fetcher.c
     ${CMAKE_CURRENT_SOURCE_DIR}/copy_fetcher.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/libpq-int.c
     ${CMAKE_CURRENT_SOURCE_DIR}/healthcheck.c
     ${CMAKE_CURRENT_SOURCE_DIR}/stmt_params.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tuplefactory.c
