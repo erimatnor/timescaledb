@@ -6,6 +6,7 @@
 #include <postgres.h>
 #include <access/tupdesc.h>
 #include <catalog/namespace.h>
+#include <commands/dbcommands.h>
 #include <executor/executor.h>
 #include <libpq-fe.h>
 #include <miscadmin.h>
