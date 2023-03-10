@@ -657,24 +657,6 @@ end_copy_on_failure(CopyConnectionState *state)
 		remote_connection_error_elog(&err, ERROR);
 }
 
-static const List *
-get_connections_for_chunk(RemoteCopyContext *context, const List *chunk_data_nodes)
-{
-	List *conns = NIL;
-
-	ListCell *lc;
-	foreach (lc, chunk_data_nodes)
-	{
-		ChunkDataNode *cdn = lfirst(lc);
-		DataNodeConnection *dnstate =
-			get_copy_connection_to_data_node(context, cdn->foreign_server_oid);
-
-		conns = lappend(conns, dnstate->connection);
-	}
-
-	return conns;
-}
-
 /*
  * Extract a quoted list of identifiers from a DefElem with arg type T_list.
  */
@@ -1597,15 +1579,16 @@ remote_copy_send_slot(RemoteCopyContext *context, TupleTableSlot *slot, const Ch
 
 	PG_TRY();
 	{
-		const List *connections = get_connections_for_chunk(context, cis->chunk_data_nodes);
 		ListCell *lc;
 
-		foreach (lc, connections)
+		foreach (lc, cis->chunk_data_nodes)
 		{
-			TSConnection *conn = lfirst(lc);
+			ChunkDataNode *cdn = lfirst(lc);
+			DataNodeConnection *dnc =
+				get_copy_connection_to_data_node(context, cdn->foreign_server_oid);
 			TSConnectionError err;
 
-			if (!remote_connection_put_copy_data(conn, row_data->data, row_data->len, &err))
+			if (!remote_connection_put_copy_data(dnc->connection, row_data->data, row_data->len, &err))
 				remote_connection_error_elog(&err, ERROR);
 		}
 	}
