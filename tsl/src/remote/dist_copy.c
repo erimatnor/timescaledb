@@ -289,6 +289,7 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, Oid data_node_oid)
 	if (status == CONN_IDLE)
 	{
 		TSConnectionError err;
+
 		if (!remote_connection_begin_copy(entry->connection,
 										  psprintf("%s /* row " INT64_FORMAT " conn %p */",
 												   state->outgoing_copy_cmd,
@@ -1358,7 +1359,6 @@ remote_distributed_copy(const CopyStmt *stmt, CopyChunkState *ccstate, List *att
 	Hypertable *ht = ccstate->dispatch->hypertable;
 	RemoteCopyContext *context;
 	Chunk *chunk = NULL;
-	bool did_end_copy = false;
 	int32 chunk_id = INVALID_CHUNK_ID;
 	List *chunk_data_nodes = NIL;
 	uint64 processed;
@@ -1394,16 +1394,9 @@ remote_distributed_copy(const CopyStmt *stmt, CopyChunkState *ccstate, List *att
 
 			if (chunk == NULL)
 			{
-				if (!did_end_copy)
-				{
-					/*
-					 * The data node connections have to be flushed and the COPY
-					 * query ended before creating
-					 * a new chunk.
-					 */
-					end_copy_on_success(&context->connection_state);
-					did_end_copy = true;
-				}
+				/* No need to exit out of the COPY_IN mode in order to create
+				 * the chunk on the same connection; it is handled
+				 * automatically by remote_dist_txn_get_connection(). */
 				chunk = ts_hypertable_create_chunk_for_point(ht, p, &found);
 			}
 			else
