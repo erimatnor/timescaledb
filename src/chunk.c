@@ -885,9 +885,6 @@ ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht, const char *tabl
 
 	table_close(rel, AccessShareLock);
 
-	elog(LOG, "[%s] create chunk table %s %u",
-		 get_database_name(MyDatabaseId), NameStr(chunk->fd.table_name), chunk->table_id);
-	
 	return objaddr.objectId;
 }
 
@@ -1496,10 +1493,6 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, bool *found, con
 			if (found)
 				*found = true;
 
-			
-			elog(LOG, "[%s] chunk %s created by someone else with oid %u",
-				 get_database_name(MyDatabaseId), NameStr(chunk->fd.table_name), chunk->table_id);
-			
 			return chunk;
 		}
 
@@ -1527,9 +1520,6 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, bool *found, con
 				 errhint("Chunk creation should only happen through an access node.")));
 
 	Chunk *chunk = chunk_create_from_point_after_lock(ht, p, schema, NULL, prefix);
-
-	elog(LOG, "[%s] created chunk %s with oid %u",
-		 get_database_name(MyDatabaseId), NameStr(chunk->fd.table_name), chunk->table_id);
 	ASSERT_IS_VALID_CHUNK(chunk);
 
 	return chunk;
@@ -1748,11 +1738,7 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 	 * the data table and related objects. */
 	chunk->table_id = get_relname_relid(chunk->fd.table_name.data,
 										get_namespace_oid(chunk->fd.schema_name.data, true));
-
-	if (!OidIsValid(chunk->table_id))
-		elog(LOG, "[%s] no valid OID for chunk %s", get_database_name(MyDatabaseId), NameStr(chunk->fd.table_name));
-		
-	Assert(OidIsValid(chunk->table_id));	
+	Assert(OidIsValid(chunk->table_id));
 	chunk->hypertable_relid = ts_hypertable_id_to_relid(chunk->fd.hypertable_id);
 	chunk->relkind = get_rel_relkind(chunk->table_id);
 

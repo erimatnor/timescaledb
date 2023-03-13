@@ -460,7 +460,6 @@ dist_txn_xact_callback_2pc(XactEvent event, void *arg)
 		case XACT_EVENT_PARALLEL_COMMIT:
 		case XACT_EVENT_COMMIT:
 			eventcallback(DTXN_EVENT_PRE_COMMIT_PREPARED);
-			elog(LOG, "committing prepared transactions");
 			/*
 			 * We send a commit here so that future commands on this
 			 * connection get read-your-own-writes semantics. Later, we can
