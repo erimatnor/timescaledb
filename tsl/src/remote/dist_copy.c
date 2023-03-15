@@ -35,6 +35,7 @@
 #include "remote/connection_cache.h"
 #include "remote/dist_txn.h"
 #include "ts_catalog/chunk_data_node.h"
+#include "libpq/libpq-int.h"
 
 #define DEFAULT_PG_DELIMITER '\t'
 #define DEFAULT_PG_NULL_VALUE "\\N"
@@ -64,6 +65,8 @@ typedef struct DataNodeConnection
 {
 	TSConnectionId id;
 	TSConnection *connection;
+	int bytes_buffered;
+	int rows_buffered;
 } DataNodeConnection;
 
 /* This contains information about connections currently in use by the copy as well as how to create
@@ -133,6 +136,21 @@ typedef struct RemoteCopyContext
 	bool dns_unavailable; /* are some DNs marked as "unavailable"? */
 	uint64 num_rows;
 } RemoteCopyContext;
+
+typedef struct DataBuf
+{
+	char	   *data;
+	int			len;
+	int			maxlen;
+	int			cursor;
+} DataBuf;
+
+
+static void
+enlarge_data_buf(DataBuf *buf, int needed)
+{
+
+}
 
 /*
  * This will create and populate a CopyDimensionInfo struct from the passed in
@@ -279,6 +297,7 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, Oid data_node_oid)
 		MemoryContext old = MemoryContextSwitchTo(context->mctx);
 		entry->connection = remote_dist_txn_get_connection(required_id, REMOTE_TXN_NO_PREP_STMT);
 		entry->id = required_id;
+		entry->bytes_buffered = 0;
 		MemoryContextSwitchTo(old);
 	}
 
@@ -657,7 +676,7 @@ name_list_to_string(const DefElem *def)
 		Node *name = (Node *) lfirst(lc);
 
 		if (!first)
-			appendStringInfo(&string, ", ");
+			appendStringInfoString(&string, ", ");
 		else
 			first = false;
 
@@ -1254,8 +1273,99 @@ remote_copy_end_on_success(RemoteCopyContext *context)
 	MemoryContextDelete(context->mctx);
 }
 
+#if 0
+int
+PQputCopyData2(PGconn *conn, const char *buffer, int nbytes)
+{
+	if (!conn)
+		return -1;
+	if (conn->asyncStatus != PGASYNC_COPY_IN &&
+		conn->asyncStatus != PGASYNC_COPY_BOTH)
+	{
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("no COPY in progress\n"));
+		return -1;
+	}
+
+	/*
+	 * Process any NOTICE or NOTIFY messages that might be pending in the
+	 * input buffer.  Since the server might generate many notices during the
+	 * COPY, we want to clean those out reasonably promptly to prevent
+	 * indefinite expansion of the input buffer.  (Note: the actual read of
+	 * input data into the input buffer happens down inside pqSendSome, but
+	 * it's not authorized to get rid of the data again.)
+	 */
+	pqParseInput3(conn);
+
+	if (nbytes > 0)
+	{
+		/*
+		 * Try to flush any previously sent data in preference to growing the
+		 * output buffer.  If we can't enlarge the buffer enough to hold the
+		 * data, return 0 in the nonblock case, else hard error. (For
+		 * simplicity, always assume 5 bytes of overhead.)
+		 */
+		if ((conn->outBufSize - conn->outCount - 5) < nbytes)
+		{
+			if (pqFlush(conn) < 0)
+				return -1;
+			if (pqCheckOutBufferSpace(conn->outCount + 5 + (size_t) nbytes,
+									  conn))
+				return pqIsnonblocking(conn) ? 0 : -1;
+		}
+		/* Send the data (too simple to delegate to fe-protocol files) */
+		if (pqPutMsgStart('d', conn) < 0 ||
+			pqPutnchar(buffer, nbytes, conn) < 0 ||
+			pqPutMsgEnd(conn) < 0)
+			return -1;
+	}
+	return 1;
+}
+#endif
+
+static int
+write_copy_data(DataNodeConnection *dnc, const char *data, int len)
+{
+	PGconn *conn = remote_connection_get_pg_conn(dnc->connection);
+	
+	if (dnc->bytes_buffered == 0)
+	{
+		if (pqPutMsgStart('d', conn) < 0)
+			return -1;
+
+		dnc->bytes_buffered = 1;
+	}
+
+	if ((conn->outBufSize - conn->outCount - 5) < len)
+	{
+		if (pqFlush(conn) < 0)				
+			return -1;
+		
+		if (pqCheckOutBufferSpace(conn->outCount + 5 + (size_t) len,
+								  conn))
+			return pqIsnonblocking(conn) ? 0 : -1;
+	}
+	
+	if (pqPutnchar(data, len, conn) < 0)
+		return -1;
+	
+	dnc->bytes_buffered += len;
+	dnc->rows_buffered++;
+	
+	if (dnc->rows_buffered >= MAX_BATCH_ROWS)
+	{
+		if (pqPutMsgEnd(conn) < 0)
+			return -1;
+		
+		dnc->bytes_buffered = 0;
+		dnc->rows_buffered = 0;
+	}
+
+	return 1;
+}
+
 static void
-send_row_to_data_nodes(RemoteCopyContext *context, List *data_nodes, StringInfo row_data)
+send_row_to_data_nodes(RemoteCopyContext *context, List *data_nodes, const char *data, int len)
 {
 	ListCell *lc;
 	List *send_nodes = list_copy(data_nodes);
@@ -1273,10 +1383,8 @@ send_row_to_data_nodes(RemoteCopyContext *context, List *data_nodes, StringInfo 
 			TSConnectionError err;
 			int ret;
 
-			ret = remote_connection_put_copy_data(dnc->connection,
-												  row_data->data,
-												  row_data->len,
-												  &err);
+		    ret = write_copy_data(dnc, data, len);
+			
 			if (ret == -1)
 				remote_connection_error_elog(&err, ERROR);
 			else if (ret == 0)
