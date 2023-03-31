@@ -65,6 +65,8 @@ typedef struct DataNodeConnection
 	size_t bytes_in_message;
 	size_t rows_in_message;
 	size_t rows_sent;
+	size_t outbuf_size;
+	char *outbuf;
 	uint32 copy_rows_per_message;
 } DataNodeConnection;
 
@@ -285,6 +287,8 @@ get_copy_connection_to_data_node(RemoteCopyContext *context, Oid data_node_oid)
 		/* Copy over the settings for rows/message to avoid having to pass the
 		 * copy context around. Also allows per-node settings in the future. */
 		entry->copy_rows_per_message = context->copy_rows_per_message;
+		entry->outbuf_size = entry->copy_rows_per_message * 1024;
+		entry->outbuf = palloc(entry->outbuf_size);
 		MemoryContextSwitchTo(old);
 	}
 
@@ -1285,13 +1289,58 @@ remote_copy_end_on_success(RemoteCopyContext *context)
  * be completely flushed.
  */
 static int
-write_copy_data(DataNodeConnection *dnc, const char *data, size_t len, bool endmsg)
+write_copy_data(RemoteCopyContext *context, DataNodeConnection *dnc, const char *data, size_t len,
+				bool endmsg)
 {
 	PGconn *conn = remote_connection_get_pg_conn(dnc->connection);
 
+#if 1
+	if (dnc->bytes_in_message + len > dnc->outbuf_size)
+	{
+		char *newbuf;
+		size_t newsize = dnc->outbuf_size * 2;
+
+		MemoryContext old = MemoryContextSwitchTo(context->mctx);
+		newbuf = repalloc(dnc->outbuf, newsize);
+		dnc->outbuf = newbuf;
+		dnc->outbuf_size = newsize;
+		MemoryContextSwitchTo(old);
+	}
+
+	memcpy(dnc->outbuf + dnc->bytes_in_message, data, len);
+	dnc->bytes_in_message += len;
+	dnc->rows_in_message++;
+	dnc->rows_sent++;
+
+	if (endmsg || dnc->rows_in_message >= dnc->copy_rows_per_message)
+	{
+		int ret = PQputCopyData(conn, dnc->outbuf, dnc->bytes_in_message);
+
+		if (ret == 0)
+		{
+			/* Not queued, full buffers and could not allocate memory */
+			elog(ERROR, "could not allocate memory for COPY data");
+		}
+		else if (ret == 1)
+		{
+			/* Successfully queued */
+		}
+		else
+		{
+			Assert(ret == -1);
+			remote_connection_elog(dnc->connection, ERROR);
+		}
+		dnc->bytes_in_message = 0;
+		dnc->rows_in_message = 0;
+
+		return PQflush(conn);
+	}
+#else
+	
+	/*
 	if (ts_grow_output_buffer(conn, len) != 1)
 		return -1;
-
+	*/
 	if (dnc->bytes_in_message == 0)
 	{
 		if (ts_put_msg_start('d', conn) < 0)
@@ -1318,6 +1367,7 @@ write_copy_data(DataNodeConnection *dnc, const char *data, size_t len, bool endm
 		return PQflush(conn);
 	}
 
+#endif
 	return 0;
 }
 
@@ -1340,9 +1390,27 @@ write_copy_data_end(RemoteCopyContext *context)
 			PGconn *conn = remote_connection_get_pg_conn(dnc->connection);
 			int flushres;
 
+#if 1
+			int ret = PQputCopyData(conn, dnc->outbuf, dnc->bytes_in_message);
+
+			if (ret == 0)
+			{
+				/* Not queued, full buffers and could not allocate memory */
+				elog(ERROR, "could not allocate memory for COPY data");
+			}
+			else if (ret == 1)
+			{
+				/* Successfully queued */
+			}
+			else
+			{
+				Assert(ret == -1);
+				remote_connection_elog(dnc->connection, ERROR);
+			}
+#else
 			if (ts_put_msg_end(conn) < 0)
 				remote_connection_elog(dnc->connection, ERROR);
-
+#endif			
 			flushres = PQflush(conn);
 
 			switch (flushres)
@@ -1385,7 +1453,7 @@ send_row_to_data_nodes(RemoteCopyContext *context, List *data_nodes, StringInfo 
 			get_copy_connection_to_data_node(context, chunk_data_node->foreign_server_oid);
 		int ret;
 
-		ret = write_copy_data(dnc, row_data->data, row_data->len, endmsg);
+		ret = write_copy_data(context, dnc, row_data->data, row_data->len, endmsg);
 
 		if (ret == -1)
 			remote_connection_elog(dnc->connection, ERROR);

@@ -117,7 +117,7 @@ ts_check_out_buffer_space(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	appendPQExpBufferStr(&conn->errorMessage, "cannot allocate memory for output buffer\n");
+	//appendPQExpBufferStr(&conn->errorMessage, "cannot allocate memory for output buffer\n");
 
 	return EOF;
 }
