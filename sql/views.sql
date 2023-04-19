@@ -277,7 +277,6 @@ SELECT ht.schema_name AS hypertable_schema,
       dim.interval_length
     END
   END AS integer_interval,
-  dim.integer_now_func,
   dim.num_slices AS num_partitions
 FROM _timescaledb_catalog.hypertable ht,
   _timescaledb_catalog.dimension dim

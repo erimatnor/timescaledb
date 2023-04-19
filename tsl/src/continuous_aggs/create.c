@@ -1501,17 +1501,10 @@ cagg_validate_query(const Query *query, const bool finalized, const char *cagg_s
 		if (IS_INTEGER_TYPE(ts_dimension_get_partition_type(part_dimension)) &&
 			rte->relkind == RELKIND_RELATION)
 		{
-			const char *funcschema = NameStr(part_dimension->fd.integer_now_func_schema);
-			const char *funcname = NameStr(part_dimension->fd.integer_now_func);
-
-			if (strlen(funcschema) == 0 || strlen(funcname) == 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("custom time function required on hypertable \"%s\"",
-								get_rel_name(ht->main_table_relid)),
-						 errdetail("An integer-based hypertable requires a custom time function to "
-								   "support continuous aggregates."),
-						 errhint("Set a custom time function on the hypertable.")));
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("continuous aggregates not supported on hypertables with integer "
+							"partitioning")));
 		}
 
 		caggtimebucketinfo_init(&bucket_info,

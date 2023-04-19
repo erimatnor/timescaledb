@@ -180,7 +180,7 @@ policy_refresh_cagg_refresh_start_lt(int32 materialization_id, Oid cmp_type, Dat
 	BgwJob *cagg_job = linitial(jobs);
 	Jsonb *cagg_config = cagg_job->fd.config;
 
-	const Dimension *open_dim = get_open_dimension_for_hypertable(mat_ht);
+	const Dimension *open_dim = hyperspace_get_open_dimension(mat_ht->space, 0);
 	Oid dim_type = ts_dimension_get_partition_type(open_dim);
 	if (IS_INTEGER_TYPE(dim_type))
 	{

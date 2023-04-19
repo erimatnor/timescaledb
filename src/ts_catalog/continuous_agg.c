@@ -1486,57 +1486,6 @@ ts_number_of_continuous_aggs()
 	return count;
 }
 
-static int32
-find_raw_hypertable_for_materialization(int32 mat_hypertable_id)
-{
-	PG_USED_FOR_ASSERTS_ONLY short count = 0;
-	int32 htid = INVALID_HYPERTABLE_ID;
-	ScanIterator iterator =
-		ts_scan_iterator_create(CONTINUOUS_AGG, RowExclusiveLock, CurrentMemoryContext);
-
-	init_scan_by_mat_hypertable_id(&iterator, mat_hypertable_id);
-	ts_scanner_foreach(&iterator)
-	{
-		bool isnull;
-		Datum datum = slot_getattr(ts_scan_iterator_slot(&iterator),
-								   Anum_continuous_agg_raw_hypertable_id,
-								   &isnull);
-
-		Assert(!isnull);
-		htid = DatumGetInt32(datum);
-		count++;
-	}
-	Assert(count <= 1);
-	ts_scan_iterator_close(&iterator);
-	return htid;
-}
-
-/* Continuous aggregate materialization hypertables inherit integer_now func
- * from the raw hypertable (unless it was explicitly reset for cont. aggregate.
- * Walk the materialization hypertable ->raw hypertable tree till
- * we find a hypertable that has integer_now_func set.
- */
-TSDLLEXPORT const Dimension *
-ts_continuous_agg_find_integer_now_func_by_materialization_id(int32 mat_htid)
-{
-	int32 raw_htid = mat_htid;
-	const Dimension *par_dim = NULL;
-	while (raw_htid != INVALID_HYPERTABLE_ID)
-	{
-		Hypertable *raw_ht = ts_hypertable_get_by_id(raw_htid);
-		const Dimension *open_dim = hyperspace_get_open_dimension(raw_ht->space, 0);
-		if (strlen(NameStr(open_dim->fd.integer_now_func)) != 0 &&
-			strlen(NameStr(open_dim->fd.integer_now_func_schema)) != 0)
-		{
-			par_dim = open_dim;
-			break;
-		}
-		mat_htid = raw_htid;
-		raw_htid = find_raw_hypertable_for_materialization(mat_htid);
-	}
-	return par_dim;
-}
-
 TSDLLEXPORT void
 ts_continuous_agg_invalidate_chunk(Hypertable *ht, Chunk *chunk)
 {

@@ -144,8 +144,7 @@ extern int32 ts_dimension_add_from_info(DimensionInfo *info);
 extern void ts_dimensions_rename_schema_name(const char *old_name, const char *new_name);
 extern TSDLLEXPORT void ts_dimension_update(const Hypertable *ht, const NameData *dimname,
 											DimensionType dimtype, Datum *interval,
-											Oid *intervaltype, int16 *num_slices,
-											Oid *integer_now_func);
+											Oid *intervaltype, int16 *num_slices);
 extern TSDLLEXPORT List *ts_dimension_get_partexprs(const Dimension *dim, Index hyper_varno);
 extern TSDLLEXPORT Point *ts_point_create(int16 num_dimensions);
 extern TSDLLEXPORT bool ts_is_equality_operator(Oid opno, Oid left, Oid right);

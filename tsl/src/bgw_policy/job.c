@@ -299,7 +299,7 @@ policy_retention_read_and_validate_config(Jsonb *config, PolicyRetentionData *po
 
 	object_relid = ts_hypertable_id_to_relid(policy_retention_get_hypertable_id(config));
 	hypertable = ts_hypertable_cache_get_cache_and_entry(object_relid, CACHE_FLAG_NONE, &hcache);
-	open_dim = get_open_dimension_for_hypertable(hypertable);
+	open_dim = hyperspace_get_open_dimension(hypertable->space, 0);
 
 	boundary = get_window_boundary(open_dim,
 								   config,
@@ -362,7 +362,7 @@ policy_refresh_cagg_read_and_validate_config(Jsonb *config, PolicyContinuousAggD
 				 errmsg("configuration materialization hypertable id %d not found",
 						materialization_id)));
 
-	open_dim = get_open_dimension_for_hypertable(mat_ht);
+	open_dim = hyperspace_get_open_dimension(mat_ht->space, 0);
 	dim_type = ts_dimension_get_partition_type(open_dim);
 	refresh_start = policy_refresh_cagg_get_refresh_start(open_dim, config, &start_isnull);
 	refresh_end = policy_refresh_cagg_get_refresh_end(open_dim, config, &end_isnull);

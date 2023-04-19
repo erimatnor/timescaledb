@@ -834,38 +834,6 @@ ts_get_reloptions(Oid relid)
 	return options;
 }
 
-/*
- * Get the integer_now function for a dimension
- */
-Oid
-ts_get_integer_now_func(const Dimension *open_dim)
-{
-	Oid rettype;
-	Oid now_func;
-	Oid argtypes[] = { 0 };
-
-	rettype = ts_dimension_get_partition_type(open_dim);
-
-	Assert(IS_INTEGER_TYPE(rettype));
-
-	if (strlen(NameStr(open_dim->fd.integer_now_func)) == 0 &&
-		strlen(NameStr(open_dim->fd.integer_now_func_schema)) == 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_FUNCTION), (errmsg("integer_now function not set"))));
-
-	List *name = list_make2(makeString((char *) NameStr(open_dim->fd.integer_now_func_schema)),
-							makeString((char *) NameStr(open_dim->fd.integer_now_func)));
-	now_func = LookupFuncName(name, 0, argtypes, false);
-
-	if (get_func_rettype(now_func) != rettype)
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_FUNCTION),
-				 (errmsg("invalid integer_now function"),
-				  errhint("return type of function does not match dimension type"))));
-
-	return now_func;
-}
-
 /* subtract passed in interval from the now.
  * Arguments:
  * now_func : function used to compute now.
@@ -912,33 +880,6 @@ ts_sub_integer_from_now(int64 interval, Oid time_dim_type, Oid now_func)
 		default:
 			pg_unreachable();
 	}
-}
-
-TS_FUNCTION_INFO_V1(ts_subtract_integer_from_now);
-Datum
-ts_subtract_integer_from_now(PG_FUNCTION_ARGS)
-{
-	Oid ht_relid = PG_GETARG_OID(0);
-	int64 lag = PG_GETARG_INT64(1);
-	Cache *hcache;
-	Hypertable *ht = ts_hypertable_cache_get_cache_and_entry(ht_relid, CACHE_FLAG_NONE, &hcache);
-	const Dimension *dim = hyperspace_get_open_dimension(ht->space, 0);
-
-	if (!dim)
-		elog(ERROR, "hypertable has no open partitioning dimension");
-
-	Oid partitioning_type = ts_dimension_get_partition_type(dim);
-
-	if (!IS_INTEGER_TYPE(partitioning_type))
-		elog(ERROR, "hypertable has no integer partitioning dimension");
-
-	Oid now_func = ts_get_integer_now_func(dim);
-	if (!OidIsValid(now_func))
-		elog(ERROR, "could not find valid integer_now function for hypertable");
-
-	int64 res = ts_sub_integer_from_now(lag, partitioning_type, now_func);
-	ts_cache_release(hcache);
-	return Int64GetDatum(res);
 }
 
 TS_FUNCTION_INFO_V1(ts_relation_size);
