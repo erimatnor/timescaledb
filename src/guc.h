@@ -105,4 +105,17 @@ void _guc_init(void);
 void _guc_fini(void);
 extern TSDLLEXPORT void ts_assign_ssl_options_hook(void *fn);
 
+typedef enum RemoteIsolationLevelType
+{
+	/* Skip 0 to better catch uninitialized values. */
+	AutoIsolationLevel = 1, /* Let access node decide */
+	RemoteIsolationLevel,	/* Use current data node settings */
+	ReadUncommittedIsolationLevel,
+	ReadCommittedIsolationLevel,
+	RepeatableReadIsolationLevel,
+	SerializableIsolationLevel
+} RemoteIsolationLevelType;
+
+extern TSDLLEXPORT RemoteIsolationLevelType ts_guc_remote_isolation_level;
+
 #endif /* TIMESCALEDB_GUC_H */

@@ -3,6 +3,7 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-TIMESCALE for a copy of the license.
  */
+#include "guc.h"
 #include "libpq-fe.h"
 #include <postgres.h>
 #include <access/xact.h>
@@ -91,11 +92,33 @@ remote_txn_begin(RemoteTxn *entry, int curlevel)
 		elog(DEBUG3, "starting remote transaction on connection %p", entry->conn);
 
 		initStringInfo(&sql);
-		appendStringInfo(&sql, "%s", "START TRANSACTION ISOLATION LEVEL");
-		if (IsolationIsSerializable())
-			appendStringInfo(&sql, "%s", " SERIALIZABLE");
-		else
-			appendStringInfo(&sql, "%s", " REPEATABLE READ");
+		appendStringInfo(&sql, "%s", "START TRANSACTION");
+
+		switch (ts_guc_remote_isolation_level)
+		{
+			case AutoIsolationLevel:
+				if (IsolationIsSerializable())
+					appendStringInfo(&sql, "%s", " ISOLATION LEVEL SERIALIZABLE");
+				else
+					appendStringInfo(&sql, "%s", " ISOLATION LEVEL REPEATABLE READ");
+				break;
+			case ReadUncommittedIsolationLevel:
+				appendStringInfo(&sql, "%s", " ISOLATION LEVEL READ UNCOMMITTED");
+				break;
+			case ReadCommittedIsolationLevel:
+				appendStringInfo(&sql, "%s", " ISOLATION LEVEL READ COMMITTED");
+				break;
+			case RepeatableReadIsolationLevel:
+				appendStringInfo(&sql, "%s", " ISOLATION LEVEL REPEATABLE READ");
+				break;
+			case SerializableIsolationLevel:
+				appendStringInfo(&sql, "%s", " ISOLATION LEVEL SERIALIZABLE");
+				break;
+			case RemoteIsolationLevel:
+			default:
+				/* Don't add isolation level, use data node setting */
+				break;
+		}
 
 		/*
 		 * Windows MSVC builds have linking issues for GUC variables from postgres for
@@ -123,6 +146,8 @@ remote_txn_begin(RemoteTxn *entry, int curlevel)
 		 */
 		if (strncmp(xactReadOnly, "on", sizeof("on")) == 0)
 			appendStringInfo(&sql, "%s", " READ ONLY");
+		else
+			appendStringInfo(&sql, "%s", " READ WRITE");
 
 		remote_connection_xact_transition_begin(entry->conn);
 		remote_connection_cmd_ok(entry->conn, sql.data);

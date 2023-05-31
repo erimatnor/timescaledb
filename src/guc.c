@@ -49,6 +49,16 @@ static const struct config_enum_entry remote_data_fetchers[] = {
 	{ NULL, 0, false }
 };
 
+static const struct config_enum_entry remote_isolation_level[] = {
+	{ "auto", AutoIsolationLevel, false },
+	{ "remote", RemoteIsolationLevel, false },
+	{ "read uncommitted", ReadUncommittedIsolationLevel, false },
+	{ "read committed", ReadCommittedIsolationLevel, false },
+	{ "repeatable read", RepeatableReadIsolationLevel, false },
+	{ "serializable", SerializableIsolationLevel, false },
+	{ NULL, 0, false }
+};
+
 static const struct config_enum_entry hypertable_distributed_types[] = {
 	{ "auto", HYPERTABLE_DIST_AUTO, false },
 	{ "local", HYPERTABLE_DIST_LOCAL, false },
@@ -102,6 +112,7 @@ TSDLLEXPORT char *ts_guc_ssl_dir = NULL;
 TSDLLEXPORT char *ts_guc_passfile = NULL;
 TSDLLEXPORT bool ts_guc_enable_remote_explain = false;
 TSDLLEXPORT DataFetcherType ts_guc_remote_data_fetcher = AutoFetcherType;
+TSDLLEXPORT RemoteIsolationLevelType ts_guc_remote_isolation_level = AutoIsolationLevel;
 TSDLLEXPORT HypertableDistType ts_guc_hypertable_distributed_default = HYPERTABLE_DIST_AUTO;
 TSDLLEXPORT int ts_guc_hypertable_replication_factor_default = 1;
 
@@ -483,6 +494,19 @@ _guc_init(void)
 							 (int *) &ts_guc_remote_data_fetcher,
 							 AutoFetcherType,
 							 remote_data_fetchers,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomEnumVariable("timescaledb.remote_isolation_level",
+							 "Set isolation level on remote data node transactions",
+							 "Change the isolation used on data node connections "
+							 "(auto or remote)",
+							 (int *) &ts_guc_remote_isolation_level,
+							 AutoIsolationLevel,
+							 remote_isolation_level,
 							 PGC_USERSET,
 							 0,
 							 NULL,
