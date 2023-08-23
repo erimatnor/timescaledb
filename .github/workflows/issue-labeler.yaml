@@ -1,0 +1,32 @@
+name: Label issues
+
+"on":
+  issues:
+    types:
+      - opened
+
+    # issue_comment is triggered when commenting on both issues and
+    # pull requests. To avoid adding pull requests to the bug board,
+    # filter out pull requests
+jobs:
+  parse_issue:
+    
+  label_issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write      
+    steps:
+      - uses: actions/github-script@v6
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        with:
+          script: |
+            const { ISSUE_BODY } = process.env
+            console.log(`BODY: ${ISSUE_BODY}`)
+            //github.rest.issues.addLabels({
+            //  issue_number: context.issue.number,
+            //  owner: context.repo.owner,
+            //  repo: context.repo.repo,
+            //  labels: ["triage"]
+            //})      
+
