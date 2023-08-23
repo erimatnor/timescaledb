@@ -9,8 +9,6 @@ name: Label issues
     # pull requests. To avoid adding pull requests to the bug board,
     # filter out pull requests
 jobs:
-  parse_issue:
-    
   label_issues:
     runs-on: ubuntu-latest
     permissions:
