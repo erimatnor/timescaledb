@@ -1,5 +1,4 @@
 name: Label issues
-
 "on":
   issues:
     types:
@@ -10,21 +9,29 @@ name: Label issues
     # filter out pull requests
 jobs:
   label_issues:
+    name: Add labels from template response
+    if: ${{ github.event.issue.action == 'opened' }}
     runs-on: ubuntu-latest
     permissions:
-      issues: write      
+      issues: write
     steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+      - run: npm install marked
       - uses: actions/github-script@v6
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         with:
           script: |
             const { ISSUE_BODY } = process.env
-            console.log(`BODY: ${ISSUE_BODY}`)
-            //github.rest.issues.addLabels({
-            //  issue_number: context.issue.number,
-            //  owner: context.repo.owner,
-            //  repo: context.repo.repo,
-            //  labels: ["triage"]
-            //})      
+            const re = /[#]{1,3} .*\n\n/;
+            const labels = body.split(re);
+            
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: [ labels[1], labels[2], "installation:" + labels[7], "pgversion:" + labels[5], "tsversion:" + labels[4] ]
+            })      
 
