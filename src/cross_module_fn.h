@@ -89,6 +89,8 @@ typedef struct CrossModuleFunctions
 	PGFunction reorder_chunk;
 	PGFunction move_chunk;
 
+	void (*ddl_command_start)(ProcessUtilityArgs *args);
+
 	/* Vectorized queries */
 	bool (*push_down_aggregation)(PlannerInfo *root, AggPath *aggregation_path, Path *subpath);
 
@@ -150,6 +152,7 @@ typedef struct CrossModuleFunctions
 	PGFunction dictionary_compressor_finish;
 	PGFunction array_compressor_append;
 	PGFunction array_compressor_finish;
+	PGFunction compressionam_handler;
 
 	PGFunction data_node_add;
 	PGFunction data_node_delete;

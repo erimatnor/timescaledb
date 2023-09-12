@@ -19,6 +19,7 @@
 #include "compression/api.h"
 #include "compression/array.h"
 #include "compression/compression.h"
+#include "compression/compressionam_handler.h"
 #include "compression/create.h"
 #include "compression/deltadelta.h"
 #include "compression/dictionary.h"
@@ -181,7 +182,8 @@ CrossModuleFunctions tsl_cm_functions = {
 #else
 	.decompress_target_segments = NULL,
 #endif
-
+	.compressionam_handler = compressionam_handler,
+	.ddl_command_start = tsl_ddl_command_start,
 	.data_node_add = data_node_add,
 	.data_node_delete = data_node_delete,
 	.data_node_attach = data_node_attach,
