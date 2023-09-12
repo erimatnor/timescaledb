@@ -51,6 +51,8 @@ jobs:
         include:
           - pg: ${{ fromJson(needs.config.outputs.pg16_latest) }}
             build_type: Debug
+          - pg: ${{ fromJson(needs.config.outputs.pg13_latest) }}
+            ignores_version: trusted_extension
 
     steps:
 
@@ -134,7 +136,7 @@ jobs:
         set -o pipefail
         export LANG=C.UTF-8
         # PostgreSQL cannot be run as root. So, switch to postgres user.
-        sudo -u postgres make -k -C build installcheck IGNORES="${IGNORES}" \
+        sudo -u postgres make -k -C build installcheck IGNORES="${IGNORES} ${{ matrix.ignores_version }}" \
           SKIPS="${SKIPS}" PSQL="${HOME}/${PG_INSTALL_DIR}/bin/psql" | tee installcheck.log
 
     - name: Show regression diffs

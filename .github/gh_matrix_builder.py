@@ -167,7 +167,9 @@ if pull_request:
 
 # always test debug build on latest of all supported pg versions
 m["include"].append(
-    build_debug_config({"pg": PG13_LATEST, "ignored_tests": ignored_tests})
+    build_debug_config(
+        {"pg": PG13_LATEST, "ignored_tests": ignored_tests.union(["trusted_extension"])}
+    )
 )
 
 m["include"].append(

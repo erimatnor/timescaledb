@@ -14,6 +14,7 @@
 #include "nodes/skip_scan/skip_scan.h"
 #include "chunk.h"
 #include "compat/compat.h"
+#include "compression/compressionam_handler.h"
 #include "debug_guc.h"
 #include "guc.h"
 #include "hypertable_cache.h"
@@ -112,6 +113,15 @@ tsl_set_rel_pathlist_query(PlannerInfo *root, RelOptInfo *rel, Index rti, RangeT
 			ts_decompress_chunk_generate_paths(root, rel, ht, fdw_private->cached_chunk_struct);
 		}
 	}
+
+	Relation relation = table_open(rte->relid, AccessShareLock);
+
+	if (relation->rd_tableam == compressionam_routine())
+	{
+		compressionam_set_rel_pathlist(root, rel, ht);
+	}
+
+	table_close(relation, AccessShareLock);
 }
 
 void

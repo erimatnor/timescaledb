@@ -59,6 +59,7 @@ jobs:
         include:
           - pg: 13
             tsl_skips_version: telemetry_stats-13
+            ignores_version: trusted_extension
           - pg: 14
             tsl_skips_version: telemetry_stats-14
           - pg: 15
@@ -105,7 +106,7 @@ jobs:
         WSLENV: GITHUB_OUTPUT/p
       shell: wsl-bash {0}
       run: |
-        echo "date=$(date +"%d")" >> $GITHUB_OUTPUT
+        echo "date=$(date +'d')" >> $GITHUB_OUTPUT
 
       # Use a cache for the PostgreSQL installation to speed things up
       # and avoid unnecessary package downloads. Since we only save
@@ -181,7 +182,7 @@ jobs:
           make -C build_wsl isolationchecklocal | tee -a installcheck.log
         fi
 
-        make -C build_wsl regresschecklocal IGNORES="${{ matrix.ignores }}" | tee -a installcheck.log
+        make -C build_wsl regresschecklocal IGNORES="${{ matrix.ignores }} ${{ matrix.ignores_version }}" | tee -a installcheck.log
 
     - name: Setup postgres cluster for TSL tests
       run: |

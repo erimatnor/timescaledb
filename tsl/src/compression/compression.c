@@ -794,7 +794,7 @@ get_sequence_number_for_current_group(Relation table_rel, Oid index_oid,
  ** row_compressor **
  ********************/
 void
-row_compressor_init(CompressionSettings *settings, RowCompressor *row_compressor,
+row_compressor_init(const CompressionSettings *settings, RowCompressor *row_compressor,
 					TupleDesc uncompressed_tuple_desc, Relation compressed_table,
 					int16 num_columns_in_compressed_table, bool need_bistate, bool reset_sequence,
 					int insert_options)
@@ -924,10 +924,11 @@ row_compressor_init(CompressionSettings *settings, RowCompressor *row_compressor
 								   row_compressor->n_input_columns);
 }
 
-void
+int64
 row_compressor_append_sorted_rows(RowCompressor *row_compressor, Tuplesortstate *sorted_rel,
 								  TupleDesc sorted_desc)
 {
+	int64 count = 0;
 	CommandId mycid = GetCurrentCommandId(true);
 	TupleTableSlot *slot = MakeTupleTableSlot(sorted_desc, &TTSOpsMinimalTuple);
 	bool got_tuple;
@@ -945,12 +946,15 @@ row_compressor_append_sorted_rows(RowCompressor *row_compressor, Tuplesortstate 
 											NULL /*=abbrev*/))
 	{
 		row_compressor_process_ordered_slot(row_compressor, slot, mycid);
+		count++;
 	}
 
 	if (row_compressor->rows_compressed_into_current_value > 0)
 		row_compressor_flush(row_compressor, mycid, true);
 
 	ExecDropSingleTupleTableSlot(slot);
+
+	return count;
 }
 
 static void
