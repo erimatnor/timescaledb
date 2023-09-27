@@ -1586,7 +1586,7 @@ process_drop_hypertable(ProcessUtilityArgs *args, DropStmt *stmt)
 
 						if (OidIsValid(chunk->table_id))
 						{
-							ObjectAddress chunk_addr = (ObjectAddress){
+							ObjectAddress chunk_addr = (ObjectAddress) {
 								.classId = RelationRelationId,
 								.objectId = chunk->table_id,
 							};
@@ -3872,8 +3872,10 @@ process_create_table_end(Node *parsetree)
 										  &time_column_name, /* column name */
 										  interval,			 /* interval */
 										  interval_type,	 /* interval type */
-										  InvalidOid		 /* partitioning func */
-			);
+										  InvalidOid,		 /* partitioning func */
+										  0,
+										  true,
+										  InvalidOid);
 
 		ChunkSizingInfo *csi = ts_chunk_sizing_info_get_default_disabled(table_relid);
 		csi->colname = time_column;
