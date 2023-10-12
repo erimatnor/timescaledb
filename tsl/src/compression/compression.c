@@ -1217,6 +1217,12 @@ row_compressor_flush(RowCompressor *row_compressor, CommandId mycid, bool change
 		ts_catalog_index_insert(row_compressor->resultRelInfo, compressed_tuple);
 	}
 
+	/*elog(NOTICE, "inserted compressed tuple at block %u offset %u hi %u lo %u",
+		 ItemPointerGetBlockNumber(&compressed_tuple->t_self),
+		 ItemPointerGetOffsetNumber(&compressed_tuple->t_self),
+		 compressed_tuple->t_self.ip_blkid.bi_hi,
+		 compressed_tuple->t_self.ip_blkid.bi_lo); */
+
 	heap_freetuple(compressed_tuple);
 
 	/* free the compressed values now that we're done with them (the old compressor is freed in
