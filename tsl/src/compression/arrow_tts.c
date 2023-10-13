@@ -18,8 +18,11 @@ static void
 tts_arrow_init(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+
+	TTSOpsBufferHeapTuple.init(slot);
+
 	aslot->arrow_columns = NULL;
-	aslot->compressed_slot = NULL;
+	aslot->child_slot = NULL;
 	aslot->segmentby_columns = NULL;
 	aslot->decompression_mcxt = AllocSetContextCreate(slot->tts_mcxt,
 													  "bulk decompression",
@@ -67,7 +70,7 @@ tts_arrow_clear(TupleTableSlot *slot)
 		aslot->arrow_columns = NULL;
 	}
 
-	aslot->compressed_slot = NULL;
+	aslot->child_slot = NULL;
 
 	slot->tts_nvalid = 0;
 	slot->tts_flags |= TTS_FLAG_EMPTY;
@@ -75,29 +78,29 @@ tts_arrow_clear(TupleTableSlot *slot)
 }
 
 static inline void
-tts_arrow_store_tuple(TupleTableSlot *slot, TupleTableSlot *compressed_slot, uint16 tuple_index)
+tts_arrow_store_tuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 tuple_index)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
 	slot->tts_flags &= ~TTS_FLAG_EMPTY;
-	aslot->compressed_slot = compressed_slot;
+	aslot->child_slot = child_slot;
 	aslot->tuple_index = tuple_index;
-	tid_to_compressed_tid(&slot->tts_tid, &compressed_slot->tts_tid, tuple_index);
-	Assert(!TTS_EMPTY(aslot->compressed_slot));
+	tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+	Assert(!TTS_EMPTY(aslot->child_slot));
 }
 
 TupleTableSlot *
-ExecStoreArrowTuple(TupleTableSlot *slot, TupleTableSlot *compressed_slot, uint16 tuple_index)
+ExecStoreArrowTuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 tuple_index)
 {
 	Assert(slot != NULL);
 	Assert(slot->tts_tupleDescriptor != NULL);
-	Assert(!TTS_EMPTY(compressed_slot));
+	Assert(!TTS_EMPTY(child_slot));
 
 	if (unlikely(!TTS_IS_ARROWTUPLE(slot)))
 		elog(ERROR, "trying to store an on-disk parquet tuple into wrong type of slot");
 
 	ExecClearTuple(slot);
-	tts_arrow_store_tuple(slot, compressed_slot, tuple_index);
+	tts_arrow_store_tuple(slot, child_slot, tuple_index);
 
 	Assert(!TTS_EMPTY(slot));
 	Assert(!TTS_SHOULDFREE(slot));
@@ -109,10 +112,12 @@ TupleTableSlot *
 ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+	ItemPointerData tmp_tid;
 
 	Assert(!TTS_EMPTY(slot));
 	aslot->tuple_index = tuple_index;
-	slot->tts_tid.ip_blkid.bi_hi = aslot->tuple_index;
+	compressed_tid_to_tid(&tmp_tid, &aslot->child_slot->tts_tid);
+	tid_to_compressed_tid(&slot->tts_tid, &tmp_tid, tuple_index);
 	slot->tts_nvalid = 0;
 
 	return slot;
@@ -130,8 +135,8 @@ tts_arrow_materialize(TupleTableSlot *slot)
 
 	Assert(!TTS_EMPTY(slot));
 
-	if (aslot->compressed_slot)
-		ExecMaterializeSlot(aslot->compressed_slot);
+	if (aslot->child_slot)
+		ExecMaterializeSlot(aslot->child_slot);
 }
 
 static bool
@@ -151,13 +156,29 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int natts)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 	const TupleDesc tupdesc = slot->tts_tupleDescriptor;
-	const TupleDesc compressed_tupdesc = aslot->compressed_slot->tts_tupleDescriptor;
+	const TupleDesc compressed_tupdesc = aslot->child_slot->tts_tupleDescriptor;
 
 	if (natts < 1 || natts > slot->tts_tupleDescriptor->natts)
 		elog(ERROR, "invalid number of attributes requested");
 
-	slot_getsomeattrs(aslot->compressed_slot, natts);
+	slot_getsomeattrs(aslot->child_slot, natts);
 
+	if (aslot->tuple_index == InvalidTupleIndex)
+	{
+		/* The child slot points to an non-compressed tuple, so just copy over
+		 * the values from the child. */
+		for (int i = 0; i < natts; i++)
+		{
+			slot->tts_values[i] = aslot->child_slot->tts_values[i];
+			slot->tts_isnull[i] = aslot->child_slot->tts_isnull[i];
+			slot->tts_nvalid = aslot->child_slot->tts_nvalid;
+		}
+
+		return;
+	}
+
+	/* The child slot points to a compressed tuple, we need to decompress and
+	 * fill in the values. */
 	if (NULL == aslot->arrow_columns)
 	{
 		aslot->arrow_columns =
@@ -175,7 +196,7 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int natts)
 			if (is_compressed_col(compressed_tupdesc, attno))
 			{
 				bool isnull;
-				Datum value = slot_getattr(aslot->compressed_slot, attno, &isnull);
+				Datum value = slot_getattr(aslot->child_slot, attno, &isnull);
 
 				if (isnull)
 				{
@@ -208,8 +229,7 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int natts)
 				 * segment-by column is not compressed and the value is the
 				 * same for all rows in the compressed tuple. */
 				aslot->arrow_columns[i] = NULL;
-				slot->tts_values[i] =
-					slot_getattr(aslot->compressed_slot, attno, &slot->tts_isnull[i]);
+				slot->tts_values[i] = slot_getattr(aslot->child_slot, attno, &slot->tts_isnull[i]);
 
 				/* Remember the segment-by column */
 				MemoryContext oldcxt = MemoryContextSwitchTo(slot->tts_mcxt);
@@ -320,13 +340,6 @@ tts_arrow_copy_minimal_tuple(TupleTableSlot *slot)
 	tts_arrow_materialize(slot);
 
 	return heap_form_minimal_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
-}
-
-void
-tts_arrow_set_heaptuple_mode(TupleTableSlot *slot)
-{
-	TupleTableSlotOps **ops = (TupleTableSlotOps **) &slot->tts_ops;
-	*ops = (TupleTableSlotOps *) &TTSOpsBufferHeapTuple;
 }
 
 const TupleTableSlotOps TTSOpsArrowTuple = { .base_slot_size = sizeof(ArrowTupleTableSlot),
