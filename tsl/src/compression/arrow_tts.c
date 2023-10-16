@@ -443,24 +443,6 @@ tts_arrow_copy_minimal_tuple(TupleTableSlot *slot)
 	return heap_form_minimal_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
 }
 
-void
-tts_arrow_set_heaptuple_mode(TupleTableSlot *slot)
-{
-	TupleTableSlotOps **ops = (TupleTableSlotOps **) &slot->tts_ops;
-
-	ExecClearTuple(slot);
-	*ops = (TupleTableSlotOps *) &TTSOpsBufferHeapTuple;
-}
-
-void
-tts_arrow_set_arrowuple_mode(TupleTableSlot *slot)
-{
-	TupleTableSlotOps **ops = (TupleTableSlotOps **) &slot->tts_ops;
-
-	ExecClearTuple(slot);
-	*ops = (TupleTableSlotOps *) &TTSOpsArrowTuple;
-}
-
 const TupleTableSlotOps TTSOpsArrowTuple = { .base_slot_size = sizeof(ArrowTupleTableSlot),
 											 .init = tts_arrow_init,
 											 .release = tts_arrow_release,

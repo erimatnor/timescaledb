@@ -30,8 +30,6 @@ extern const TupleTableSlotOps TTSOpsArrowTuple;
 extern TupleTableSlot *ExecStoreArrowTuple(TupleTableSlot *slot, TupleTableSlot *child_slot,
 										   uint16 tuple_index);
 extern TupleTableSlot *ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index);
-extern void tts_arrow_set_heaptuple_mode(TupleTableSlot *slot);
-extern void tts_arrow_set_arrowuple_mode(TupleTableSlot *slot);
 
 #define TTS_IS_ARROWTUPLE(slot) ((slot)->tts_ops == &TTSOpsArrowTuple)
 

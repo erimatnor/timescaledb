@@ -260,7 +260,6 @@ compressionam_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTab
 		if (!table_scan_getnextslot(scan->compressed_scan_desc, direction, scan->compressed_slot))
 		{
 			ExecClearTuple(slot);
-			tts_arrow_set_heaptuple_mode(slot);
 			scan->compressed_read_done = true;
 			return compressionam_getnextslot(sscan, direction, slot);
 		}
@@ -372,8 +371,6 @@ compressionam_index_fetch_tuple(struct IndexFetchTableData *scan, ItemPointer ti
 	if (!is_compressed_tid(tid))
 	{
 		const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
-
-		// tts_arrow_set_heaptuple_mode(slot);
 		bool result = heapam->index_fetch_tuple(cscan->uncompr_hscan,
 												tid,
 												snapshot,
@@ -388,8 +385,6 @@ compressionam_index_fetch_tuple(struct IndexFetchTableData *scan, ItemPointer ti
 
 		return result;
 	}
-
-	tts_arrow_set_arrowuple_mode(slot);
 
 	/* Recreate the original TID for the compressed table */
 	uint16 tuple_index = compressed_tid_to_tid(&orig_tid, tid);
