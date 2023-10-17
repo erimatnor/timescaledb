@@ -1237,7 +1237,8 @@ typedef enum Anum_continuous_aggs_watermark_pkey
 #define HYPERTABLE_COMPRESSION_TABLE_NAME "hypertable_compression"
 typedef enum Anum_hypertable_compression
 {
-	Anum_hypertable_compression_hypertable_id = 1,
+	Anum_hypertable_compression_reloid = 1,
+	Anum_hypertable_compression_hypertable_id,
 	Anum_hypertable_compression_attname,
 	Anum_hypertable_compression_algo_id,
 	Anum_hypertable_compression_segmentby_column_index,
@@ -1251,6 +1252,7 @@ typedef enum Anum_hypertable_compression
 
 typedef struct FormData_hypertable_compression
 {
+	Oid reloid;
 	int32 hypertable_id;
 	NameData attname;
 	int16 algo_id;
@@ -1265,16 +1267,27 @@ typedef FormData_hypertable_compression *Form_hypertable_compression;
 enum
 {
 	HYPERTABLE_COMPRESSION_PKEY = 0,
+	HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY,
 	_MAX_HYPERTABLE_COMPRESSION_INDEX,
 };
 typedef enum Anum_hypertable_compression_pkey
 {
-	Anum_hypertable_compression_pkey_hypertable_id = 1,
+	Anum_hypertable_compression_pkey_reloid = 1,
 	Anum_hypertable_compression_pkey_attname,
 	_Anum_hypertable_compression_pkey_max,
 } Anum_hypertable_compression_pkey;
 
 #define Natts_hypertable_compression_pkey (_Anum_hypertable_compression_pkey_max - 1)
+
+typedef enum Anum_hypertable_hypertable_id_attname_key
+{
+	Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id = 1,
+	Anum_hypertable_compression_hypertable_id_attname_key_attname,
+	_Anum_hypertable_compression_hypertable_id_attname_key_max,
+} Anum_hypertable_hypertable_id_attname_key;
+
+#define Natts_hypertable_hypertable_id_attname_key                                                 \
+	(_Anum_hypertable_hypertable_id_attname_key_max - 1)
 
 #define COMPRESSION_CHUNK_SIZE_TABLE_NAME "compression_chunk_size"
 typedef enum Anum_compression_chunk_size

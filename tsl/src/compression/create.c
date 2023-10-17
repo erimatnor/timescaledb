@@ -3,6 +3,7 @@
  * Please see the included NOTICE for copyright information and
  * LICENSE-TIMESCALE for a copy of the license.
  */
+#include "hypertable.h"
 #include <postgres.h>
 #include <access/heapam.h>
 #include <access/reloptions.h>
@@ -60,7 +61,8 @@ typedef struct CompressColInfo
 static void compresscolinfo_init(CompressColInfo *cc, Oid srctbl_relid, List *segmentby_cols,
 								 List *orderby_cols);
 static void compresscolinfo_init_singlecolumn(CompressColInfo *cc, const char *colname, Oid typid);
-static void compresscolinfo_add_catalog_entries(CompressColInfo *compress_cols, int32 htid);
+static void compresscolinfo_add_catalog_entries(CompressColInfo *compress_cols, Oid reloid,
+												int32 htid);
 
 #define PRINT_COMPRESSION_TABLE_NAME(buf, prefix, hypertable_id)                                   \
 	do                                                                                             \
@@ -412,7 +414,7 @@ modify_compressed_toast_table_storage(CompressColInfo *cc, Oid compress_relid)
  * i.e. 2 concurrent ALTER TABLE to compressed will not succeed.
  */
 static void
-compresscolinfo_add_catalog_entries(CompressColInfo *compress_cols, int32 htid)
+compresscolinfo_add_catalog_entries(CompressColInfo *compress_cols, Oid reloid, int32 htid)
 {
 	Catalog *catalog = ts_catalog_get();
 	Relation rel;
@@ -422,12 +424,16 @@ compresscolinfo_add_catalog_entries(CompressColInfo *compress_cols, int32 htid)
 	int i;
 	CatalogSecurityContext sec_ctx;
 
+	if (htid == INVALID_HYPERTABLE_ID)
+		nulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)] = true;
+
 	rel = table_open(catalog_get_table_id(catalog, HYPERTABLE_COMPRESSION), RowExclusiveLock);
 	desc = RelationGetDescr(rel);
 
 	for (i = 0; i < compress_cols->numcols; i++)
 	{
 		FormData_hypertable_compression *fd = &compress_cols->col_meta[i];
+		fd->reloid = reloid;
 		fd->hypertable_id = htid;
 		ts_hypertable_compression_fill_tuple_values(fd, &values[0], &nulls[0]);
 		ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
@@ -1246,7 +1252,7 @@ tsl_process_compress_table(AlterTableCmd *cmd, Hypertable *ht,
 		 * create local compression tables and data but let the DDL pass on to
 		 * data nodes. */
 		ts_hypertable_set_compressed(ht, 0);
-		compresscolinfo_add_catalog_entries(&compress_cols, ht->fd.id);
+		compresscolinfo_add_catalog_entries(&compress_cols, ht->main_table_relid, ht->fd.id);
 		return true;
 	}
 	else
@@ -1256,7 +1262,7 @@ tsl_process_compress_table(AlterTableCmd *cmd, Hypertable *ht,
 		ts_hypertable_set_compressed(ht, compress_htid);
 	}
 
-	compresscolinfo_add_catalog_entries(&compress_cols, ht->fd.id);
+	compresscolinfo_add_catalog_entries(&compress_cols, ht->main_table_relid, ht->fd.id);
 	/*add the constraints to the new compressed hypertable */
 	ht = ts_hypertable_get_by_id(ht->fd.id); /*reload updated info*/
 	ts_hypertable_clone_constraints_to_compressed(ht, constraint_list);
@@ -1304,7 +1310,7 @@ tsl_process_compress_table_add_column(Hypertable *ht, ColumnDef *orig_def)
 		Assert(TS_HYPERTABLE_HAS_COMPRESSION_ENABLED(ht));
 	}
 	/* add catalog entries for the new column for the hypertable */
-	compresscolinfo_add_catalog_entries(&compress_cols, orig_htid);
+	compresscolinfo_add_catalog_entries(&compress_cols, ht->main_table_relid, orig_htid);
 }
 
 /* Drop a column from a table that has compression enabled

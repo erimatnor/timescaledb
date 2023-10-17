@@ -272,6 +272,7 @@ static const TableIndexDef catalog_table_index_definitions[_MAX_CATALOG_TABLES] 
 		.length =  _MAX_HYPERTABLE_COMPRESSION_INDEX,
 		.names = (char *[]) {
 			[HYPERTABLE_COMPRESSION_PKEY] = "hypertable_compression_pkey",
+			[HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY] = "hypertable_compression_hypertable_id_attname_key",
 		},
 	},
 	[COMPRESSION_CHUNK_SIZE] = {

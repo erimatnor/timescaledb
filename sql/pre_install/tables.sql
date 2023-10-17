@@ -467,7 +467,8 @@ CREATE TABLE _timescaledb_catalog.compression_algorithm (
 );
 
 CREATE TABLE _timescaledb_catalog.hypertable_compression (
-  hypertable_id integer NOT NULL,
+  reloid regclass NOT NULL,
+  hypertable_id integer NULL,
   attname name NOT NULL,
   compression_algorithm_id smallint,
   segmentby_column_index smallint,
@@ -475,9 +476,10 @@ CREATE TABLE _timescaledb_catalog.hypertable_compression (
   orderby_asc boolean,
   orderby_nullsfirst boolean,
   -- table constraints
-  CONSTRAINT hypertable_compression_pkey PRIMARY KEY (hypertable_id, attname),
-  CONSTRAINT hypertable_compression_hypertable_id_orderby_column_index_key UNIQUE (hypertable_id, orderby_column_index),
-  CONSTRAINT hypertable_compression_hypertable_id_segmentby_column_index_key UNIQUE (hypertable_id, segmentby_column_index),
+  CONSTRAINT hypertable_compression_pkey PRIMARY KEY (reloid, attname),
+  CONSTRAINT hypertable_compression_hypertable_id_attname_key UNIQUE (hypertable_id, attname),
+  CONSTRAINT hypertable_compression_reloid_orderby_column_index_key UNIQUE (reloid, orderby_column_index),
+  CONSTRAINT hypertable_compression_reloid_segmentby_column_index_key UNIQUE (reloid, segmentby_column_index),
   CONSTRAINT hypertable_compression_compression_algorithm_id_fkey FOREIGN KEY (compression_algorithm_id) REFERENCES _timescaledb_catalog.compression_algorithm (id),
   CONSTRAINT hypertable_compression_hypertable_id_fkey FOREIGN KEY (hypertable_id) REFERENCES _timescaledb_catalog.hypertable (id) ON DELETE CASCADE
 );

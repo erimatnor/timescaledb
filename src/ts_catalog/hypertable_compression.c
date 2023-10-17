@@ -23,12 +23,19 @@ hypertable_compression_fill_from_tuple(FormData_hypertable_compression *fd, Tupl
 
 	heap_deform_tuple(tuple, ts_scanner_get_tupledesc(ti), values, isnulls);
 
-	Assert(!isnulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)]);
+	Assert(!isnulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_reloid)]);
 	Assert(!isnulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_attname)]);
 	Assert(!isnulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_algo_id)]);
 
-	fd->hypertable_id =
-		DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)]);
+	fd->reloid =
+		DatumGetObjectId(values[AttrNumberGetAttrOffset(Anum_hypertable_compression_reloid)]);
+
+	if (isnulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)])
+		fd->hypertable_id = INVALID_HYPERTABLE_ID;
+	else
+		fd->hypertable_id = DatumGetInt32(
+			values[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)]);
+
 	memcpy(&fd->attname,
 		   DatumGetName(values[AttrNumberGetAttrOffset(Anum_hypertable_compression_attname)]),
 		   NAMEDATALEN);
@@ -65,13 +72,19 @@ ts_hypertable_compression_fill_tuple_values(FormData_hypertable_compression *fd,
 											bool *nulls)
 {
 	memset(nulls, 0, sizeof(bool) * Natts_hypertable_compression);
-	values[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)] =
-		Int32GetDatum(fd->hypertable_id);
+
+	values[AttrNumberGetAttrOffset(Anum_hypertable_compression_reloid)] =
+		ObjectIdGetDatum(fd->reloid);
+
+	if (!nulls[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)])
+		values[AttrNumberGetAttrOffset(Anum_hypertable_compression_hypertable_id)] =
+			Int32GetDatum(fd->hypertable_id);
 
 	values[AttrNumberGetAttrOffset(Anum_hypertable_compression_attname)] =
 		NameGetDatum(&fd->attname);
 	values[AttrNumberGetAttrOffset(Anum_hypertable_compression_algo_id)] =
 		Int16GetDatum(fd->algo_id);
+
 	if (fd->segmentby_column_index > 0)
 	{
 		values[AttrNumberGetAttrOffset(Anum_hypertable_compression_segmentby_column_index)] =
@@ -108,13 +121,15 @@ ts_hypertable_compression_get(int32 htid)
 	FormData_hypertable_compression *colfd = NULL;
 	ScanIterator iterator =
 		ts_scan_iterator_create(HYPERTABLE_COMPRESSION, AccessShareLock, CurrentMemoryContext);
-	iterator.ctx.index =
-		catalog_get_index(ts_catalog_get(), HYPERTABLE_COMPRESSION, HYPERTABLE_COMPRESSION_PKEY);
-	ts_scan_iterator_scan_key_init(&iterator,
-								   Anum_hypertable_compression_pkey_hypertable_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(htid));
+	iterator.ctx.index = catalog_get_index(ts_catalog_get(),
+										   HYPERTABLE_COMPRESSION,
+										   HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY);
+	ts_scan_iterator_scan_key_init(
+		&iterator,
+		Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(htid));
 
 	ts_scanner_foreach(&iterator)
 	{
@@ -143,13 +158,15 @@ ts_hypertable_compression_get_by_pkey(int32 htid, const char *attname)
 	FormData_hypertable_compression *colfd = NULL;
 	ScanIterator iterator =
 		ts_scan_iterator_create(HYPERTABLE_COMPRESSION, AccessShareLock, CurrentMemoryContext);
-	iterator.ctx.index =
-		catalog_get_index(ts_catalog_get(), HYPERTABLE_COMPRESSION, HYPERTABLE_COMPRESSION_PKEY);
-	ts_scan_iterator_scan_key_init(&iterator,
-								   Anum_hypertable_compression_pkey_hypertable_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(htid));
+	iterator.ctx.index = catalog_get_index(ts_catalog_get(),
+										   HYPERTABLE_COMPRESSION,
+										   HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY);
+	ts_scan_iterator_scan_key_init(
+		&iterator,
+		Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(htid));
 	ts_scan_iterator_scan_key_init(&iterator,
 								   Anum_hypertable_compression_pkey_attname,
 								   BTEqualStrategyNumber,
@@ -174,13 +191,15 @@ ts_hypertable_compression_delete_by_hypertable_id(int32 htid)
 	int count = 0;
 	ScanIterator iterator =
 		ts_scan_iterator_create(HYPERTABLE_COMPRESSION, RowExclusiveLock, CurrentMemoryContext);
-	iterator.ctx.index =
-		catalog_get_index(ts_catalog_get(), HYPERTABLE_COMPRESSION, HYPERTABLE_COMPRESSION_PKEY);
-	ts_scan_iterator_scan_key_init(&iterator,
-								   Anum_hypertable_compression_pkey_hypertable_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(htid));
+	iterator.ctx.index = catalog_get_index(ts_catalog_get(),
+										   HYPERTABLE_COMPRESSION,
+										   HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY);
+	ts_scan_iterator_scan_key_init(
+		&iterator,
+		Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(htid));
 
 	ts_scanner_foreach(&iterator)
 	{
@@ -196,13 +215,15 @@ ts_hypertable_compression_delete_by_pkey(int32 htid, const char *attname)
 {
 	ScanIterator iterator =
 		ts_scan_iterator_create(HYPERTABLE_COMPRESSION, RowExclusiveLock, CurrentMemoryContext);
-	iterator.ctx.index =
-		catalog_get_index(ts_catalog_get(), HYPERTABLE_COMPRESSION, HYPERTABLE_COMPRESSION_PKEY);
-	ts_scan_iterator_scan_key_init(&iterator,
-								   Anum_hypertable_compression_pkey_hypertable_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(htid));
+	iterator.ctx.index = catalog_get_index(ts_catalog_get(),
+										   HYPERTABLE_COMPRESSION,
+										   HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY);
+	ts_scan_iterator_scan_key_init(
+		&iterator,
+		Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(htid));
 	ts_scan_iterator_scan_key_init(&iterator,
 								   Anum_hypertable_compression_pkey_attname,
 								   BTEqualStrategyNumber,
@@ -226,13 +247,15 @@ ts_hypertable_compression_rename_column(int32 htid, char *old_column_name, char 
 	bool found = false;
 	ScanIterator iterator =
 		ts_scan_iterator_create(HYPERTABLE_COMPRESSION, AccessShareLock, CurrentMemoryContext);
-	iterator.ctx.index =
-		catalog_get_index(ts_catalog_get(), HYPERTABLE_COMPRESSION, HYPERTABLE_COMPRESSION_PKEY);
-	ts_scan_iterator_scan_key_init(&iterator,
-								   Anum_hypertable_compression_pkey_hypertable_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(htid));
+	iterator.ctx.index = catalog_get_index(ts_catalog_get(),
+										   HYPERTABLE_COMPRESSION,
+										   HYPERTABLE_COMPRESSION_HYPERTABLE_ID_ATTNAME_KEY);
+	ts_scan_iterator_scan_key_init(
+		&iterator,
+		Anum_hypertable_compression_hypertable_id_attname_key_hypertable_id,
+		BTEqualStrategyNumber,
+		F_INT4EQ,
+		Int32GetDatum(htid));
 
 	ts_scanner_foreach(&iterator)
 	{
