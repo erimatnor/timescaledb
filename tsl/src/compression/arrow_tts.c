@@ -14,8 +14,6 @@ tts_arrow_init(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	TTSOpsBufferHeapTuple.init(slot);
-
 	aslot->arrow_columns = NULL;
 	aslot->child_slot = NULL;
 	aslot->segmentby_columns = NULL;
@@ -66,7 +64,6 @@ tts_arrow_clear(TupleTableSlot *slot)
 	}
 
 	aslot->child_slot = NULL;
-
 	slot->tts_nvalid = 0;
 	slot->tts_flags |= TTS_FLAG_EMPTY;
 	ItemPointerSetInvalid(&slot->tts_tid);
@@ -80,7 +77,12 @@ tts_arrow_store_tuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 t
 	slot->tts_flags &= ~TTS_FLAG_EMPTY;
 	aslot->child_slot = child_slot;
 	aslot->tuple_index = tuple_index;
-	tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+
+	if (tuple_index == InvalidTupleIndex)
+		ItemPointerCopy(&child_slot->tts_tid, &slot->tts_tid);
+	else
+		tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+
 	Assert(!TTS_EMPTY(aslot->child_slot));
 }
 
@@ -119,8 +121,10 @@ ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index)
 }
 
 /*
- * Read the slot's values from the Parquet file and store its
- * tts_values[] array.
+ * Read the slot's values from the child slot and store its tts_values[]
+ * array.
+ *
+ * TODO: read data from child slot. Code not expected to work in current form.
  */
 static void
 tts_arrow_materialize(TupleTableSlot *slot)
