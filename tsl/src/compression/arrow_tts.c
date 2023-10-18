@@ -14,8 +14,6 @@ tts_arrow_init(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	TTSOpsBufferHeapTuple.init(slot);
-
 	aslot->arrow_columns = NULL;
 	aslot->child_slot = NULL;
 	aslot->segmentby_columns = NULL;
@@ -66,7 +64,6 @@ tts_arrow_clear(TupleTableSlot *slot)
 	}
 
 	aslot->child_slot = NULL;
-
 	slot->tts_nvalid = 0;
 	slot->tts_flags |= TTS_FLAG_EMPTY;
 	ItemPointerSetInvalid(&slot->tts_tid);
@@ -80,7 +77,12 @@ tts_arrow_store_tuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 t
 	slot->tts_flags &= ~TTS_FLAG_EMPTY;
 	aslot->child_slot = child_slot;
 	aslot->tuple_index = tuple_index;
-	tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+
+	if (tuple_index == InvalidTupleIndex)
+		ItemPointerCopy(&child_slot->tts_tid, &slot->tts_tid);
+	else
+		tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+
 	Assert(!TTS_EMPTY(aslot->child_slot));
 }
 
@@ -107,20 +109,30 @@ TupleTableSlot *
 ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
-	ItemPointerData tmp_tid;
 
+	/*
+	 * TID for slot is based on the TID for the child slot and the tuple_index
+	 * and the child_slot is always a TTS for compressed table.
+	 *
+	 * If we want to support pointing to an uncompressed slot, we can do that
+	 * by just copying the child slot if it points to a TTS for the
+	 * uncompressed table, but right now we are assuming that it points to a
+	 * TTS for the compressed table.
+	 */
+	Assert(tuple_index != InvalidTupleIndex);
 	Assert(!TTS_EMPTY(slot));
 	aslot->tuple_index = tuple_index;
-	compressed_tid_to_tid(&tmp_tid, &aslot->child_slot->tts_tid);
-	tid_to_compressed_tid(&slot->tts_tid, &tmp_tid, tuple_index);
+	tid_to_compressed_tid(&slot->tts_tid, &aslot->child_slot->tts_tid, tuple_index);
 	slot->tts_nvalid = 0;
 
 	return slot;
 }
 
 /*
- * Read the slot's values from the Parquet file and store its
- * tts_values[] array.
+ * Read the slot's values from the child slot and store its tts_values[]
+ * array.
+ *
+ * TODO: read data from child slot. Code not expected to work in current form.
  */
 static void
 tts_arrow_materialize(TupleTableSlot *slot)
