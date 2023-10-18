@@ -6,6 +6,7 @@
 #ifndef PG_ARROW_TUPTABLE_H
 #define PG_ARROW_TUPTABLE_H
 
+#include <access/tupdesc.h>
 #include <postgres.h>
 #include <executor/tuptable.h>
 #include <nodes/bitmapset.h>
@@ -16,6 +17,7 @@ typedef struct ArrowTupleTableSlot
 {
 	VirtualTupleTableSlot base;
 	TupleTableSlot *child_slot;
+	TupleDesc compressed_tupdesc;
 	ArrowArray **arrow_columns;
 	uint16 tuple_index; /* Index of this particular tuple in the compressed
 						 * (columnar data) child tuple. Note that the first
