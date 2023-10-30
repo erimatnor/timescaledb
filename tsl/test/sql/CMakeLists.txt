@@ -16,6 +16,7 @@ set(TEST_FILES
     compressed_collation.sql
     compression_create_compressed_table.sql
     compression_bgw.sql
+    compression_tam.sql
     compression_conflicts.sql
     compression_insert.sql
     compression_policy.sql

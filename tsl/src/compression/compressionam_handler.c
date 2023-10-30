@@ -250,9 +250,7 @@ compressionam_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTab
 		bool result = heapam->scan_getnextslot(scan->heap_scan, direction, scan->uncompressed_slot);
 
 		if (result)
-		{
 			ExecStoreArrowTuple(slot, scan->uncompressed_slot, InvalidTupleIndex);
-		}
 
 		return result;
 	}
