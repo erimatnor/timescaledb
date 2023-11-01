@@ -4,46 +4,80 @@
 #include <executor/tuptable.h>
 #include <utils/expandeddatum.h>
 
+#include <chunk.h>
 #include "utils/palloc.h"
 #include "arrow_tts.h"
 #include "compression.h"
 #include "custom_type_cache.h"
 
+/*
+ * The init function is called by:
+ *
+ * - MakeTupletableslot()
+ *
+ * Initialize data structures not known by the base slot implementation and
+ * above function.
+ */
 static void
 tts_arrow_init(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+	MemoryContext oldmctx;
 
+	/* Lazy-initialize the compressed child slots since we need a tupledesc */
+	aslot->compressed_slot = NULL;
 	aslot->arrow_columns = NULL;
-	aslot->child_slot = NULL;
 	aslot->segmentby_columns = NULL;
+	aslot->tuple_index = InvalidTupleIndex;
 	aslot->decompression_mcxt = AllocSetContextCreate(slot->tts_mcxt,
 													  "bulk decompression",
 													  /* minContextSize = */ 0,
 													  /* initBlockSize = */ 64 * 1024,
 													  /* maxBlockSize = */ 64 * 1024);
+
+	oldmctx = MemoryContextSwitchTo(slot->tts_mcxt);
+	aslot->noncompressed_slot =
+		MakeSingleTupleTableSlot(slot->tts_tupleDescriptor, &TTSOpsBufferHeapTuple);
+	aslot->child_slot = aslot->noncompressed_slot;
+	MemoryContextSwitchTo(oldmctx);
 }
 
+/*
+ * The release function is called by:
+ *
+ * - ExecDropsingletupletableslot()
+ * - ExecResetTupleTable()
+ *
+ * Should only release resources not known and released by these functions.
+ */
 static void
 tts_arrow_release(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
 	if (NULL != aslot->arrow_columns)
-	{
 		aslot->arrow_columns = NULL;
-	}
+
+	MemoryContextDelete(aslot->decompression_mcxt);
+	ExecDropSingleTupleTableSlot(aslot->noncompressed_slot);
+
+	/* compressed slot was lazily iniialized */
+	if (NULL != aslot->compressed_slot)
+		ExecDropSingleTupleTableSlot(aslot->compressed_slot);
+
+	aslot->compressed_slot = NULL;
+	aslot->noncompressed_slot = NULL;
 }
 
+/*
+ * Clear only parent, but not child slots.
+ */
 static void
-tts_arrow_clear(TupleTableSlot *slot)
+clear_arrow_parent(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	if (unlikely(TTS_SHOULDFREE(slot)))
-	{
-		/* The tuple is materialized, so free materialized memory */
-	}
+	Assert(TTS_IS_ARROWTUPLE(slot));
 
 	if (aslot->arrow_columns)
 	{
@@ -63,10 +97,30 @@ tts_arrow_clear(TupleTableSlot *slot)
 		aslot->arrow_columns = NULL;
 	}
 
-	aslot->child_slot = NULL;
 	slot->tts_nvalid = 0;
 	slot->tts_flags |= TTS_FLAG_EMPTY;
 	ItemPointerSetInvalid(&slot->tts_tid);
+}
+
+/*
+ * Called by ExecClearTuple().
+ *
+ * Note that ExecClearTuple() doesn't do any work itself, so need to handle
+ * all the clearing of the base slot implementation.
+ */
+static void
+tts_arrow_clear(TupleTableSlot *slot)
+{
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+
+	/* Clear child slots */
+	if (aslot->compressed_slot)
+		ExecClearTuple(aslot->compressed_slot);
+
+	ExecClearTuple(aslot->noncompressed_slot);
+
+	/* Clear parent */
+	clear_arrow_parent(slot);
 }
 
 static inline void
@@ -74,33 +128,81 @@ tts_arrow_store_tuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 t
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	slot->tts_flags &= ~TTS_FLAG_EMPTY;
-	aslot->child_slot = child_slot;
-	aslot->tuple_index = tuple_index;
+	Assert(!TTS_EMPTY(child_slot));
 
 	if (tuple_index == InvalidTupleIndex)
+	{
+		clear_arrow_parent(slot);
 		ItemPointerCopy(&child_slot->tts_tid, &slot->tts_tid);
+		/* Stored a non-compressed tuple so clear the compressed slot */
+		if (NULL != aslot->compressed_slot)
+			ExecClearTuple(aslot->compressed_slot);
+	}
 	else
-		tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+	{
+		if (tuple_index == 1)
+			clear_arrow_parent(slot);
 
-	Assert(!TTS_EMPTY(aslot->child_slot));
+		tid_to_compressed_tid(&slot->tts_tid, &child_slot->tts_tid, tuple_index);
+		/* Stored a compressed tuple so clear the non-compressed slot */
+		ExecClearTuple(aslot->noncompressed_slot);
+	}
+
+	slot->tts_flags &= ~TTS_FLAG_EMPTY;
+	slot->tts_nvalid = 0;
+	aslot->child_slot = child_slot;
+	aslot->tuple_index = tuple_index;
 }
 
+TupleTableSlot *
+ExecStoreArrowTuple(TupleTableSlot *slot, uint16 tuple_index)
+{
+	TupleTableSlot *child_slot;
+
+	Assert(slot != NULL);
+	Assert(slot->tts_tupleDescriptor != NULL);
+
+	if (unlikely(!TTS_IS_ARROWTUPLE(slot)))
+		elog(ERROR, "trying to store an on-disk arrow tuple into wrong type of slot");
+
+	if (tuple_index == InvalidTupleIndex)
+		child_slot = arrow_slot_get_noncompressed_slot(slot);
+	else
+		child_slot = arrow_slot_get_compressed_slot(slot, NULL);
+
+	Assert(!TTS_EMPTY(child_slot));
+
+	/* A child slot already stores the data, so only clear the parent
+	 * metadata. The task here is only to mark the parent as storing a tuple,
+	 * which is already in one of the children. */
+	tts_arrow_store_tuple(slot, child_slot, tuple_index);
+	Assert(!TTS_EMPTY(slot));
+
+	return slot;
+}
+
+#if 0
 TupleTableSlot *
 ExecStoreArrowTuple(TupleTableSlot *slot, TupleTableSlot *child_slot, uint16 tuple_index)
 {
 	Assert(slot != NULL);
 	Assert(slot->tts_tupleDescriptor != NULL);
-	Assert(!TTS_EMPTY(child_slot));
 
 	if (unlikely(!TTS_IS_ARROWTUPLE(slot)))
-		elog(ERROR, "trying to store an on-disk parquet tuple into wrong type of slot");
+		elog(ERROR, "trying to store an on-disk arrow tuple into wrong type of slot");
 
-	ExecClearTuple(slot);
+	if (tuple_index == InvalidTupleIndex)
+		child_slot = arrow_slot_get_noncompressed_slot(slot);
+	else
+		child_slot = arrow_slot_get_compressed_slot(slot, child_slot->tts_tupleDescriptor);
+
+	/* A child slot already stores the data, so only clear the parent
+	 * metadata. The task here is only to mark the parent as storing a tuple,
+	 * which is already in one of the children. */
+	clear_arrow_parent(slot);
 	tts_arrow_store_tuple(slot, child_slot, tuple_index);
 
 	Assert(!TTS_EMPTY(slot));
-	Assert(!TTS_SHOULDFREE(slot));
 
 	return slot;
 }
@@ -121,126 +223,28 @@ ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index)
 	 */
 	Assert(tuple_index != InvalidTupleIndex);
 	Assert(!TTS_EMPTY(slot));
+	Assert(NULL != aslot->compressed_slot && !TTS_EMPTY(aslot->compressed_slot));
 	aslot->tuple_index = tuple_index;
 	tid_to_compressed_tid(&slot->tts_tid, &aslot->child_slot->tts_tid, tuple_index);
 	slot->tts_nvalid = 0;
 
 	return slot;
 }
+#endif
 
 /*
- * Read the slot's values from the child slot and store its tts_values[]
- * array.
+ * Materialize an Arrow slot.
  *
- * TODO: read data from child slot. Code not expected to work in current form.
+ * Simply materialize the active child slot.
  */
 static void
 tts_arrow_materialize(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
-	TupleDesc desc = slot->tts_tupleDescriptor;
-	Size sz = 0;
-	char *data;
 
 	Assert(!TTS_EMPTY(slot));
-
-	/* If slot has its tuple already materialized, nothing to do. */
-	if (TTS_SHOULDFREE(slot))
-	{
-		elog(NOTICE, "tuple already materialized");
-		return;
-	}
-
-	/* compute size of memory required */
-	for (int natt = 0; natt < desc->natts; natt++)
-	{
-		Form_pg_attribute att = TupleDescAttr(desc, natt);
-		Datum val;
-
-		if (att->attbyval || slot->tts_isnull[natt])
-			continue;
-
-		val = slot->tts_values[natt];
-
-		if (att->attlen == -1 && VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
-		{
-			/*
-			 * We want to flatten the expanded value so that the materialized
-			 * slot doesn't depend on it.
-			 */
-			sz = att_align_nominal(sz, att->attalign);
-			sz += EOH_get_flat_size(DatumGetEOHP(val));
-		}
-		else
-		{
-			sz = att_align_nominal(sz, att->attalign);
-			sz = att_addlength_datum(sz, att->attlen, val);
-		}
-	}
-
-	/* Mark all entries in the tts_values array as valid */
-	slot->tts_nvalid = desc->natts;
-
-	/* all data is byval */
-	if (sz == 0)
-		return;
-
-	/* allocate memory */
-	aslot->base.data = data = MemoryContextAlloc(slot->tts_mcxt, sz);
-	slot->tts_flags |= TTS_FLAG_SHOULDFREE;
-
-	/* TODO: This code is intended to copy data from Arrow record (or
-	 * some other storage format) to heap tuple format that is used by
-	 * PostgreSQL.
-	 *
-	 * This do not work currently because varlen attributes are not
-	 * stored in the expected format. (They are actually not
-	 * translated at all currently.)
-	 *
-	 * We need to update this code once we decide how to pass back
-	 * varlen attributes from the Arrow record. */
-	for (int natt = 0; natt < desc->natts; natt++)
-	{
-		Form_pg_attribute att = TupleDescAttr(desc, natt);
-		Datum val;
-
-		if (att->attbyval || slot->tts_isnull[natt])
-			continue;
-
-		val = slot->tts_values[natt];
-
-		elog(WARNING, "trying to materialize varlen data for column %s", NameStr(att->attname));
-
-		if (att->attlen == -1 && VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
-		{
-			Size data_length;
-
-			/*
-			 * We want to flatten the expanded value so that the materialized
-			 * slot doesn't depend on it.
-			 */
-			ExpandedObjectHeader *eoh = DatumGetEOHP(val);
-
-			data = (char *) att_align_nominal(data, att->attalign);
-			data_length = EOH_get_flat_size(eoh);
-			EOH_flatten_into(eoh, data, data_length);
-
-			slot->tts_values[natt] = PointerGetDatum(data);
-			data += data_length;
-		}
-		else
-		{
-			Size data_length = 0;
-
-			data = (char *) att_align_nominal(data, att->attalign);
-			data_length = att_addlength_datum(data_length, att->attlen, val);
-
-			memcpy(data, DatumGetPointer(val), data_length);
-
-			slot->tts_values[natt] = PointerGetDatum(data);
-			data += data_length;
-		}
-	}
+	Assert(NULL != aslot->child_slot);
+	ExecMaterializeSlot(aslot->child_slot);
 }
 
 static bool
@@ -253,6 +257,21 @@ is_compressed_col(const TupleDesc tupdesc, AttrNumber attno)
 		typinfo = ts_custom_type_cache_get(CUSTOM_TYPE_COMPRESSED_DATA);
 
 	return coltypid == typinfo->type_oid;
+}
+
+static void
+copy_slot_values(const TupleTableSlot *from, TupleTableSlot *to)
+{
+	Assert(!TTS_EMPTY(from));
+
+	for (int i = 0; i < from->tts_tupleDescriptor->natts; i++)
+	{
+		to->tts_values[i] = from->tts_values[i];
+		to->tts_isnull[i] = from->tts_isnull[i];
+	}
+
+	to->tts_flags &= ~TTS_FLAG_EMPTY;
+	to->tts_nvalid = from->tts_tupleDescriptor->natts;
 }
 
 static void
@@ -269,13 +288,7 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int natts)
 	{
 		/* The child slot points to an non-compressed tuple, so just copy over
 		 * the values from the child. */
-		for (int i = 0; i < natts; i++)
-		{
-			slot->tts_values[i] = aslot->child_slot->tts_values[i];
-			slot->tts_isnull[i] = aslot->child_slot->tts_isnull[i];
-			slot->tts_nvalid = aslot->child_slot->tts_nvalid;
-		}
-
+		copy_slot_values(aslot->child_slot, slot);
 		return;
 	}
 
@@ -413,46 +426,112 @@ tts_arrow_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
 	return 0; /* silence compiler warnings */
 }
 
+/*
+ * Copy a slot tuple to an arrow slot.
+ *
+ * Note that the source slot could be another arrow slot or another slot
+ * implementation altogether (e.g., virtual).
+ *
+ * If the source slot is also an arrow slot, just copy the child slots and
+ * parent state.
+ *
+ * If the source slot is not an arrow slot, then copy the source slot directly
+ * into the matching child slot (either non-compressed or compressed child
+ * slot) and update the parent slot metadata.
+ */
 static void
 tts_arrow_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 {
-	// ArrowTupleTableSlot *asrcslot = (ArrowTupleTableSlot *)srcslot;
-	// ArrowTupleTableSlot *adstslot = (ArrowTupleTableSlot *)dstslot;
-	MemoryContext oldcontext;
+	ArrowTupleTableSlot *adstslot = (ArrowTupleTableSlot *) dstslot;
+	TupleTableSlot *child_dstslot = NULL;
+	TupleTableSlot *child_srcslot = NULL;
 
-	tts_arrow_clear(dstslot);
-	slot_getallattrs(srcslot);
+	Assert(TTS_IS_ARROWTUPLE(dstslot));
+	ExecClearTuple(dstslot);
 
-	oldcontext = MemoryContextSwitchTo(dstslot->tts_mcxt);
-	// adstslot->record = arrow_record_hold(asrcslot->record);
-	MemoryContextSwitchTo(oldcontext);
+	/* Check if copying from another slot implementation */
+	if (dstslot->tts_ops != srcslot->tts_ops)
+	{
+		child_srcslot = srcslot;
+
+		/*
+		 * The source slot is not an Arrow slot. It is necessary to identify
+		 * which destination child slot to copy the source slot into. It
+		 * should normally be the non-compressed slot, but double check the
+		 * number of attributes to sure. If the source and the target tuple
+		 * descriptor has the same number of attributes, then it should be the
+		 * non-compressed slot since the compressed slot has extra metadata
+		 * attributes.
+		 *
+		 * Note that it is not possible to use equalTupleDescs() because it
+		 * compares the tuple's composite ID. If the source slot is, e.g.,
+		 * virtual, with no connection to a physical relation, the composite
+		 * ID is often RECORDID while the arrow slot has the ID of the
+		 * relation.
+		 */
+		if (dstslot->tts_tupleDescriptor->natts == srcslot->tts_tupleDescriptor->natts)
+		{
+			/* non-compressed tuple slot */
+			child_dstslot = arrow_slot_get_noncompressed_slot(dstslot);
+			adstslot->tuple_index = InvalidTupleIndex;
+		}
+		else
+		{
+			child_dstslot = arrow_slot_get_compressed_slot(dstslot, srcslot->tts_tupleDescriptor);
+			/* compresssed tuple slot */
+			adstslot->tuple_index = 1;
+		}
+	}
+	else
+	{
+		/* The source slot is also an arrow slot */
+		ArrowTupleTableSlot *asrcslot = (ArrowTupleTableSlot *) srcslot;
+
+		if (!TTS_EMPTY(asrcslot->noncompressed_slot))
+		{
+			child_srcslot = asrcslot->noncompressed_slot;
+			child_dstslot = arrow_slot_get_noncompressed_slot(dstslot);
+		}
+		else
+		{
+			Assert(!TTS_EMPTY(asrcslot->compressed_slot));
+			child_srcslot = asrcslot->compressed_slot;
+			child_dstslot = arrow_slot_get_compressed_slot(dstslot, srcslot->tts_tupleDescriptor);
+		}
+
+		adstslot->tuple_index = asrcslot->tuple_index;
+		ItemPointerCopy(&srcslot->tts_tid, &dstslot->tts_tid);
+	}
+
+	ExecClearTuple(child_dstslot);
+	ExecCopySlot(child_dstslot, child_srcslot);
+	adstslot->child_slot = child_dstslot;
 	dstslot->tts_flags &= ~TTS_FLAG_EMPTY;
-
-	/* make sure storage doesn't depend on external memory */
-	tts_arrow_materialize(dstslot);
+	dstslot->tts_nvalid = 0;
 }
 
+/*
+ * Produce a HeapTuple copy from the tts_values array. Just relay the
+ * operation to the non-compressed child slot.
+ */
 static HeapTuple
 tts_arrow_copy_heap_tuple(TupleTableSlot *slot)
 {
-	HeapTuple tuple;
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
 	Assert(!TTS_EMPTY(slot));
-
-	tts_arrow_materialize(slot);
-	tuple = heap_form_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
-	ItemPointerCopy(&slot->tts_tid, &tuple->t_self);
-
-	return tuple;
+	copy_slot_values(slot, aslot->noncompressed_slot);
+	return ExecCopySlotHeapTuple(aslot->noncompressed_slot);
 }
 
 static MinimalTuple
 tts_arrow_copy_minimal_tuple(TupleTableSlot *slot)
 {
-	Assert(!TTS_EMPTY(slot));
-	tts_arrow_materialize(slot);
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	return heap_form_minimal_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
+	Assert(!TTS_EMPTY(slot));
+	copy_slot_values(slot, aslot->noncompressed_slot);
+	return ExecCopySlotMinimalTuple(aslot->noncompressed_slot);
 }
 
 const TupleTableSlotOps TTSOpsArrowTuple = { .base_slot_size = sizeof(ArrowTupleTableSlot),

@@ -6,12 +6,13 @@
 #ifndef PG_ARROW_TUPTABLE_H
 #define PG_ARROW_TUPTABLE_H
 
-#include <access/tupdesc.h>
 #include <postgres.h>
+#include <access/tupdesc.h>
 #include <executor/tuptable.h>
 #include <nodes/bitmapset.h>
 
 #include "arrow_c_data_interface.h"
+#include <utils/palloc.h>
 
 #include <limits.h>
 
@@ -19,6 +20,8 @@ typedef struct ArrowTupleTableSlot
 {
 	VirtualTupleTableSlot base;
 	TupleTableSlot *child_slot;
+	TupleTableSlot *noncompressed_slot;
+	TupleTableSlot *compressed_slot;
 	TupleDesc compressed_tupdesc;
 	ArrowArray **arrow_columns;
 	uint16 tuple_index; /* Index of this particular tuple in the compressed
@@ -31,8 +34,7 @@ typedef struct ArrowTupleTableSlot
 
 extern const TupleTableSlotOps TTSOpsArrowTuple;
 
-extern TupleTableSlot *ExecStoreArrowTuple(TupleTableSlot *slot, TupleTableSlot *child_slot,
-										   uint16 tuple_index);
+extern TupleTableSlot *ExecStoreArrowTuple(TupleTableSlot *slot, uint16 tuple_index);
 extern TupleTableSlot *ExecStoreArrowTupleExisting(TupleTableSlot *slot, uint16 tuple_index);
 
 #define TTS_IS_ARROWTUPLE(slot) ((slot)->tts_ops == &TTSOpsArrowTuple)
@@ -108,6 +110,39 @@ static inline bool
 is_compressed_tid(ItemPointer itemptr)
 {
 	return (ItemPointerGetBlockNumber(itemptr) & COMPRESSED_FLAG) != 0;
+}
+
+static inline TupleTableSlot *
+arrow_slot_get_compressed_slot(TupleTableSlot *slot, const TupleDesc tupdesc)
+{
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+
+	Assert(TTS_IS_ARROWTUPLE(slot));
+
+	if (NULL == aslot->compressed_slot)
+	{
+		MemoryContext oldmctx;
+
+		if (NULL == tupdesc)
+			elog(ERROR, "cannot make compressed table slot without tuple descriptor");
+
+		oldmctx = MemoryContextSwitchTo(slot->tts_mcxt);
+		aslot->compressed_slot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsBufferHeapTuple);
+		MemoryContextSwitchTo(oldmctx);
+	}
+
+	return aslot->compressed_slot;
+}
+
+static inline TupleTableSlot *
+arrow_slot_get_noncompressed_slot(TupleTableSlot *slot)
+{
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+
+	Assert(TTS_IS_ARROWTUPLE(slot));
+	Assert(aslot->noncompressed_slot);
+
+	return aslot->noncompressed_slot;
 }
 
 #endif /* PG_ARROW_TUPTABLE_H */
