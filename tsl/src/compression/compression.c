@@ -2092,10 +2092,9 @@ decompress_batches_for_insert(ChunkInsertState *cis, Chunk *chunk, TupleTableSlo
 						  decompressor.compressed_datums,
 						  decompressor.compressed_is_nulls);
 
-		write_logical_replication_msg_decompression_start();
-		row_decompressor_decompress_row(&decompressor, NULL);
-		write_logical_replication_msg_decompression_end();
-
+		/* Need to delete the tuple before we insert the new one when using
+		 * compression TAM. Otherwise, there could be a unique index
+		 * conflict */
 		TM_FailureData tmfd;
 		TM_Result result pg_attribute_unused();
 		result = table_tuple_delete(in_rel,
@@ -2107,6 +2106,9 @@ decompress_batches_for_insert(ChunkInsertState *cis, Chunk *chunk, TupleTableSlo
 									&tmfd,
 									false);
 		Assert(result == TM_Ok);
+		write_logical_replication_msg_decompression_start();
+		row_decompressor_decompress_row(&decompressor, NULL);
+		write_logical_replication_msg_decompression_end();
 	}
 
 	table_endscan(heapScan);

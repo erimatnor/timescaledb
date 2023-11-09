@@ -2,7 +2,7 @@
 -- Please see the included NOTICE for copyright information and
 -- LICENSE-TIMESCALE for a copy of the license.
 
-CREATE TABLE readings(time timestamptz, location int, device int, temp float, humidity float);
+CREATE TABLE readings(time timestamptz UNIQUE, location int, device int, temp float, humidity float);
 
 SELECT create_hypertable('readings', 'time');
 
@@ -47,6 +47,11 @@ WHERE location = 1;
 -- will automatically compress the chunk.
 ALTER TABLE :chunk SET ACCESS METHOD tscompression;
 
+-- Show access method used on chunk
+SELECT c.relname, a.amname FROM pg_class c
+INNER JOIN pg_am a ON (c.relam = a.oid)
+WHERE c.oid = :'chunk'::regclass;
+
 -- This should compress the chunk
 SELECT chunk_name FROM chunk_compression_stats('readings') WHERE compression_status='Compressed';
 
@@ -79,11 +84,57 @@ WHERE location = 1;
 SELECT count(*) FROM :chunk
 WHERE location = 1;
 
+
+-- Test that a conflict happens when inserting a value that already exists in the 
+-- compressed part of the chunk
+SELECT count(*) FROM :chunk WHERE time  = '2022-06-01'::timestamptz;
+
+\set ON_ERROR_STOP 0
+INSERT INTO readings VALUES ('2022-06-01', 1, 1, 1.0, 1.0);
+-- Same result if inserted directly into the compressed chunk
+INSERT INTO :chunk VALUES ('2022-06-01', 1, 1, 1.0, 1.0);
+\set ON_ERROR_STOP 1
+
+-- Test insert of a non-conflicting value into the compressed chunk,
+-- first directly into chunk and then via hypertable. The value should
+-- end up in the non-compressed part in contrast to the conflicting
+-- value above.
+INSERT INTO :chunk VALUES ('2022-06-01 00:00:02', 1, 1, 1.0, 1.0);
+INSERT INTO readings VALUES ('2022-06-01 00:00:03', 1, 1, 1.0, 1.0);
+
+SELECT * FROM readings WHERE time BETWEEN '2022-06-01'::timestamptz AND '2022-06-01 01:00'::timestamptz ORDER BY time ASC LIMIT 10;
+
+-- Inserting the same values again should lead to conflicts
+\set ON_ERROR_STOP 0
+INSERT INTO :chunk VALUES ('2022-06-01 00:00:02', 1, 1, 1.0, 1.0);
+INSERT INTO readings VALUES ('2022-06-01 00:00:03'::timestamptz, 1, 1, 1.0, 1.0);
+\set ON_ERROR_STOP 1
+
+SELECT device, count(*) FROM readings WHERE device=1 GROUP BY device;
+-- Speculative insert when row is in the non-compressed part
+INSERT INTO :chunk VALUES ('2022-06-01 00:00:02', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 2;
+-- Show the updated tuple
+SELECT * FROM readings WHERE time = '2022-06-01 00:00:02'::timestamptz;
+INSERT INTO readings VALUES ('2022-06-01 00:00:02', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 3;
+SELECT * FROM readings WHERE time = '2022-06-01 00:00:02'::timestamptz;
+
+-- Speculative insert when row is in the compressed part
+INSERT INTO :chunk VALUES ('2022-06-01', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 2;
+SELECT * FROM readings WHERE time = '2022-06-01'::timestamptz;
+INSERT INTO readings VALUES ('2022-06-01', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 3;
+SELECT * FROM readings WHERE time = '2022-06-01'::timestamptz;
+
+
 -- We should be able to change it back to heap.
 ALTER TABLE :chunk SET ACCESS METHOD heap;
+-- Show access method used on chunk
+SELECT c.relname, a.amname FROM pg_class c
+INNER JOIN pg_am a ON (c.relam = a.oid)
+WHERE c.oid = :'chunk'::regclass;
 
 -- Should give the same result as above
 SELECT device, count(*) INTO decomp FROM readings GROUP BY device;
 
--- Row counts for each device should match, so this should be empty.
-SELECT device FROM orig JOIN decomp USING (device) WHERE orig.count != decomp.count;
+-- Row counts for each device should match, except for the chunk we did inserts on.
+SELECT device, orig.count, decomp.count, (decomp.count - orig.count) AS diff
+FROM orig JOIN decomp USING (device) WHERE orig.count != decomp.count;

@@ -44,7 +44,7 @@ static const TableAmRoutine compressionam_methods;
 static void compressionam_handler_end_conversion(Oid relid);
 
 static Oid
-get_compressed_chunk_relid(Oid chunk_relid)
+get_compressed_table_relid(Oid chunk_relid)
 {
 	int32 chunk_id = ts_chunk_get_id_by_relid(chunk_relid);
 	int32 compressed_chunk_id = ts_chunk_get_compressed_chunk_id(chunk_id);
@@ -317,7 +317,7 @@ compressionam_index_fetch_begin(Relation rel)
 {
 	const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
 	IndexFetchComprData *cscan = palloc0(sizeof(IndexFetchComprData));
-	Oid cchunk_relid = get_compressed_chunk_relid(RelationGetRelid(rel));
+	Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(rel));
 	Relation crel = table_open(cchunk_relid, AccessShareLock);
 
 	cscan->h_base.rel = rel;
@@ -378,9 +378,7 @@ compressionam_index_fetch_tuple(struct IndexFetchTableData *scan, ItemPointer ti
 												all_dead);
 
 		if (result)
-		{
 			ExecStoreArrowTuple(slot, InvalidTupleIndex);
-		}
 
 		return result;
 	}
@@ -445,11 +443,17 @@ static bool
 compressionam_fetch_row_version(Relation relation, ItemPointer tid, Snapshot snapshot,
 								TupleTableSlot *slot)
 {
-	if (is_compressed_tid(tid))
+	if (!is_compressed_tid(tid))
 	{
 		/* Just pass this on to regular heap AM */
 		const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
-		return heapam->tuple_fetch_row_version(relation, tid, snapshot, slot);
+		TupleTableSlot *child_slot = arrow_slot_get_noncompressed_slot(slot);
+		bool result = heapam->tuple_fetch_row_version(relation, tid, snapshot, child_slot);
+
+		if (result)
+			ExecStoreArrowTuple(slot, InvalidTupleIndex);
+
+		return result;
 	}
 
 	FEATURE_NOT_SUPPORTED;
@@ -457,7 +461,7 @@ compressionam_fetch_row_version(Relation relation, ItemPointer tid, Snapshot sna
 	ItemPointerData decoded_tid;
 
 	uint16 tuple_index = compressed_tid_to_tid(&decoded_tid, tid);
-	Oid compr_relid = get_compressed_chunk_relid(RelationGetRelid(relation));
+	Oid compr_relid = get_compressed_table_relid(RelationGetRelid(relation));
 	Relation compr_rel = table_open(compr_relid, AccessShareLock);
 	TupleTableSlot *compr_slot = table_slot_create(compr_rel, NULL);
 
@@ -477,15 +481,14 @@ compressionam_tuple_tid_valid(TableScanDesc scan, ItemPointer tid)
 static bool
 compressionam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot, Snapshot snapshot)
 {
-	FEATURE_NOT_SUPPORTED;
 	return false;
 }
 
 static TransactionId
 compressionam_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 {
-	FEATURE_NOT_SUPPORTED;
-	return 0;
+	const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
+	return heapam->index_delete_tuples(rel, delstate);
 }
 
 /* ----------------------------------------------------------------------------
@@ -519,21 +522,38 @@ static void
 compressionam_tuple_insert_speculative(Relation relation, TupleTableSlot *slot, CommandId cid,
 									   int options, BulkInsertStateData *bistate, uint32 specToken)
 {
-	FEATURE_NOT_SUPPORTED;
+	const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
+	elog(NOTICE, "insert speculative");
+	heapam->tuple_insert_speculative(relation, slot, cid, options, bistate, specToken);
 }
 
 static void
 compressionam_tuple_complete_speculative(Relation relation, TupleTableSlot *slot, uint32 specToken,
 										 bool succeeded)
 {
-	FEATURE_NOT_SUPPORTED;
+	const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
+	elog(NOTICE, "complete peculative");
+	heapam->tuple_complete_speculative(relation, slot, specToken, succeeded);
 }
 
 static TM_Result
 compressionam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid, Snapshot snapshot,
 						   Snapshot crosscheck, bool wait, TM_FailureData *tmfd, bool changingPart)
 {
-	FEATURE_NOT_SUPPORTED;
+	if (!is_compressed_tid(tid))
+	{
+		/* Just pass this on to regular heap AM */
+		const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
+		return heapam
+			->tuple_delete(relation, tid, cid, snapshot, crosscheck, wait, tmfd, changingPart);
+	}
+
+	/* This shouldn't happen because hypertable_modify should have
+	 * decompressed the data to be deleted already. It can happen, however, if
+	 * DELETE is run directly on a hypertable chunk, because that case isn't
+	 * handle in the current code for DML on compressed chunks. */
+	elog(ERROR, "cannot modify compressed table");
+
 	return TM_Ok;
 }
 
@@ -542,9 +562,7 @@ compressionam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *
 						   Snapshot snapshot, Snapshot crosscheck, bool wait, TM_FailureData *tmfd,
 						   LockTupleMode *lockmode, bool *update_indexes)
 {
-	FEATURE_NOT_SUPPORTED;
-
-	if (is_compressed_tid(otid))
+	if (!is_compressed_tid(otid))
 	{
 		/* Just pass this on to regular heap AM */
 		const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
@@ -560,6 +578,12 @@ compressionam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *
 									update_indexes);
 	}
 
+	/* This shouldn't happen because hypertable_modify should have
+	 * decompressed the data to be deleted already. It can happen, however, if
+	 * UPDATE is run directly on a hypertable chunk, because that case isn't
+	 * handle in the current code for DML on compressed chunks. */
+	elog(ERROR, "cannot modify compressed table");
+
 	return TM_Ok;
 }
 
@@ -568,8 +592,53 @@ compressionam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 						 TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
 						 LockWaitPolicy wait_policy, uint8 flags, TM_FailureData *tmfd)
 {
-	FEATURE_NOT_SUPPORTED;
-	return TM_Ok;
+	TM_Result result;
+
+	if (is_compressed_tid(tid))
+	{
+		Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(relation));
+		/* SELECT FOR UPDATE takes RowShareLock, so assume this
+		 * lockmode. Another option to consider is take same lock as currently
+		 * held on the non-compressed relation */
+		Relation crel = table_open(cchunk_relid, RowShareLock);
+		TupleTableSlot *child_slot = arrow_slot_get_compressed_slot(slot, RelationGetDescr(crel));
+		ItemPointerData decoded_tid;
+
+		uint16 tuple_index = compressed_tid_to_tid(&decoded_tid, tid);
+		result = crel->rd_tableam->tuple_lock(crel,
+											  &decoded_tid,
+											  snapshot,
+											  child_slot,
+											  cid,
+											  mode,
+											  wait_policy,
+											  flags,
+											  tmfd);
+
+		if (result == TM_Ok)
+			ExecStoreArrowTuple(slot, tuple_index);
+
+		table_close(crel, NoLock);
+	}
+	else
+	{
+		const TableAmRoutine *heapam = GetHeapamTableAmRoutine();
+		TupleTableSlot *child_slot = arrow_slot_get_noncompressed_slot(slot);
+		result = heapam->tuple_lock(relation,
+									tid,
+									snapshot,
+									child_slot,
+									cid,
+									mode,
+									wait_policy,
+									flags,
+									tmfd);
+
+		if (result == TM_Ok)
+			ExecStoreArrowTuple(slot, InvalidTupleIndex);
+	}
+
+	return result;
 }
 
 static void
@@ -618,7 +687,7 @@ compressionam_relation_copy_for_cluster(Relation OldCompression, Relation NewCom
 static void
 compressionam_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
-	Oid cchunk_relid = get_compressed_chunk_relid(RelationGetRelid(rel));
+	Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(rel));
 	LOCKMODE lmode =
 		(params->options & VACOPT_FULL) ? AccessExclusiveLock : ShareUpdateExclusiveLock;
 
@@ -820,7 +889,7 @@ compressionam_index_build_range_scan(Relation relation, Relation indexRelation,
 									 BlockNumber numblocks, IndexBuildCallback callback,
 									 void *callback_state, TableScanDesc scan)
 {
-	Oid cchunk_relid = get_compressed_chunk_relid(RelationGetRelid(relation));
+	Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(relation));
 	Relation crel = table_open(cchunk_relid, AccessShareLock);
 	IndexCallbackState icstate = {
 		.callback = callback,
@@ -929,7 +998,7 @@ compressionam_relation_size(Relation rel, ForkNumber forkNumber)
 {
 	uint64 size = table_block_relation_size(rel, forkNumber);
 	/*
-	Oid cchunk_relid = get_compressed_chunk_relid(RelationGetRelid(rel));
+	Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(rel));
 	Relation crel = try_relation_open(cchunk_relid, AccessShareLock);
 
 	if (crel == NULL)
@@ -948,7 +1017,7 @@ static void
 compressionam_estimate_rel_size(Relation rel, int32 *attr_widths, BlockNumber *pages,
 								double *tuples, double *allvisfrac)
 {
-	Oid cchunk_relid = get_compressed_chunk_relid(RelationGetRelid(rel));
+	Oid cchunk_relid = get_compressed_table_relid(RelationGetRelid(rel));
 
 	if (!OidIsValid(cchunk_relid))
 		return;
