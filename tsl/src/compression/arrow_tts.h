@@ -48,7 +48,6 @@ typedef struct ArrowTupleTableSlot
 	TupleTableSlot *noncompressed_slot;
 	/* compressed slot: used when reading from the compressed child relation */
 	TupleTableSlot *compressed_slot;
-	TupleDesc compressed_tupdesc;
 	ArrowArray **arrow_columns;
 	uint16 tuple_index; /* Index of this particular tuple in the compressed
 						 * (columnar data) child tuple. Note that the first
@@ -91,7 +90,7 @@ extern TupleTableSlot *ExecStoreArrowTuple(TupleTableSlot *slot, uint16 tuple_in
 
 /* Compute a 64-bits value from the item pointer data */
 static uint64
-bits_from_tid(ItemPointer tid)
+bits_from_tid(const ItemPointerData *tid)
 {
 	return (ItemPointerGetBlockNumber(tid) << OFFSET_BITS) | ItemPointerGetOffsetNumber(tid);
 }
@@ -101,7 +100,7 @@ bits_from_tid(ItemPointer tid)
  * shifted to insert the tuple index as the least significant bits of the TID.
  */
 static inline void
-tid_to_compressed_tid(ItemPointer out_tid, ItemPointer in_tid, uint16 tuple_index)
+tid_to_compressed_tid(ItemPointerData *out_tid, const ItemPointerData *in_tid, uint16 tuple_index)
 {
 	const uint64 bits = (bits_from_tid(in_tid) << TUPINDEX_BITS) | tuple_index;
 
@@ -115,7 +114,7 @@ tid_to_compressed_tid(ItemPointer out_tid, ItemPointer in_tid, uint16 tuple_inde
 }
 
 static inline uint16
-compressed_tid_to_tid(ItemPointer out_tid, ItemPointer in_tid)
+compressed_tid_to_tid(ItemPointerData *out_tid, const ItemPointerData *in_tid)
 {
 	const uint64 orig_bits = bits_from_tid(in_tid);
 	const uint16 tuple_index = orig_bits & TUPINDEX_MASK;
@@ -133,7 +132,7 @@ compressed_tid_to_tid(ItemPointer out_tid, ItemPointer in_tid)
 }
 
 static inline bool
-is_compressed_tid(ItemPointer itemptr)
+is_compressed_tid(const ItemPointerData *itemptr)
 {
 	return (ItemPointerGetBlockNumber(itemptr) & COMPRESSED_FLAG) != 0;
 }
