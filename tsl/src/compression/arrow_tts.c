@@ -175,6 +175,21 @@ ExecStoreArrowTuple(TupleTableSlot *slot, uint16 tuple_index)
 	return slot;
 }
 
+static void
+copy_slot_values(const TupleTableSlot *from, TupleTableSlot *to, int natts)
+{
+	Assert(!TTS_EMPTY(from));
+
+	for (int i = 0; i < natts; i++)
+	{
+		to->tts_values[i] = from->tts_values[i];
+		to->tts_isnull[i] = from->tts_isnull[i];
+	}
+
+	to->tts_flags &= ~TTS_FLAG_EMPTY;
+	to->tts_nvalid = natts;
+}
+
 /*
  * Materialize an Arrow slot.
  *
@@ -187,6 +202,8 @@ tts_arrow_materialize(TupleTableSlot *slot)
 
 	Assert(!TTS_EMPTY(slot));
 	Assert(NULL != aslot->child_slot);
+	if (TTS_EMPTY(aslot->child_slot))
+		copy_slot_values(slot, aslot->child_slot, slot->tts_tupleDescriptor->natts);
 	ExecMaterializeSlot(aslot->child_slot);
 }
 
@@ -200,21 +217,6 @@ is_compressed_col(const TupleDesc tupdesc, AttrNumber attno)
 		typinfo = ts_custom_type_cache_get(CUSTOM_TYPE_COMPRESSED_DATA);
 
 	return coltypid == typinfo->type_oid;
-}
-
-static void
-copy_slot_values(const TupleTableSlot *from, TupleTableSlot *to, int natts)
-{
-	Assert(!TTS_EMPTY(from));
-
-	for (int i = 0; i < natts; i++)
-	{
-		to->tts_values[i] = from->tts_values[i];
-		to->tts_isnull[i] = from->tts_isnull[i];
-	}
-
-	to->tts_flags &= ~TTS_FLAG_EMPTY;
-	to->tts_nvalid = from->tts_tupleDescriptor->natts;
 }
 
 static void
