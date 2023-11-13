@@ -57,6 +57,7 @@ extern TSDLLEXPORT bool ts_guc_enable_2pc;
 extern TSDLLEXPORT int ts_guc_max_insert_batch_size;
 extern TSDLLEXPORT bool ts_guc_enable_compression_indexscan;
 extern TSDLLEXPORT bool ts_guc_enable_bulk_decompression;
+extern TSDLLEXPORT bool ts_guc_enable_columnarscan;
 extern TSDLLEXPORT int ts_guc_bgw_log_level;
 
 #ifdef TS_DEBUG
