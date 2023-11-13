@@ -95,6 +95,7 @@ bool ts_guc_enable_chunkwise_aggregation = true;
 bool ts_guc_enable_vectorized_aggregation = true;
 TSDLLEXPORT bool ts_guc_enable_compression_indexscan = true;
 TSDLLEXPORT bool ts_guc_enable_bulk_decompression = true;
+TSDLLEXPORT bool ts_guc_enable_columnarscan = true;
 TSDLLEXPORT int ts_guc_bgw_log_level = WARNING;
 TSDLLEXPORT bool ts_guc_enable_skip_scan = true;
 /* default value of ts_guc_max_open_chunks_per_insert and ts_guc_max_cached_chunks_per_hypertable
@@ -619,6 +620,17 @@ _guc_init(void)
 							 "Increases throughput of decompression, but might increase query "
 							 "memory usage",
 							 &ts_guc_enable_bulk_decompression,
+							 true,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("timescaledb.enable_columnarscan",
+							 "Enable columnar-optimized scans for supported access methods",
+							 "Use scan optimizations for columnar-oriented storage",
+							 &ts_guc_enable_columnarscan,
 							 true,
 							 PGC_USERSET,
 							 0,
