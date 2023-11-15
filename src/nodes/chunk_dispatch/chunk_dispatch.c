@@ -165,13 +165,22 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 	{
 		if (cis->chunk_compressed)
 		{
+			OnConflictAction onconflict_action = chunk_dispatch_get_on_conflict_action(dispatch);
+			Oid amoid = get_table_am_oid("tscompression", false);
+
+			if (cis->rel->rd_rel->relam == amoid && onconflict_action != ONCONFLICT_UPDATE)
+			{
+				/* With compression TAM, a unique index covers both the
+				 * compressed and non-compressed data, so there is no need to
+				 * decompress anything when doing inserts. */
+			}
 			/*
 			 * If this is an INSERT into a compressed chunk with UNIQUE or
 			 * PRIMARY KEY constraints we need to make sure any batches that could
 			 * potentially lead to a conflict are in the decompressed chunk so
 			 * postgres can do proper constraint checking.
 			 */
-			if (ts_cm_functions->decompress_batches_for_insert)
+			else if (ts_cm_functions->decompress_batches_for_insert)
 			{
 				/* Get the chunk if its not already been loaded.
 				 * It's needed for decompress_batches_for_insert
@@ -180,8 +189,6 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 				if (chunk == NULL)
 					chunk = ts_hypertable_find_chunk_for_point(dispatch->hypertable, point);
 				ts_cm_functions->decompress_batches_for_insert(cis, chunk, slot);
-				OnConflictAction onconflict_action =
-					chunk_dispatch_get_on_conflict_action(dispatch);
 				/* mark rows visible */
 				if (onconflict_action == ONCONFLICT_UPDATE)
 					dispatch->estate->es_output_cid = GetCurrentCommandId(true);
