@@ -18,9 +18,6 @@ ALTER TABLE readings SET (
       timescaledb.compress_segmentby = 'device'
 );
 
-
-SET timescaledb.enable_transparent_decompression TO false;
-
 SELECT format('%I.%I', chunk_schema, chunk_name)::regclass AS chunk
   FROM timescaledb_information.chunks
  WHERE format('%I.%I', hypertable_schema, hypertable_name)::regclass = 'readings'::regclass
@@ -46,6 +43,7 @@ WHERE location = 1;
 -- We should be able to set the table access method for a chunk, which
 -- will automatically compress the chunk.
 ALTER TABLE :chunk SET ACCESS METHOD tscompression;
+SET timescaledb.enable_transparent_decompression TO false;
 
 -- Show access method used on chunk
 SELECT c.relname, a.amname FROM pg_class c
@@ -111,22 +109,28 @@ INSERT INTO readings VALUES ('2022-06-01 00:00:03'::timestamptz, 1, 1, 1.0, 1.0)
 \set ON_ERROR_STOP 1
 
 SELECT device, count(*) FROM readings WHERE device=1 GROUP BY device;
--- Speculative insert when row is in the non-compressed part
-INSERT INTO :chunk VALUES ('2022-06-01 00:00:02', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 2;
+-- Speculative insert when conflicting row is in the non-compressed part
+INSERT INTO :chunk VALUES ('2022-06-01 00:00:02', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 11;
 -- Show the updated tuple
 SELECT * FROM readings WHERE time = '2022-06-01 00:00:02'::timestamptz;
-INSERT INTO readings VALUES ('2022-06-01 00:00:02', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 3;
+INSERT INTO readings VALUES ('2022-06-01 00:00:02', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 12;
 SELECT * FROM readings WHERE time = '2022-06-01 00:00:02'::timestamptz;
 
--- Speculative insert when row is in the compressed part
-INSERT INTO :chunk VALUES ('2022-06-01', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 2;
+-- Speculative insert when conflicting row is in the compressed part
+INSERT INTO :chunk VALUES ('2022-06-01', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 13;
 SELECT * FROM readings WHERE time = '2022-06-01'::timestamptz;
-INSERT INTO readings VALUES ('2022-06-01', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 3;
+INSERT INTO readings VALUES ('2022-06-01', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 14;
 SELECT * FROM readings WHERE time = '2022-06-01'::timestamptz;
 
+-- Speculative insert without a conflicting
+INSERT INTO :chunk VALUES ('2022-06-01 00:00:06', 2, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 15;
+SELECT * FROM readings WHERE time = '2022-06-01 00:00:06';
+INSERT INTO readings VALUES ('2022-06-01 00:00:07', 3, 1, 1.0, 1.0) ON CONFLICT (time) DO UPDATE SET location = 16;
+SELECT * FROM readings WHERE time = '2022-06-01 00:00:07';
 
 -- We should be able to change it back to heap.
 ALTER TABLE :chunk SET ACCESS METHOD heap;
+
 -- Show access method used on chunk
 SELECT c.relname, a.amname FROM pg_class c
 INNER JOIN pg_am a ON (c.relam = a.oid)
@@ -136,5 +140,5 @@ WHERE c.oid = :'chunk'::regclass;
 SELECT device, count(*) INTO decomp FROM readings GROUP BY device;
 
 -- Row counts for each device should match, except for the chunk we did inserts on.
-SELECT device, orig.count, decomp.count, (decomp.count - orig.count) AS diff
+SELECT device, orig.count AS orig_count, decomp.count AS decomp_count, (decomp.count - orig.count) AS diff
 FROM orig JOIN decomp USING (device) WHERE orig.count != decomp.count;

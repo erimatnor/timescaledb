@@ -2203,7 +2203,7 @@ decompress_batches_for_insert(ChunkInsertState *cis, Chunk *chunk, TupleTableSlo
 									true,
 									&tmfd,
 									false);
-		Assert(result == TM_Ok);
+		Assert(result == TM_Ok || result == TM_Deleted);
 
 		write_logical_replication_msg_decompression_start();
 		row_decompressor_decompress_row_to_table(&decompressor);
