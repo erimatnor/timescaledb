@@ -7,9 +7,11 @@
 #define PG_ARROW_TUPTABLE_H
 
 #include <postgres.h>
+
 #include <access/tupdesc.h>
 #include <executor/tuptable.h>
 #include <nodes/bitmapset.h>
+#include <utils/hsearch.h>
 
 #include "arrow_c_data_interface.h"
 #include <utils/palloc.h>
@@ -53,6 +55,9 @@ typedef struct ArrowTupleTableSlot
 						 * (columnar data) child tuple. Note that the first
 						 * value has index 1. If the index is 0 it means the
 						 * child slot points to a non-compressed tuple. */
+	HTAB *arrow_column_cache;
+	size_t cache_total;
+	size_t cache_misses;
 	MemoryContext arrowdata_mcxt;
 	MemoryContext decompression_mcxt;
 	Bitmapset *segmentby_columns;
@@ -169,5 +174,7 @@ arrow_slot_get_noncompressed_slot(TupleTableSlot *slot)
 
 	return aslot->noncompressed_slot;
 }
+
+bool is_compressed_col(const TupleDesc tupdesc, AttrNumber attno);
 
 #endif /* PG_ARROW_TUPTABLE_H */

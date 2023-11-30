@@ -2,6 +2,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/api.c
     ${CMAKE_CURRENT_SOURCE_DIR}/array.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arrow_tts.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/arrow_cache.c
     ${CMAKE_CURRENT_SOURCE_DIR}/compression.c
     ${CMAKE_CURRENT_SOURCE_DIR}/compressionam_handler.c
     ${CMAKE_CURRENT_SOURCE_DIR}/create.c
