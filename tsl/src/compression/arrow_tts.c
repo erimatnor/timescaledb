@@ -10,6 +10,7 @@
 #include <storage/itemptr.h>
 
 #include "arrow_tts.h"
+#include "arrow_cache.h"
 #include "compression.h"
 #include "custom_type_cache.h"
 
@@ -33,13 +34,6 @@ tts_arrow_init(TupleTableSlot *slot)
 													  /* minContextSize = */ 0,
 													  /* initBlockSize = */ 64 * 1024,
 													  /* maxBlockSize = */ 64 * 1024);
-	aslot->arrowdata_mcxt = AllocSetContextCreate(slot->tts_mcxt,
-												  "Arrow data",
-
-												  /* minContextSize = */ 0,
-												  /* initBlockSize = */ 64 * 1024,
-												  /* maxBlockSize = */ 64 * 1024);
-
 	/*
 	 * Set up child slots, one for the non-compressed relation and one for the
 	 * compressed relation.
@@ -57,6 +51,8 @@ tts_arrow_init(TupleTableSlot *slot)
 	aslot->child_slot = aslot->noncompressed_slot;
 	MemoryContextSwitchTo(oldmctx);
 	ItemPointerSetInvalid(&slot->tts_tid);
+
+	arrow_column_cache_init(aslot);
 }
 
 /*
@@ -72,16 +68,17 @@ tts_arrow_release(TupleTableSlot *slot)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
 
-	if (NULL != aslot->arrow_columns)
-		aslot->arrow_columns = NULL;
+	arrow_column_cache_release(aslot);
 
 	MemoryContextDelete(aslot->decompression_mcxt);
 	ExecDropSingleTupleTableSlot(aslot->noncompressed_slot);
 
-	/* compressed slot was lazily iniialized */
+	/* compressed slot was lazily initialized */
 	if (NULL != aslot->compressed_slot)
 		ExecDropSingleTupleTableSlot(aslot->compressed_slot);
 
+	/* Do we need these? The slot is being released after all. */
+	aslot->arrow_columns = NULL;
 	aslot->compressed_slot = NULL;
 	aslot->noncompressed_slot = NULL;
 }
@@ -96,7 +93,6 @@ clear_arrow_parent(TupleTableSlot *slot)
 
 	Assert(TTS_IS_ARROWTUPLE(slot));
 
-	MemoryContextReset(aslot->arrowdata_mcxt);
 	aslot->arrow_columns = NULL;
 	slot->tts_nvalid = 0;
 	slot->tts_flags |= TTS_FLAG_EMPTY;
@@ -235,7 +231,7 @@ tts_arrow_materialize(TupleTableSlot *slot)
 	ExecMaterializeSlot(aslot->child_slot);
 }
 
-static bool
+bool
 is_compressed_col(const TupleDesc tupdesc, AttrNumber attno)
 {
 	static CustomTypeInfo *typinfo = NULL;
@@ -251,8 +247,6 @@ static void
 tts_arrow_getsomeattrs(TupleTableSlot *slot, int attnum)
 {
 	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
-	const TupleDesc tupdesc = slot->tts_tupleDescriptor;
-	const TupleDesc compressed_tupdesc = aslot->child_slot->tts_tupleDescriptor;
 
 	if (attnum < 1 || attnum > slot->tts_tupleDescriptor->natts)
 		elog(ERROR, "invalid number of attributes requested");
@@ -271,71 +265,22 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int attnum)
 		return;
 	}
 
-	/* The child slot points to a compressed tuple, we need to decompress and
-	 * fill in the values. */
-	if (NULL == aslot->arrow_columns)
-	{
-		aslot->arrow_columns =
-			MemoryContextAllocZero(aslot->arrowdata_mcxt,
-								   sizeof(ArrowArray *) * slot->tts_tupleDescriptor->natts);
-	}
+	/* The child slot points to a compressed tuple, so read the tuple. */
+	ArrowColumnCacheEntry *restrict entry = arrow_column_cache_read(aslot, attnum);
 
+	/* Copy over cached data references to the slot */
+	aslot->segmentby_columns = entry->segmentby_columns;
+	aslot->arrow_columns = entry->arrow_columns;
+
+	/* Build the non-compressed tuple values array from the cached data. */
 	for (int i = 0; i < attnum; i++)
 	{
 		const AttrNumber attno = AttrOffsetGetAttrNumber(i);
 
-		/* Decompress the column if not already done. */
-		if (aslot->arrow_columns[i] == NULL)
-		{
-			if (is_compressed_col(compressed_tupdesc, attno))
-			{
-				bool isnull;
-				Datum value = slot_getattr(aslot->child_slot, attno, &isnull);
-
-				if (isnull)
-				{
-					// do nothing
-				}
-				else
-				{
-					const Form_pg_attribute attr = &tupdesc->attrs[i];
-					const CompressedDataHeader *header =
-						(CompressedDataHeader *) PG_DETOAST_DATUM(value);
-					DecompressAllFunction decompress_all =
-						tsl_get_decompress_all_function(header->compression_algorithm,
-														attr->atttypid);
-					Assert(decompress_all != NULL);
-					MemoryContext oldcxt = MemoryContextSwitchTo(aslot->decompression_mcxt);
-					aslot->arrow_columns[i] =
-						decompress_all(PointerGetDatum(header),
-									   slot->tts_tupleDescriptor->attrs[i].atttypid,
-									   aslot->arrowdata_mcxt);
-					MemoryContextReset(aslot->decompression_mcxt);
-					MemoryContextSwitchTo(oldcxt);
-				}
-			}
-			else
-			{
-				/* Since we are looping over the attributes of the
-				 * non-compressed slot, we will either see only compressed
-				 * columns or the segment-by column. If the column is not
-				 * compressed, it must be the segment-by columns. The
-				 * segment-by column is not compressed and the value is the
-				 * same for all rows in the compressed tuple. */
-
-				/* Remember the segment-by column */
-				MemoryContext oldcxt = MemoryContextSwitchTo(slot->tts_mcxt);
-				aslot->segmentby_columns = bms_add_member(aslot->segmentby_columns, attno);
-				MemoryContextSwitchTo(oldcxt);
-			}
-		}
-
-		/* At this point the column should be decompressed, if it is a
-		 * compressed column. */
 		if (bms_is_member(attno, aslot->segmentby_columns))
 		{
-			/* Segment-by column. Value is not compressed so get from child
-			 * slot. */
+			/* Segment-by column. Value is not compressed so get directly from
+			 * child slot. */
 			slot->tts_values[i] = slot_getattr(aslot->child_slot, attno, &slot->tts_isnull[i]);
 		}
 		else if (aslot->arrow_columns[i] == NULL)
@@ -474,6 +419,17 @@ tts_arrow_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 			child_srcslot = asrcslot->compressed_slot;
 			child_dstslot = arrow_slot_get_compressed_slot(dstslot, srcslot->tts_tupleDescriptor);
 		}
+
+		/*
+		 * If the lifetime of the new slot is different from the lifetime of
+		 * the old slot, problems ensue.
+		 *
+		 * To deal with this, we need a pin count or something similar so that
+		 * we do not delete the cache prematurely (that is, before both slots
+		 * are deleted).
+		 */
+		adstslot->arrow_column_cache = asrcslot->arrow_column_cache;
+		adstslot->arrowdata_mcxt = asrcslot->arrowdata_mcxt;
 
 		adstslot->tuple_index = asrcslot->tuple_index;
 		ItemPointerCopy(&srcslot->tts_tid, &dstslot->tts_tid);
