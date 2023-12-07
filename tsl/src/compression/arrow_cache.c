@@ -37,6 +37,8 @@ arrow_column_cache_init(ArrowTupleTableSlot *aslot)
 	ctl.hcxt = aslot->arrowdata_mcxt;
 	aslot->arrow_column_cache =
 		hash_create("Arrow column data cache", 32, &ctl, HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	aslot->arrow_column_cache_lru_count = 0;
+	dlist_init(&aslot->arrow_column_cache_lru);
 }
 
 void
@@ -61,9 +63,42 @@ arrow_column_cache_read(ArrowTupleTableSlot *aslot, int attnum)
 	Assert(aslot->arrow_column_cache != NULL);
 
 	ArrowColumnCacheEntry *restrict entry =
-		hash_search(aslot->arrow_column_cache, &key, HASH_ENTER, &found);
+		hash_search(aslot->arrow_column_cache, &key, HASH_FIND, &found);
 
 	aslot->cache_total++;
+
+	/* If entry was not found, we might have to prune the LRU list before
+	 * allocating a new entry */
+	if (!found)
+	{
+		if (aslot->arrow_column_cache_lru_count >= ARROW_DECOMPRESSION_CACHE_LRU_ENTRIES)
+		{
+			/* If we don't have room in the cache for the new entry, pick the
+			 * least recently used and remove it. */
+			entry = dlist_container(ArrowColumnCacheEntry,
+									node,
+									dlist_pop_head_node(&aslot->arrow_column_cache_lru));
+			if (!hash_search(aslot->arrow_column_cache, &entry->key, HASH_REMOVE, NULL))
+				elog(ERROR, "LRU cache for compressed rows corrupt");
+			--aslot->arrow_column_cache_lru_count;
+			for (int i = 0; i < entry->nvalid; ++i)
+				pfree(entry->arrow_columns[i]);
+			pfree(entry->segmentby_columns);
+			pfree(entry);
+		}
+
+		/* Allocate a new entry in the hash table. */
+		entry = hash_search(aslot->arrow_column_cache, &key, HASH_ENTER, &found);
+		dlist_push_tail(&aslot->arrow_column_cache_lru, &entry->node);
+		++aslot->arrow_column_cache_lru_count;
+		Assert(!found);
+	}
+	else
+	{
+		dlist_move_tail(&aslot->arrow_column_cache_lru, &entry->node);
+	}
+
+	Assert(entry);
 
 	/*
 	 * Entry might be new so fill in default values.
@@ -93,6 +128,11 @@ arrow_column_cache_read(ArrowTupleTableSlot *aslot, int attnum)
 
 		MemoryContextSwitchTo(oldmctx);
 		aslot->cache_misses++;
+	}
+	else
+	{
+		/* Move the entry found to the front of the LRU list */
+		dlist_move_tail(&aslot->arrow_column_cache_lru, &entry->node);
 	}
 
 	/*
