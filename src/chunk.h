@@ -182,7 +182,7 @@ extern TSDLLEXPORT Chunk *ts_chunk_get_by_relid(Oid relid, bool fail_if_not_foun
 extern TSDLLEXPORT void ts_chunk_free(Chunk *chunk);
 extern bool ts_chunk_exists(const char *schema_name, const char *table_name);
 extern TSDLLEXPORT int32 ts_chunk_get_hypertable_id_by_reloid(Oid relid);
-extern TSDLLEXPORT int32 ts_chunk_get_compressed_chunk_id(int32 chunk_id);
+extern TSDLLEXPORT int32 ts_chunk_get_compressed_chunk_id(int32 chunk_id, bool missing_ok);
 extern bool ts_chunk_get_hypertable_id_and_status_by_relid(Oid relid, int32 *hypertable_id,
 														   int32 *chunk_status);
 extern TSDLLEXPORT FormData_chunk ts_chunk_get_formdata(int32 chunk_id);
@@ -212,6 +212,8 @@ extern TSDLLEXPORT bool ts_chunk_unset_frozen(Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_is_frozen(Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_set_compressed_chunk(Chunk *chunk, int32 compressed_chunk_id);
 extern TSDLLEXPORT bool ts_chunk_clear_compressed_chunk(Chunk *chunk);
+extern TSDLLEXPORT void ts_chunk_drop_by_relid(Oid relid, DropBehavior behavior, int32 log_level,
+											   bool preserve_catalog_row);
 extern TSDLLEXPORT void ts_chunk_drop(const Chunk *chunk, DropBehavior behavior, int32 log_level);
 extern TSDLLEXPORT void ts_chunk_drop_preserve_catalog_row(const Chunk *chunk,
 														   DropBehavior behavior, int32 log_level);

@@ -2905,7 +2905,7 @@ ts_chunk_get_hypertable_id_by_reloid(Oid reliod)
  * Returns the compressed chunk id. The original chunk must exist.
  */
 int32
-ts_chunk_get_compressed_chunk_id(int32 chunk_id)
+ts_chunk_get_compressed_chunk_id(int32 chunk_id, bool missing_ok)
 {
 	FormData_chunk form;
 	PG_USED_FOR_ASSERTS_ONLY bool result =
@@ -3922,23 +3922,19 @@ chunks_return_srf(FunctionCallInfo fcinfo)
 		SRF_RETURN_DONE(funcctx);
 }
 
-static void
-ts_chunk_drop_internal(const Chunk *chunk, DropBehavior behavior, int32 log_level,
-					   bool preserve_catalog_row)
+void
+ts_chunk_drop_by_relid(Oid relid, DropBehavior behavior, int32 log_level, bool preserve_catalog_row)
 {
 	ObjectAddress objaddr = {
 		.classId = RelationRelationId,
-		.objectId = chunk->table_id,
+		.objectId = relid,
 	};
 
 	if (log_level >= 0)
-		elog(log_level,
-			 "dropping chunk %s.%s",
-			 NameStr(chunk->fd.schema_name),
-			 NameStr(chunk->fd.table_name));
+		elog(log_level, "dropping chunk %s", get_rel_name(relid));
 
 	/* Remove the chunk from the chunk table */
-	ts_chunk_delete_by_relid(chunk->table_id, behavior, preserve_catalog_row);
+	ts_chunk_delete_by_relid(relid, behavior, preserve_catalog_row);
 
 	/* Drop the table */
 	performDeletion(&objaddr, behavior, 0);
@@ -3947,13 +3943,13 @@ ts_chunk_drop_internal(const Chunk *chunk, DropBehavior behavior, int32 log_leve
 void
 ts_chunk_drop(const Chunk *chunk, DropBehavior behavior, int32 log_level)
 {
-	ts_chunk_drop_internal(chunk, behavior, log_level, false);
+	ts_chunk_drop_by_relid(chunk->table_id, behavior, log_level, false);
 }
 
 void
 ts_chunk_drop_preserve_catalog_row(const Chunk *chunk, DropBehavior behavior, int32 log_level)
 {
-	ts_chunk_drop_internal(chunk, behavior, log_level, true);
+	ts_chunk_drop_by_relid(chunk->table_id, behavior, log_level, true);
 }
 
 static void
