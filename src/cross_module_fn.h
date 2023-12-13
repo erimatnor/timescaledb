@@ -90,6 +90,7 @@ typedef struct CrossModuleFunctions
 	PGFunction move_chunk;
 
 	void (*ddl_command_start)(ProcessUtilityArgs *args);
+	void (*ddl_command_end)(EventTriggerData *trigdata);
 
 	/* Vectorized queries */
 	bool (*push_down_aggregation)(PlannerInfo *root, AggPath *aggregation_path, Path *subpath);
