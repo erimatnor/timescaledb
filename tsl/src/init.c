@@ -73,6 +73,12 @@ cache_syscache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
 	remote_connection_cache_invalidate_callback(arg, cacheid, hashvalue);
 }
 
+static void
+tsl_xact_event(XactEvent event, void *arg)
+{
+	compressionam_xact_event(event, arg);
+}
+
 /*
  * Cross module function initialization.
  *
@@ -185,6 +191,7 @@ CrossModuleFunctions tsl_cm_functions = {
 #endif
 	.compressionam_handler = compressionam_handler,
 	.ddl_command_start = tsl_ddl_command_start,
+	.ddl_command_end = tsl_ddl_command_end,
 	.data_node_add = data_node_add,
 	.data_node_delete = data_node_delete,
 	.data_node_attach = data_node_attach,
@@ -239,6 +246,7 @@ ts_module_cleanup_on_pg_exit(int code, Datum arg)
 	_remote_dist_txn_fini();
 	_remote_connection_cache_fini();
 	_continuous_aggs_cache_inval_fini();
+	UnregisterXactCallback(tsl_xact_event, NULL);
 }
 
 TS_FUNCTION_INFO_V1(ts_module_init);
@@ -260,6 +268,8 @@ ts_module_init(PG_FUNCTION_ARGS)
 	/* Register a cleanup function to be called when the backend exits */
 	if (register_proc_exit)
 		on_proc_exit(ts_module_cleanup_on_pg_exit, 0);
+
+	RegisterXactCallback(tsl_xact_event, NULL);
 	PG_RETURN_BOOL(true);
 }
 

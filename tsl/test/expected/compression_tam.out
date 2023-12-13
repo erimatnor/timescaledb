@@ -436,14 +436,19 @@ SELECT * FROM :chunk WHERE device < 4 AND location = 2 LIMIT 5;
 SET timescaledb.enable_columnarscan = false;
 EXPLAIN (analyze, verbose, costs off, timing off, summary off)
 SELECT * FROM :chunk WHERE device < 4 ORDER BY device ASC LIMIT 5;
-                                    QUERY PLAN                                    
-----------------------------------------------------------------------------------
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
  Limit (actual rows=5 loops=1)
    Output: "time", location, device, temp, humidity
-   ->  Seq Scan on _timescaledb_internal._hyper_1_1_chunk (actual rows=5 loops=1)
+   ->  Sort (actual rows=5 loops=1)
          Output: "time", location, device, temp, humidity
-         Filter: (_hyper_1_1_chunk.device < 4)
-(5 rows)
+         Sort Key: _hyper_1_1_chunk.device
+         Sort Method: top-N heapsort 
+         ->  Seq Scan on _timescaledb_internal._hyper_1_1_chunk (actual rows=1253 loops=1)
+               Output: "time", location, device, temp, humidity
+               Filter: (_hyper_1_1_chunk.device < 4)
+               Rows Removed by Filter: 10991
+(10 rows)
 
 -- We should be able to change it back to heap.
 -- Compression metadata should be cleaned up
@@ -455,7 +460,19 @@ WHERE format('%I.%I', c.schema_name, c.table_name)::regclass = :'chunk'::regclas
      1
 (1 row)
 
+SELECT device, count(*) INTO num_rows_before FROM :chunk GROUP BY device;
 ALTER TABLE :chunk SET ACCESS METHOD heap;
+SET timescaledb.enable_transparent_decompression TO true;
+SELECT device, count(*) INTO num_rows_after FROM :chunk GROUP BY device;
+SELECT device, num_rows_after.count AS after,
+	   num_rows_before.count AS before,
+	   (num_rows_after.count - num_rows_before.count) AS diff
+FROM num_rows_after JOIN num_rows_before USING (device)
+WHERE num_rows_after.count != num_rows_before.count;
+ device | after | before | diff 
+--------+-------+--------+------
+(0 rows)
+
 SELECT count(*) FROM _timescaledb_catalog.compression_chunk_size ccs
 INNER JOIN _timescaledb_catalog.chunk c ON (c.id = ccs.chunk_id)
 WHERE format('%I.%I', c.schema_name, c.table_name)::regclass = :'chunk'::regclass;
