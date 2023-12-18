@@ -3,6 +3,7 @@ name: Regression Linux i386
   push:
     branches:
       - main
+      - compresssion-tam
       - prerelease_test
     paths-ignore:
       - '**.md'

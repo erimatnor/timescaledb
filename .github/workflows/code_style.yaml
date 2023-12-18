@@ -3,6 +3,7 @@ name: Code style
   push:
     branches:
       - main
+      - compression-tam
       - prerelease_test
   pull_request:
 jobs:

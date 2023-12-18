@@ -5,6 +5,7 @@ name: pgspot
   push:
     branches:
       - main
+      - compression-tam
       - prerelease_test
 
 jobs:
