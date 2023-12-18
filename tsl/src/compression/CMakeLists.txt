@@ -4,6 +4,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/arrow_tts.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arrow_cache.c
     ${CMAKE_CURRENT_SOURCE_DIR}/arrow_cache_explain.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/attr_capture.c
     ${CMAKE_CURRENT_SOURCE_DIR}/compression.c
     ${CMAKE_CURRENT_SOURCE_DIR}/compression_storage.c
     ${CMAKE_CURRENT_SOURCE_DIR}/compression_test.c
