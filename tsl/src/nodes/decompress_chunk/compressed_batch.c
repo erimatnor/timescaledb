@@ -22,7 +22,7 @@
  * Create a single value ArrowArray from Postgres Datum. This is used to run
  * the usual vectorized predicates on compressed columns with default values.
  */
-static ArrowArray *
+ArrowArray *
 make_single_value_arrow(Oid pgtype, Datum datum, bool isnull)
 {
 	struct ArrowWithBuffers

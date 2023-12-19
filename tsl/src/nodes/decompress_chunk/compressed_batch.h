@@ -84,6 +84,7 @@ extern void compressed_batch_advance(DecompressContext *dcontext,
 extern void compressed_batch_save_first_tuple(DecompressContext *dcontext,
 											  DecompressBatchState *batch_state,
 											  TupleTableSlot *first_tuple_slot);
+extern ArrowArray *make_single_value_arrow(Oid pgtype, Datum datum, bool isnull);
 
 #define create_bulk_decompression_mctx(parent_mctx)                                                \
 	AllocSetContextCreate(parent_mctx,                                                             \
