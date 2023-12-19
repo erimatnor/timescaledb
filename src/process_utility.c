@@ -29,6 +29,7 @@
 #include <utils/acl.h>
 #include <utils/rel.h>
 #include <utils/inval.h>
+#include <utils/varlena.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
 #include <utils/builtins.h>
@@ -2818,6 +2819,24 @@ chunk_index_mappings_cmp(const void *p1, const void *p2)
 	return mapping[0]->chunkoid - mapping[1]->chunkoid;
 }
 
+static DDLResult
+process_explain_start(ProcessUtilityArgs *args)
+{
+	ExplainStmt *stmt = castNode(ExplainStmt, args->parsetree);
+	ListCell *lc;
+
+	if (ts_cm_functions->process_explain_def)
+	{
+		foreach (lc, stmt->options)
+		{
+			DefElem *opt = (DefElem *) lfirst(lc);
+			if (ts_cm_functions->process_explain_def(opt))
+				foreach_delete_current(stmt->options, lc);
+		}
+	}
+	return DDL_CONTINUE;
+}
+
 /*
  * Cluster a hypertable.
  *
@@ -4186,6 +4205,10 @@ process_ddl_command_start(ProcessUtilityArgs *args)
 			check_read_only = false;
 			handler = preprocess_execute;
 			break;
+		case T_ExplainStmt:
+			handler = process_explain_start;
+			break;
+
 		default:
 			handler = NULL;
 			break;

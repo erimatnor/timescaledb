@@ -18,6 +18,7 @@
 #include "chunk_api.h"
 #include "compression/api.h"
 #include "compression/array.h"
+#include "compression/arrow_cache_explain.h"
 #include "compression/compression.h"
 #include "compression/compressionam_handler.h"
 #include "compression/create.h"
@@ -80,6 +81,7 @@ CrossModuleFunctions tsl_cm_functions = {
 	.create_upper_paths_hook = tsl_create_upper_paths_hook,
 	.set_rel_pathlist_dml = tsl_set_rel_pathlist_dml,
 	.set_rel_pathlist_query = tsl_set_rel_pathlist_query,
+	.process_explain_def = tsl_process_explain_def,
 
 	/* bgw policies */
 	.policy_compression_add = policy_compression_add,
@@ -209,6 +211,7 @@ ts_module_init(PG_FUNCTION_ARGS)
 	_continuous_aggs_cache_inval_init();
 	_decompress_chunk_init();
 	_columnar_scan_init();
+	_arrow_cache_explain_init();
 	_skip_scan_init();
 	/* Register a cleanup function to be called when the backend exits */
 	if (register_proc_exit)
