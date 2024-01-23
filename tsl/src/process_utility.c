@@ -17,6 +17,7 @@
 #include "ts_catalog/continuous_agg.h"
 #include "hypertable_cache.h"
 #include "process_utility.h"
+#include <storage/lockdefs.h>
 
 void
 tsl_ddl_command_start(ProcessUtilityArgs *args)
@@ -62,6 +63,57 @@ tsl_ddl_command_start(ProcessUtilityArgs *args)
 		}
 		default:
 			break;
+	}
+}
+
+void
+tsl_process_vacuum_cmd(const VacuumStmt *vacstmt)
+{
+	/* Check if this is an ANALYZE statement */
+	bool analyze = !vacstmt->is_vacuumcmd;
+	ListCell *lc;
+
+	/* It could be a VACUUM statement with analyze option */
+	if (!analyze)
+	{
+		foreach (lc, vacstmt->options)
+		{
+			DefElem *opt = (DefElem *) lfirst(lc);
+
+			if (strcmp(opt->defname, "analyze") == 0)
+				analyze = defGetBoolean(opt);
+		}
+	}
+
+	/* Return if not doing analyze */
+	if (!analyze)
+		return;
+
+	/* Check for compression TAM rels being analyzed */
+	foreach (lc, vacstmt->rels)
+	{
+		VacuumRelation *vrel = lfirst_node(VacuumRelation, lc);
+		Oid relid = vrel->oid;
+		bool locked = false;
+
+		if (!OidIsValid(relid))
+		{
+			relid = RangeVarGetRelid(vrel->relation, AccessShareLock, false);
+			locked = true;
+		}
+
+		Relation rel = table_open(relid, locked ? NoLock : AccessShareLock);
+
+		if (rel->rd_tableam == compressionam_routine())
+		{
+			/* When analyzing the compression TAM, we need to return the sum
+			 * of the number of blocks in both the compressed and
+			 * non-compressed relation. Remember that we need to compute this
+			 * sum in the relation_size() callback. */
+			compressionam_set_analyze_relid(relid);
+		}
+
+		table_close(rel, NoLock);
 	}
 }
 
