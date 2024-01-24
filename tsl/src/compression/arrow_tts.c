@@ -27,15 +27,10 @@ tts_arrow_init(TupleTableSlot *slot)
 	MemoryContext oldmctx;
 
 	aslot->arrow_columns = NULL;
-	aslot->segmentby_columns = NULL;
+	aslot->segmentby_attrs = NULL;
 	aslot->valid_columns = NULL;
 	aslot->tuple_index = InvalidTupleIndex;
 	aslot->total_row_count = 0;
-	aslot->decompression_mcxt = AllocSetContextCreate(slot->tts_mcxt,
-													  "bulk decompression",
-													  /* minContextSize = */ 0,
-													  /* initBlockSize = */ 64 * 1024,
-													  /* maxBlockSize = */ 64 * 1024);
 	/*
 	 * Set up child slots, one for the non-compressed relation and one for the
 	 * compressed relation.
@@ -72,7 +67,6 @@ tts_arrow_release(TupleTableSlot *slot)
 
 	arrow_column_cache_release(&aslot->arrow_cache);
 
-	MemoryContextDelete(aslot->decompression_mcxt);
 	ExecDropSingleTupleTableSlot(aslot->noncompressed_slot);
 
 	/* compressed slot was lazily initialized */
@@ -83,6 +77,82 @@ tts_arrow_release(TupleTableSlot *slot)
 	aslot->arrow_columns = NULL;
 	aslot->compressed_slot = NULL;
 	aslot->noncompressed_slot = NULL;
+}
+
+static Bitmapset *
+build_segmentby_attrs(const TupleTableSlot *slot)
+{
+	const ArrowTupleTableSlot *aslot = (const ArrowTupleTableSlot *) slot;
+	const TupleDesc tupdesc = slot->tts_tupleDescriptor;
+	const TupleDesc ctupdesc = aslot->compressed_slot->tts_tupleDescriptor;
+	Bitmapset *segmentby_attrs = NULL;
+
+	/*
+	 * Populate the segmentby bitmap with information about *all* attributes in
+	 * the non-compressed version of the tuple. That way we do not have to
+	 * update this field if we start fetching more attributes.
+	 */
+	for (int i = 0; i < tupdesc->natts; i++)
+	{
+		const AttrNumber attno = AttrOffsetGetAttrNumber(i);
+
+		if (!is_compressed_col(ctupdesc, attno))
+			segmentby_attrs = bms_add_member(segmentby_attrs, attno);
+	}
+
+	return segmentby_attrs;
+}
+
+/*
+ * Get the child slot for compressed data.
+ *
+ * Since the tuple format (as provided by the tuple descriptor) is different
+ * from that of the (non-compressed) parent slot it is necessary to provide a
+ * tuple descriptor for the compressed relation if the slot has not yet been
+ * initialized. The compressed tuple descriptor is, unfortunately, not known
+ * at time of the initialization of the parent, so it needs lazy
+ * initialization.
+ */
+TupleTableSlot *
+arrow_slot_get_compressed_slot(TupleTableSlot *slot, const TupleDesc tupdesc)
+{
+	ArrowTupleTableSlot *aslot = (ArrowTupleTableSlot *) slot;
+
+	Assert(TTS_IS_ARROWTUPLE(slot));
+
+	if (NULL == aslot->compressed_slot)
+	{
+		MemoryContext oldmctx;
+
+		if (NULL == tupdesc)
+			elog(ERROR, "cannot make compressed table slot without tuple descriptor");
+
+		oldmctx = MemoryContextSwitchTo(slot->tts_mcxt);
+		aslot->compressed_slot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsBufferHeapTuple);
+		/* Set total row count */
+
+		aslot->count_attnum = InvalidAttrNumber;
+
+		for (int i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+			if (namestrcmp(&attr->attname, COMPRESSION_COLUMN_METADATA_COUNT_NAME) == 0)
+			{
+				aslot->count_attnum = AttrOffsetGetAttrNumber(i);
+				break;
+			}
+		}
+
+		if (aslot->count_attnum == InvalidAttrNumber)
+			elog(ERROR, "missing count metadata in compressed relation");
+
+		/* Build a bitmap for segmentby columns/attributes */
+		aslot->segmentby_attrs = build_segmentby_attrs(slot);
+		MemoryContextSwitchTo(oldmctx);
+	}
+
+	return aslot->compressed_slot;
 }
 
 /*
@@ -270,7 +340,7 @@ set_attr_value(TupleTableSlot *slot, AttrNumber attno)
 	if (bms_is_member(attno, aslot->valid_columns))
 		return;
 
-	if (bms_is_member(attno, aslot->segmentby_columns))
+	if (bms_is_member(attno, aslot->segmentby_attrs))
 	{
 		/* Segment-by column. Value is not compressed so get directly from
 		 * child slot. */
@@ -344,7 +414,6 @@ tts_arrow_getsomeattrs(TupleTableSlot *slot, int attnum)
 	ArrowColumnCacheEntry *restrict entry = arrow_column_cache_read(aslot, attnum);
 
 	/* Copy over cached data references to the slot */
-	aslot->segmentby_columns = entry->segmentby_columns;
 	aslot->arrow_columns = entry->arrow_columns;
 
 	/* Build the non-compressed tuple values array from the cached data. */
@@ -524,7 +593,6 @@ arrow_slot_get_array(TupleTableSlot *slot, AttrNumber attno)
 	{
 		ArrowColumnCacheEntry *restrict entry = arrow_column_cache_read(aslot, attno);
 
-		aslot->segmentby_columns = entry->segmentby_columns;
 		aslot->arrow_columns = entry->arrow_columns;
 		set_attr_value(slot, attno);
 	}
