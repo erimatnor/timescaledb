@@ -19,7 +19,7 @@
 #include <utils/snapmgr.h>
 #include <utils/timestamp.h>
 
-#include "compat/compat.h"
+#include "chunk.h"
 #include "debug_assert.h"
 #include "guc.h"
 #include "materialize.h"

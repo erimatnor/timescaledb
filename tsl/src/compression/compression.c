@@ -257,7 +257,7 @@ compress_chunk(Oid in_table, Oid out_table, int insert_options)
 	HeapTuple in_table_tp = NULL, index_tp = NULL;
 	Form_pg_attribute in_table_attr_tp, index_attr_tp;
 	CompressionStats cstat;
-	CompressionSettings *settings = ts_compression_settings_get(out_table);
+	CompressionSettings *settings = ts_compression_settings_get_by_compress_relid(out_table);
 	int64 report_reltuples;
 
 	/* We want to prevent other compressors from compressing this table,
@@ -603,7 +603,7 @@ compress_chunk_sort_relation(CompressionSettings *settings, Relation in_rel)
 }
 
 void
-compress_chunk_populate_sort_info_for_column(CompressionSettings *settings, Oid table,
+compress_chunk_populate_sort_info_for_column(const CompressionSettings *settings, Oid table,
 											 const char *attname, AttrNumber *att_nums,
 											 Oid *sort_operator, Oid *collation, bool *nulls_first)
 {
@@ -655,7 +655,7 @@ compress_chunk_populate_sort_info_for_column(CompressionSettings *settings, Oid 
  * over compressed data
  */
 Oid
-get_compressed_chunk_index(ResultRelInfo *resultRelInfo, CompressionSettings *settings)
+get_compressed_chunk_index(ResultRelInfo *resultRelInfo, const CompressionSettings *settings)
 {
 	int num_segmentby_columns = ts_array_length(settings->fd.segmentby);
 	int num_orderby_columns = ts_array_length(settings->fd.orderby);
@@ -694,7 +694,7 @@ get_compressed_chunk_index(ResultRelInfo *resultRelInfo, CompressionSettings *se
 }
 
 static void
-build_column_map(CompressionSettings *settings, Relation uncompressed_table,
+build_column_map(const CompressionSettings *settings, Relation uncompressed_table,
 				 Relation compressed_table, PerColumn **pcolumns, int16 **pmap)
 {
 	Oid compressed_data_type_oid = ts_custom_type_cache_get(CUSTOM_TYPE_COMPRESSED_DATA)->type_oid;
@@ -787,7 +787,7 @@ build_column_map(CompressionSettings *settings, Relation uncompressed_table,
  ** row_compressor **
  ********************/
 void
-row_compressor_init(CompressionSettings *settings, RowCompressor *row_compressor,
+row_compressor_init(const CompressionSettings *settings, RowCompressor *row_compressor,
 					Relation uncompressed_table, Relation compressed_table,
 					int16 num_columns_in_compressed_table, bool need_bistate, int insert_options)
 {
