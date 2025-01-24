@@ -13,4 +13,4 @@
 #include "hypertable.h"
 
 extern TSDLLEXPORT void ts_fk_propagate(Oid conrelid, Hypertable *ht);
-extern TSDLLEXPORT void ts_chunk_copy_referencing_fk(const Hypertable *ht, const Chunk *chunk);
+extern TSDLLEXPORT void ts_copy_referencing_fk(Oid from_relid, Oid to_relid);

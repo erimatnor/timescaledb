@@ -524,7 +524,7 @@ ts_chunk_constraints_create(const Hypertable *ht, const Chunk *chunk)
 	}
 
 	/* Copy FK triggers to this chunk */
-	ts_chunk_copy_referencing_fk(ht, chunk);
+	ts_copy_referencing_fk(ht->main_table_relid, chunk->table_id);
 }
 
 ScanIterator

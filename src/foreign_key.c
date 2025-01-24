@@ -23,6 +23,8 @@
 #include "chunk.h"
 #include "foreign_key.h"
 #include "hypertable.h"
+#include <catalog/pg_class_d.h>
+#include <utils/lsyscache.h>
 
 static HeapTuple relation_get_fk_constraint(Oid conrelid, Oid confrelid);
 static List *relation_get_referencing_fk(Oid reloid);
@@ -32,19 +34,19 @@ static char *ChooseForeignKeyConstraintNameAddition(int numkeys, AttrNumber *key
 static void createForeignKeyActionTriggers(Form_pg_constraint fk, Oid relid, Oid refRelOid,
 										   Oid constraintOid, Oid indexOid, Oid parentDelTrigger,
 										   Oid parentUpdTrigger);
-static void clone_constraint_on_chunk(const Chunk *chunk, Relation parentRel, Form_pg_constraint fk,
-									  int numfks, AttrNumber *conkey, AttrNumber *confkey,
-									  Oid *conpfeqop, Oid *conppeqop, Oid *conffeqop,
+static void clone_constraint_on_relation(Oid relid, Relation parentRel, Form_pg_constraint fk,
+										 int numfks, AttrNumber *conkey, AttrNumber *confkey,
+										 Oid *conpfeqop, Oid *conppeqop, Oid *conffeqop,
 #if PG15_GE
-									  int numfkdelsetcols, AttrNumber *confdelsetcols,
+										 int numfkdelsetcols, AttrNumber *confdelsetcols,
 #endif
-									  Oid parentDelTrigger, Oid parentUpdTrigger);
+										 Oid parentDelTrigger, Oid parentUpdTrigger);
 
 /*
  * Copy foreign key constraint fk_tuple to all chunks.
  */
 static void
-propagate_fk(Relation ht_rel, HeapTuple fk_tuple, List *chunks)
+propagate_fk(Relation fromrel, HeapTuple fk_tuple, List *to_relations)
 {
 	Form_pg_constraint fk = (Form_pg_constraint) GETSTRUCT(fk_tuple);
 
@@ -77,27 +79,29 @@ propagate_fk(Relation ht_rel, HeapTuple fk_tuple, List *chunks)
 	constraint_get_trigger(fk->oid, &parentUpdTrigger, &parentDelTrigger);
 
 	ListCell *lc;
-	foreach (lc, chunks)
+	foreach (lc, to_relations)
 	{
-		Chunk *chunk = lfirst(lc);
-		if (chunk->fd.osm_chunk)
+		Oid relid = lfirst_oid(lc);
+		char relkind = get_rel_relkind(relid);
+
+		if (relkind != RELKIND_RELATION)
 			continue;
 
-		clone_constraint_on_chunk(chunk,
-								  ht_rel,
-								  fk,
-								  numfks,
-								  conkey,
-								  confkey,
-								  conpfeqop,
-								  conppeqop,
-								  conffeqop,
+		clone_constraint_on_relation(relid,
+									 fromrel,
+									 fk,
+									 numfks,
+									 conkey,
+									 confkey,
+									 conpfeqop,
+									 conppeqop,
+									 conffeqop,
 #if PG15_GE
-								  numfkdelsetcols,
-								  confdelsetcols,
+									 numfkdelsetcols,
+									 confdelsetcols,
 #endif
-								  parentDelTrigger,
-								  parentUpdTrigger);
+									 parentDelTrigger,
+									 parentUpdTrigger);
 	}
 }
 
@@ -105,19 +109,19 @@ propagate_fk(Relation ht_rel, HeapTuple fk_tuple, List *chunks)
  * Copy all foreign key constraints from the main table to a chunk.
  */
 void
-ts_chunk_copy_referencing_fk(const Hypertable *ht, const Chunk *chunk)
+ts_copy_referencing_fk(Oid from_relid, Oid to_relid)
 {
 	ListCell *lc;
-	List *chunks = list_make1((Chunk *) chunk);
-	List *fks = relation_get_referencing_fk(ht->main_table_relid);
+	List *relations = list_make1_oid(to_relid);
+	List *fks = relation_get_referencing_fk(from_relid);
 
-	Relation ht_rel = table_open(ht->main_table_relid, AccessShareLock);
+	Relation rel = table_open(from_relid, AccessShareLock);
 	foreach (lc, fks)
 	{
 		HeapTuple fk_tuple = lfirst(lc);
-		propagate_fk(ht_rel, fk_tuple, chunks);
+		propagate_fk(rel, fk_tuple, relations);
 	}
-	table_close(ht_rel, NoLock);
+	table_close(rel, NoLock);
 }
 
 /*
@@ -133,7 +137,16 @@ ts_fk_propagate(Oid conrelid, Hypertable *ht)
 
 	Relation ht_rel = table_open(ht->main_table_relid, AccessShareLock);
 	List *chunks = ts_chunk_get_by_hypertable_id(ht->fd.id);
-	propagate_fk(ht_rel, fk_tuple, chunks);
+	List *relids = NIL;
+	ListCell *lc;
+
+	foreach (lc, chunks)
+	{
+		const Chunk *chunk = lfirst(lc);
+		relids = lappend_oid(relids, chunk->table_id);
+	}
+
+	propagate_fk(ht_rel, fk_tuple, relids);
 	table_close(ht_rel, NoLock);
 }
 
@@ -141,16 +154,16 @@ ts_fk_propagate(Oid conrelid, Hypertable *ht)
  * Clone a single constraint to a single chunk.
  */
 static void
-clone_constraint_on_chunk(const Chunk *chunk, Relation parentRel, Form_pg_constraint fk, int numfks,
-						  AttrNumber *conkey, AttrNumber *confkey, Oid *conpfeqop, Oid *conppeqop,
-						  Oid *conffeqop,
+clone_constraint_on_relation(Oid relid, Relation parentRel, Form_pg_constraint fk, int numfks,
+							 AttrNumber *conkey, AttrNumber *confkey, Oid *conpfeqop,
+							 Oid *conppeqop, Oid *conffeqop,
 #if PG15_GE
-						  int numfkdelsetcols, AttrNumber *confdelsetcols,
+							 int numfkdelsetcols, AttrNumber *confdelsetcols,
 #endif
-						  Oid parentDelTrigger, Oid parentUpdTrigger)
+							 Oid parentDelTrigger, Oid parentUpdTrigger)
 {
 	AttrNumber mapped_confkey[INDEX_MAX_KEYS];
-	Relation pkrel = table_open(chunk->table_id, AccessShareLock);
+	Relation pkrel = table_open(relid, AccessShareLock);
 
 	/* Map the foreign key columns on the hypertable side to the chunk columns */
 #if PG16_GE
@@ -188,7 +201,7 @@ clone_constraint_on_chunk(const Chunk *chunk, Relation parentRel, Form_pg_constr
 									   numfks,
 									   InvalidOid,
 									   indexoid,
-									   chunk->table_id,
+									   relid,
 									   mapped_confkey,
 									   conpfeqop,
 									   conppeqop,
@@ -218,7 +231,7 @@ clone_constraint_on_chunk(const Chunk *chunk, Relation parentRel, Form_pg_constr
 
 	createForeignKeyActionTriggers(fk,
 								   fk->conrelid,
-								   chunk->table_id,
+								   relid,
 								   conoid,
 								   indexoid,
 								   parentDelTrigger,

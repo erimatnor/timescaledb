@@ -4,12 +4,14 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include <postgres.h>
+#include "extension_constants.h"
 #include <access/heapam.h>
 #include <access/reloptions.h>
 #include <access/tupdesc.h>
 #include <access/xact.h>
 #include <catalog/index.h>
 #include <catalog/indexing.h>
+#include <catalog/namespace.h>
 #include <catalog/objectaccess.h>
 #include <catalog/pg_am_d.h>
 #include <catalog/pg_constraint.h>
@@ -71,7 +73,7 @@ is_sparse_index_type(const char *type)
 #endif
 
 static void validate_hypertable_for_compression(Hypertable *ht);
-static List *build_columndefs(CompressionSettings *settings, Oid src_relid);
+static List *build_columndefs(const CompressionSettings *settings, Oid src_relid);
 static ColumnDef *build_columndef_singlecolumn(const char *colname, Oid typid);
 static void compression_settings_update(Hypertable *ht, CompressionSettings *settings,
 										WithClauseResult *with_clause_options);
@@ -172,7 +174,7 @@ compressed_column_metadata_attno(const CompressionSettings *settings, Oid chunk_
  *     all other cols have COMPRESSEDDATA_TYPE type
  */
 static List *
-build_columndefs(CompressionSettings *settings, Oid src_relid)
+build_columndefs(const CompressionSettings *settings, Oid src_relid)
 {
 	Oid compresseddata_oid = ts_custom_type_cache_get(CUSTOM_TYPE_COMPRESSED_DATA)->type_oid;
 	ArrayType *segmentby = settings->fd.segmentby;
@@ -375,101 +377,54 @@ build_columndef_singlecolumn(const char *colname, Oid typid)
  * Constraints and triggers are not created on the PG chunk table.
  * Caller is expected to do this explicitly.
  */
-Chunk *
-create_compress_chunk(Hypertable *compress_ht, Chunk *src_chunk, Oid table_id)
+Oid
+create_compress_relation(const Chunk *src_chunk, Oid table_id)
 {
-	Catalog *catalog = ts_catalog_get();
-	CatalogSecurityContext sec_ctx;
-	Chunk *compress_chunk;
 	int namelen;
-	Oid tablespace_oid;
-
-	Assert(compress_ht->space->num_dimensions == 0);
+	NameData tablename;
 
 	/* Create a new catalog entry for chunk based on the hypercube */
-	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-	compress_chunk =
-		ts_chunk_create_base(ts_catalog_table_next_seq_id(catalog, CHUNK), 0, RELKIND_RELATION);
-	ts_catalog_restore_user(&sec_ctx);
-
-	compress_chunk->fd.hypertable_id = compress_ht->fd.id;
-	compress_chunk->cube = src_chunk->cube;
-	compress_chunk->hypertable_relid = compress_ht->main_table_relid;
-	compress_chunk->constraints = ts_chunk_constraints_alloc(1, CurrentMemoryContext);
-	namestrcpy(&compress_chunk->fd.schema_name, INTERNAL_SCHEMA_NAME);
 
 	if (OidIsValid(table_id))
 	{
 		Relation table_rel = table_open(table_id, AccessShareLock);
-		strncpy(NameStr(compress_chunk->fd.table_name),
-				RelationGetRelationName(table_rel),
-				NAMEDATALEN);
+		strncpy(NameStr(tablename), RelationGetRelationName(table_rel), NAMEDATALEN);
 		table_close(table_rel, AccessShareLock);
 	}
 	else
 	{
 		/* Fail if we overflow the name limit */
-		namelen = snprintf(NameStr(compress_chunk->fd.table_name),
-						   NAMEDATALEN,
-						   "compress%s_%d_chunk",
-						   NameStr(compress_ht->fd.associated_table_prefix),
-						   compress_chunk->fd.id);
+		namelen = snprintf(NameStr(tablename), NAMEDATALEN, "compress_%d_chunk", src_chunk->fd.id);
 
 		if (namelen >= NAMEDATALEN)
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("invalid name \"%s\" for compressed chunk",
-							NameStr(compress_chunk->fd.table_name)),
-					 errdetail("The associated table prefix is too long.")));
+					 errmsg("invalid name \"%s\" for compressed chunk", NameStr(tablename)),
+					 errdetail("The chunk name is too long.")));
 	}
-
-	/* Insert chunk */
-	ts_chunk_insert_lock(compress_chunk, RowExclusiveLock);
-
-	/* only add inheritable constraints. no dimension constraints */
-	ts_chunk_constraints_add_inheritable_constraints(compress_chunk->constraints,
-													 compress_chunk->fd.id,
-													 compress_chunk->relkind,
-													 compress_chunk->hypertable_relid);
-
-	ts_chunk_constraints_insert_metadata(compress_chunk->constraints);
 
 	/* Create the actual table relation for the chunk
 	 * Note that we have to pick the tablespace here as the compressed ht doesn't have dimensions
 	 * on which to base this decision. We simply pick the same tablespace as the uncompressed chunk
 	 * for now.
 	 */
-	tablespace_oid = get_rel_tablespace(src_chunk->table_id);
-	CompressionSettings *settings = ts_compression_settings_get(src_chunk->hypertable_relid);
+	const CompressionSettings *settings = ts_compression_settings_get(src_chunk->hypertable_relid);
 
-	if (OidIsValid(table_id))
-		compress_chunk->table_id = table_id;
-	else
+	if (!OidIsValid(table_id))
 	{
+		Oid tablespace_oid = get_namespace_oid(INTERNAL_SCHEMA_NAME, false);
 		List *column_defs = build_columndefs(settings, src_chunk->table_id);
-		compress_chunk->table_id =
-			compression_chunk_create(src_chunk, compress_chunk, column_defs, tablespace_oid);
+		table_id =
+			compression_relation_create(settings, NameStr(tablename), column_defs, tablespace_oid);
 	}
 
-	if (!OidIsValid(compress_chunk->table_id))
+	if (!OidIsValid(table_id))
 		elog(ERROR, "could not create compressed chunk table");
 
 	/* Materialize current compression settings for this chunk */
-	ts_compression_settings_materialize(settings, src_chunk->table_id, compress_chunk->table_id);
+	ts_compression_settings_materialize(settings, src_chunk->table_id, table_id);
 
-	/* if the src chunk is not in the default tablespace, the compressed indexes
-	 * should also be in a non-default tablespace. IN the usual case, this is inferred
-	 * from the hypertable's and chunk's tablespace info. We do not propagate
-	 * attach_tablespace settings to the compressed hypertable. So we have to explicitly
-	 * pass the tablespace information here
-	 */
-	ts_chunk_index_create_all(compress_chunk->fd.hypertable_id,
-							  compress_chunk->hypertable_relid,
-							  compress_chunk->fd.id,
-							  compress_chunk->table_id,
-							  tablespace_oid);
-
-	return compress_chunk;
+	return table_id;
 }
 
 /* Add  the hypertable time column to the end of the orderby list if

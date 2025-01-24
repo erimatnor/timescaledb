@@ -99,6 +99,56 @@ compression_hypertable_create(Hypertable *ht, Oid owner, Oid tablespace_oid)
 }
 
 Oid
+compression_relation_create(const CompressionSettings *hyper_settings, const char *relname,
+							List *column_defs, Oid tablespace_oid)
+{
+	ObjectAddress tbladdress;
+	CatalogSecurityContext sec_ctx;
+	Datum toast_options;
+	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
+	Oid owner = ts_rel_get_owner(hyper_settings->fd.relid);
+	CreateStmt *create;
+	RangeVar *compress_rel;
+
+	create = makeNode(CreateStmt);
+	create->tableElts = column_defs;
+	create->inhRelations = NIL;
+	create->ofTypename = NULL;
+	create->constraints = NIL;
+	create->options = NULL;
+	create->oncommit = ONCOMMIT_NOOP;
+	create->tablespacename = get_tablespace_name(tablespace_oid);
+	create->if_not_exists = false;
+
+	/* Invalid tablespace_oid <=> NULL tablespace name */
+	Assert(!OidIsValid(tablespace_oid) == (create->tablespacename == NULL));
+
+	/* create the compression table */
+	/* NewRelationCreateToastTable calls CommandCounterIncrement */
+	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
+	compress_rel = makeRangeVar(create->tablespacename, pstrdup(relname), -1);
+
+	create->relation = compress_rel;
+	tbladdress = DefineRelation(create, RELKIND_RELATION, owner, NULL, NULL);
+
+	CommandCounterIncrement();
+	ts_copy_relation_acl(hyper_settings->fd.relid, tbladdress.objectId, owner);
+	toast_options =
+		transformRelOptions((Datum) 0, create->options, "toast", validnsps, true, false);
+	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
+	NewRelationCreateToastTable(tbladdress.objectId, toast_options);
+	ts_catalog_restore_user(&sec_ctx);
+	modify_compressed_toast_table_storage(hyper_settings, column_defs, tbladdress.objectId);
+
+	set_statistics_on_compressed_chunk(tbladdress.objectId);
+	set_toast_tuple_target_on_chunk(tbladdress.objectId);
+
+	create_compressed_chunk_indexes(tbladdress.objectId, hyper_settings);
+
+	return tbladdress.objectId;
+}
+
+Oid
 compression_chunk_create(Chunk *src_chunk, Chunk *chunk, List *column_defs, Oid tablespace_oid)
 {
 	ObjectAddress tbladdress;
@@ -145,7 +195,7 @@ compression_chunk_create(Chunk *src_chunk, Chunk *chunk, List *column_defs, Oid 
 	set_statistics_on_compressed_chunk(chunk->table_id);
 	set_toast_tuple_target_on_chunk(chunk->table_id);
 
-	create_compressed_chunk_indexes(chunk, settings);
+	create_compressed_chunk_indexes(chunk->table_id, settings);
 
 	return chunk->table_id;
 }
@@ -231,7 +281,7 @@ set_statistics_on_compressed_chunk(Oid compressed_table_id)
  * compression table
  */
 void
-modify_compressed_toast_table_storage(CompressionSettings *settings, List *coldefs,
+modify_compressed_toast_table_storage(const CompressionSettings *settings, List *coldefs,
 									  Oid compress_relid)
 {
 	ListCell *lc;
@@ -276,14 +326,17 @@ modify_compressed_toast_table_storage(CompressionSettings *settings, List *colde
 }
 
 void
-create_compressed_chunk_indexes(Chunk *chunk, CompressionSettings *settings)
+create_compressed_chunk_indexes(Oid chunk_relid, const CompressionSettings *settings)
 {
+	Oid namespaceid = get_rel_namespace(chunk_relid);
+	char *relname = get_rel_name(chunk_relid);
+	char *relnamespace = get_namespace_name(namespaceid);
 	IndexStmt stmt = {
 		.type = T_IndexStmt,
 		.accessMethod = DEFAULT_INDEX_TYPE,
 		.idxname = NULL,
-		.relation = makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), 0),
-		.tableSpace = get_tablespace_name(get_rel_tablespace(chunk->table_id)),
+		.relation = makeRangeVar(relnamespace, relname, 0),
+		.tableSpace = get_tablespace_name(namespaceid),
 	};
 
 	NameData index_name;
@@ -372,7 +425,7 @@ create_compressed_chunk_indexes(Chunk *chunk, CompressionSettings *settings)
 	}
 
 	stmt.indexParams = indexcols;
-	index_addr = DefineIndexCompat(chunk->table_id,
+	index_addr = DefineIndexCompat(chunk_relid,
 								   &stmt,
 								   InvalidOid, /* IndexRelationId */
 								   InvalidOid, /* parentIndexId */
@@ -392,8 +445,8 @@ create_compressed_chunk_indexes(Chunk *chunk, CompressionSettings *settings)
 	elog(DEBUG1,
 		 "adding index %s ON %s.%s USING BTREE(%s)",
 		 NameStr(index_name),
-		 NameStr(chunk->fd.schema_name),
-		 NameStr(chunk->fd.table_name),
+		 relnamespace,
+		 relname,
 		 buf->data);
 
 	ReleaseSysCache(index_tuple);

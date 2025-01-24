@@ -25,6 +25,7 @@
 #include <commands/tablecmds.h>
 #include <commands/trigger.h>
 #include <executor/executor.h>
+#include <executor/tuptable.h>
 #include <fmgr.h>
 #include <funcapi.h>
 #include <miscadmin.h>
@@ -160,13 +161,6 @@ chunk_formdata_make_tuple(const FormData_chunk *fd, TupleDesc desc)
 	values[AttrNumberGetAttrOffset(Anum_chunk_schema_name)] = NameGetDatum(&fd->schema_name);
 	values[AttrNumberGetAttrOffset(Anum_chunk_table_name)] = NameGetDatum(&fd->table_name);
 	/*when we insert a chunk the compressed chunk id is always NULL */
-	if (fd->compressed_chunk_id == INVALID_CHUNK_ID)
-		nulls[AttrNumberGetAttrOffset(Anum_chunk_compressed_chunk_id)] = true;
-	else
-	{
-		values[AttrNumberGetAttrOffset(Anum_chunk_compressed_chunk_id)] =
-			Int32GetDatum(fd->compressed_chunk_id);
-	}
 	values[AttrNumberGetAttrOffset(Anum_chunk_dropped)] = BoolGetDatum(fd->dropped);
 	values[AttrNumberGetAttrOffset(Anum_chunk_status)] = Int32GetDatum(fd->status);
 	values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)] = BoolGetDatum(fd->osm_chunk);
@@ -201,12 +195,6 @@ ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti)
 			   DatumGetCString(values[AttrNumberGetAttrOffset(Anum_chunk_schema_name)]));
 	namestrcpy(&fd->table_name,
 			   DatumGetCString(values[AttrNumberGetAttrOffset(Anum_chunk_table_name)]));
-
-	if (nulls[AttrNumberGetAttrOffset(Anum_chunk_compressed_chunk_id)])
-		fd->compressed_chunk_id = INVALID_CHUNK_ID;
-	else
-		fd->compressed_chunk_id =
-			DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_chunk_compressed_chunk_id)]);
 
 	fd->dropped = DatumGetBool(values[AttrNumberGetAttrOffset(Anum_chunk_dropped)]);
 	fd->status = DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_chunk_status)]);
@@ -1511,7 +1499,6 @@ ts_chunk_create_base(int32 id, int16 num_constraints, const char relkind)
 
 	chunk = palloc0(sizeof(Chunk));
 	chunk->fd.id = id;
-	chunk->fd.compressed_chunk_id = INVALID_CHUNK_ID;
 	chunk->relkind = relkind;
 	chunk->fd.creation_time = GetCurrentTimestamp();
 
@@ -2913,28 +2900,7 @@ chunk_tuple_delete(TupleInfo *ti, DropBehavior behavior, bool preserve_chunk_cat
 
 	Oid relnamespace = get_namespace_oid(NameStr(form.schema_name), false);
 	Oid relid = get_relname_relid(NameStr(form.table_name), relnamespace);
-
-	if (form.compressed_chunk_id != INVALID_CHUNK_ID)
-	{
-		Chunk *compressed_chunk = ts_chunk_get_by_id(form.compressed_chunk_id, false);
-
-		ts_compression_settings_delete(relid);
-
-		/* The chunk may have been deleted by a CASCADE */
-		if (compressed_chunk != NULL)
-		{
-			/* Plain drop without preserving catalog row because this is the compressed
-			 * chunk */
-			ts_chunk_drop(compressed_chunk, behavior, DEBUG1);
-		}
-	}
-	else if (OidIsValid(relid))
-	{
-		/* If there is no compressed chunk ID, this might be the actual
-		 * compressed chunk */
-		ts_compression_settings_delete_by_compress_relid(relid);
-	}
-
+	ts_compression_settings_delete(relid);
 	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
 
 	if (!preserve_chunk_catalog_row)
@@ -2952,7 +2918,6 @@ chunk_tuple_delete(TupleInfo *ti, DropBehavior behavior, bool preserve_chunk_cat
 
 		Assert(!form.dropped);
 
-		form.compressed_chunk_id = INVALID_CHUNK_ID;
 		form.dropped = true;
 		form.status = CHUNK_STATUS_DEFAULT;
 		new_tuple = chunk_formdata_make_tuple(&form, ts_scanner_get_tupledesc(ti));
@@ -3077,14 +3042,20 @@ ts_chunk_exists_with_compression(int32 hypertable_id)
 	ts_scanner_foreach(&iterator)
 	{
 		bool isnull_dropped;
-		bool isnull_chunk_id =
-			slot_attisnull(ts_scan_iterator_slot(&iterator), Anum_chunk_compressed_chunk_id);
+		bool isnull;
+		Datum tablename =
+			slot_getattr(ts_scan_iterator_slot(&iterator), Anum_chunk_table_name, &isnull);
+		Datum schemaname =
+			slot_getattr(ts_scan_iterator_slot(&iterator), Anum_chunk_schema_name, &isnull);
+		Oid namespaceid = get_namespace_oid(DatumGetCString(schemaname), false);
+		Oid relid = get_relname_relid(DatumGetCString(tablename), namespaceid);
+		const CompressionSettings *settings = ts_compression_settings_get(relid);
 		bool dropped = DatumGetBool(
 			slot_getattr(ts_scan_iterator_slot(&iterator), Anum_chunk_dropped, &isnull_dropped));
 		/* dropped is not NULLABLE */
 		Assert(!isnull_dropped);
 
-		if (!isnull_chunk_id && !dropped)
+		if (settings && !dropped)
 		{
 			found = true;
 			break;
@@ -3092,45 +3063,6 @@ ts_chunk_exists_with_compression(int32 hypertable_id)
 	}
 	ts_scan_iterator_close(&iterator);
 	return found;
-}
-
-static void
-init_scan_by_compressed_chunk_id(ScanIterator *iterator, int32 compressed_chunk_id)
-{
-	iterator->ctx.index =
-		catalog_get_index(ts_catalog_get(), CHUNK, CHUNK_COMPRESSED_CHUNK_ID_INDEX);
-	ts_scan_iterator_scan_key_init(iterator,
-								   Anum_chunk_compressed_chunk_id_idx_compressed_chunk_id,
-								   BTEqualStrategyNumber,
-								   F_INT4EQ,
-								   Int32GetDatum(compressed_chunk_id));
-}
-
-Chunk *
-ts_chunk_get_compressed_chunk_parent(const Chunk *chunk)
-{
-	ScanIterator iterator = ts_scan_iterator_create(CHUNK, AccessShareLock, CurrentMemoryContext);
-	Oid parent_id = InvalidOid;
-
-	init_scan_by_compressed_chunk_id(&iterator, chunk->fd.id);
-
-	ts_scanner_foreach(&iterator)
-	{
-		TupleInfo *ti = ts_scan_iterator_tuple_info(&iterator);
-		Datum datum;
-		bool isnull;
-
-		Assert(!OidIsValid(parent_id));
-		datum = slot_getattr(ti->slot, Anum_chunk_id, &isnull);
-
-		if (!isnull)
-			parent_id = DatumGetObjectId(datum);
-	}
-
-	if (OidIsValid(parent_id))
-		return ts_chunk_get_by_id(parent_id, true);
-
-	return NULL;
 }
 
 bool
@@ -3512,7 +3444,7 @@ ts_chunk_add_status(Chunk *chunk, int32 status)
 
 /*Assume permissions are already checked */
 bool
-ts_chunk_set_compressed_chunk(Chunk *chunk, int32 compressed_chunk_id)
+ts_chunk_set_compressed_chunk(Chunk *chunk)
 {
 	uint32 flags = CHUNK_STATUS_COMPRESSED;
 	uint32 mstatus = ts_set_flags_32(chunk->fd.status, flags);
@@ -3550,9 +3482,6 @@ ts_chunk_set_compressed_chunk(Chunk *chunk, int32 compressed_chunk_id)
 
 	/* re-applying the flags after locking the metadata tuple */
 	form.status = ts_set_flags_32(form.status, flags);
-	form.compressed_chunk_id = compressed_chunk_id;
-
-	chunk->fd.compressed_chunk_id = form.compressed_chunk_id;
 	chunk->fd.status = form.status;
 
 	chunk_update_catalog_tuple(&tid, &form);
@@ -3600,9 +3529,6 @@ ts_chunk_clear_compressed_chunk(Chunk *chunk)
 
 	/* re-applying the flags after locking the metadata tuple */
 	form.status = ts_clear_flags_32(form.status, flags);
-	form.compressed_chunk_id = INVALID_CHUNK_ID;
-
-	chunk->fd.compressed_chunk_id = form.compressed_chunk_id;
 	chunk->fd.status = form.status;
 
 	chunk_update_catalog_tuple(&tid, &form);

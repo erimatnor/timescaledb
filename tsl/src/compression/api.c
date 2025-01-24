@@ -45,6 +45,7 @@
 #include "debug_point.h"
 #include "error_utils.h"
 #include "errors.h"
+#include "foreign_key.h"
 #include "hypercore/hypercore_handler.h"
 #include "hypercore/utils.h"
 #include "hypercube.h"
@@ -61,6 +62,7 @@
 #include "ts_catalog/continuous_agg.h"
 #include "utils.h"
 #include "wal_utils.h"
+#include <utils/lsyscache.h>
 
 typedef struct CompressChunkCxt
 {
@@ -130,7 +132,7 @@ compression_chunk_size_catalog_insert(int32 src_chunk_id, const RelationSize *sr
 
 static int
 compression_chunk_size_catalog_update_merged(int32 chunk_id, const RelationSize *size,
-											 int32 merge_chunk_id, const RelationSize *merge_size,
+											 const RelationSize *merge_size,
 											 int64 merge_rowcnt_pre_compression,
 											 int64 merge_rowcnt_post_compression)
 {
@@ -396,11 +398,12 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 {
 	Oid result_chunk_id = chunk_relid;
 	CompressChunkCxt cxt = { 0 };
-	Chunk *compress_ht_chunk, *mergable_chunk;
+	Chunk *mergable_chunk;
 	Cache *hcache;
 	RelationSize before_size, after_size;
 	CompressionStats cstat;
 	bool new_compressed_chunk = false;
+	Oid compress_relid = InvalidOid;
 
 	hcache = ts_hypertable_cache_pin();
 	compresschunkcxt_init(&cxt, hcache, hypertable_relid, chunk_relid);
@@ -436,6 +439,7 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 
 	/* get compression properties for hypertable */
 	mergable_chunk = find_chunk_to_merge_into(cxt.srcht, cxt.srcht_chunk);
+
 	if (!mergable_chunk)
 	{
 		/*
@@ -447,16 +451,17 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 		 */
 		EventTriggerAlterTableStart(create_dummy_query());
 		/* create compressed chunk and a new table */
-		compress_ht_chunk = create_compress_chunk(cxt.compress_ht, cxt.srcht_chunk, InvalidOid);
+		compress_relid = create_compress_relation(cxt.srcht_chunk, InvalidOid);
+
 		/* Associate compressed chunk with main chunk. Needed for Hypercore
 		 * TAM to not recreate the compressed chunk again when the main chunk
 		 * rel is opened. */
-		ts_chunk_set_compressed_chunk(cxt.srcht_chunk, compress_ht_chunk->fd.id);
+		ts_chunk_set_compressed_chunk(cxt.srcht_chunk);
 		new_compressed_chunk = true;
 		ereport(DEBUG1,
 				(errmsg("new compressed chunk \"%s.%s\" created",
-						NameStr(compress_ht_chunk->fd.schema_name),
-						NameStr(compress_ht_chunk->fd.table_name))));
+						get_rel_name(compress_relid),
+						get_namespace_name(get_rel_namespace(compress_relid)))));
 
 		/* Since a new compressed relation was created it is necessary to
 		 * invalidate the relcache entry for the chunk because Hypercore TAM
@@ -476,12 +481,14 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 	else
 	{
 		/* use an existing compressed chunk to compress into */
-		compress_ht_chunk = ts_chunk_get_by_id(mergable_chunk->fd.compressed_chunk_id, true);
+		const CompressionSettings *settings = ts_compression_settings_get(mergable_chunk->table_id);
 		result_chunk_id = mergable_chunk->table_id;
+		compress_relid = settings->fd.compress_relid;
+
 		ereport(DEBUG1,
 				(errmsg("merge into existing compressed chunk \"%s.%s\"",
-						NameStr(compress_ht_chunk->fd.schema_name),
-						NameStr(compress_ht_chunk->fd.table_name))));
+						get_rel_name(settings->fd.relid),
+						get_namespace_name(get_rel_namespace(settings->fd.relid)))));
 	}
 
 	/* Since the compressed relation is created in the same transaction as the tuples that will be
@@ -525,14 +532,14 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 	if (cxt.srcht->range_space)
 		ts_chunk_column_stats_calculate(cxt.srcht, cxt.srcht_chunk);
 
-	cstat = compress_chunk(cxt.srcht_chunk->table_id, compress_ht_chunk->table_id, insert_options);
-	after_size = ts_relation_size_impl(compress_ht_chunk->table_id);
+	cstat = compress_chunk(cxt.srcht_chunk->table_id, compress_relid, insert_options);
+	after_size = ts_relation_size_impl(compress_relid);
 
 	if (new_compressed_chunk)
 	{
 		compression_chunk_size_catalog_insert(cxt.srcht_chunk->fd.id,
 											  &before_size,
-											  compress_ht_chunk->fd.id,
+											  -1,
 											  &after_size,
 											  cstat.rowcnt_pre_compression,
 											  cstat.rowcnt_post_compression,
@@ -542,14 +549,17 @@ compress_chunk_impl(Oid hypertable_relid, Oid chunk_relid)
 		 * Do this after compressing the chunk to avoid holding strong, unnecessary locks on the
 		 * referenced table during compression.
 		 */
-		ts_chunk_constraints_create(cxt.compress_ht, compress_ht_chunk);
-		ts_trigger_create_all_on_chunk(compress_ht_chunk);
+
+		/* Copy FK triggers to this chunk */
+		ts_copy_referencing_fk(cxt.compress_ht->main_table_relid, compress_relid);
+		// ts_chunk_constraints_create(cxt.compress_ht, compress_ht_chunk);
+		//  TODO: Do we need trigger on compressed relation?
+		// ts_trigger_create_all_on_chunk(compress_ht_chunk);
 	}
 	else
 	{
 		compression_chunk_size_catalog_update_merged(mergable_chunk->fd.id,
 													 &before_size,
-													 compress_ht_chunk->fd.id,
 													 &after_size,
 													 cstat.rowcnt_pre_compression,
 													 cstat.rowcnt_post_compression);
@@ -751,7 +761,7 @@ tsl_create_compressed_chunk(PG_FUNCTION_ARGS)
 										  0);
 
 	chunk_was_compressed = ts_chunk_is_compressed(cxt.srcht_chunk);
-	ts_chunk_set_compressed_chunk(cxt.srcht_chunk, compress_ht_chunk->fd.id);
+	ts_chunk_set_compressed_chunk(cxt.srcht_chunk);
 	if (!chunk_was_compressed && ts_table_has_tuples(cxt.srcht_chunk->table_id, AccessShareLock))
 	{
 		/* The chunk was not compressed before it had the compressed chunk

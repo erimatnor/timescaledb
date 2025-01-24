@@ -249,7 +249,7 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 		Chunk *c_chunk = create_compress_chunk(ht_compressed, chunk, InvalidOid);
 
 		hsinfo->compressed_relation_id = c_chunk->fd.id;
-		ts_chunk_set_compressed_chunk(chunk, c_chunk->fd.id);
+		ts_chunk_set_compressed_chunk(chunk);
 
 		if (create_chunk_constraints)
 		{

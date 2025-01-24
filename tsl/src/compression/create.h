@@ -24,6 +24,7 @@ void tsl_process_compress_table_add_column(Hypertable *ht, ColumnDef *orig_def);
 void tsl_process_compress_table_drop_column(Hypertable *ht, char *name);
 void tsl_process_compress_table_rename_column(Hypertable *ht, const RenameStmt *stmt);
 Chunk *create_compress_chunk(Hypertable *compress_ht, Chunk *src_chunk, Oid table_id);
+Oid create_compress_relation(const Chunk *src_chunk, Oid table_id);
 
 char *column_segment_min_name(int16 column_index);
 char *column_segment_max_name(int16 column_index);
