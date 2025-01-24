@@ -4963,6 +4963,7 @@ process_drop_table(EventTriggerDropObject *obj)
 	Assert(obj->type == EVENT_TRIGGER_DROP_TABLE || obj->type == EVENT_TRIGGER_DROP_FOREIGN_TABLE);
 	ts_hypertable_delete_by_name(table->schema, table->name);
 	ts_compression_settings_delete(table->relid);
+	ts_compression_settings_delete_by_compress_relid(table->relid);
 	ts_chunk_delete_by_name(table->schema, table->name, DROP_RESTRICT);
 }
 

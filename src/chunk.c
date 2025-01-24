@@ -10,6 +10,7 @@
 #include <access/reloptions.h>
 #include <access/tupdesc.h>
 #include <access/xact.h>
+#include <c.h>
 #include <catalog/indexing.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_class.h>
@@ -2910,9 +2911,14 @@ chunk_tuple_delete(TupleInfo *ti, DropBehavior behavior, bool preserve_chunk_cat
 	/* Delete any rows in _timescaledb_catalog.chunk_column_stats corresponding to this chunk */
 	ts_chunk_column_stats_delete_by_chunk_id(form.id);
 
+	Oid relnamespace = get_namespace_oid(NameStr(form.schema_name), false);
+	Oid relid = get_relname_relid(NameStr(form.table_name), relnamespace);
+
 	if (form.compressed_chunk_id != INVALID_CHUNK_ID)
 	{
 		Chunk *compressed_chunk = ts_chunk_get_by_id(form.compressed_chunk_id, false);
+
+		ts_compression_settings_delete(relid);
 
 		/* The chunk may have been deleted by a CASCADE */
 		if (compressed_chunk != NULL)
@@ -2920,8 +2926,13 @@ chunk_tuple_delete(TupleInfo *ti, DropBehavior behavior, bool preserve_chunk_cat
 			/* Plain drop without preserving catalog row because this is the compressed
 			 * chunk */
 			ts_chunk_drop(compressed_chunk, behavior, DEBUG1);
-			ts_compression_settings_delete_by_compress_relid(compressed_chunk->table_id);
 		}
+	}
+	else if (OidIsValid(relid))
+	{
+		/* If there is no compressed chunk ID, this might be the actual
+		 * compressed chunk */
+		ts_compression_settings_delete_by_compress_relid(relid);
 	}
 
 	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);

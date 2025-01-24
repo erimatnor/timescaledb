@@ -1238,7 +1238,8 @@ tsl_process_compress_table_drop_column(Hypertable *ht, char *name)
 	foreach (lc, chunks)
 	{
 		Chunk *chunk = lfirst(lc);
-		CompressionSettings *settings = ts_compression_settings_get(chunk->table_id);
+		CompressionSettings *settings =
+			ts_compression_settings_get_by_compress_relid(chunk->table_id);
 		if (ts_array_is_member(settings->fd.segmentby, name) ||
 			ts_array_is_member(settings->fd.orderby, name))
 			ereport(ERROR,

@@ -98,7 +98,7 @@ decompress_batches_for_insert(const ChunkInsertState *cis, TupleTableSlot *slot)
 
 	Assert(OidIsValid(cis->compressed_chunk_table_id));
 	Relation in_rel = relation_open(cis->compressed_chunk_table_id, RowExclusiveLock);
-	CompressionSettings *settings = ts_compression_settings_get(cis->compressed_chunk_table_id);
+	CompressionSettings *settings = ts_compression_settings_get(RelationGetRelid(cis->rel));
 	Assert(settings);
 
 	Bitmapset *index_columns = NULL;
@@ -242,7 +242,7 @@ decompress_batches_for_update_delete(HypertableModifyState *ht_state, Chunk *chu
 	ScanKeyData *mem_scankeys = NULL;
 
 	comp_chunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, true);
-	CompressionSettings *settings = ts_compression_settings_get(comp_chunk->table_id);
+	CompressionSettings *settings = ts_compression_settings_get(chunk->table_id);
 	bool delete_only = ht_state->mt->operation == CMD_DELETE && !has_joins &&
 					   can_delete_without_decompression(ht_state, settings, chunk, predicates);
 
