@@ -106,7 +106,6 @@ recompress_chunk_segmentwise_impl(Chunk *uncompressed_chunk)
 			 NameStr(uncompressed_chunk->fd.table_name));
 
 	/* need it to find the segby cols from the catalog */
-	Chunk *compressed_chunk = ts_chunk_get_by_id(uncompressed_chunk->fd.compressed_chunk_id, true);
 	CompressionSettings *settings = ts_compression_settings_get(uncompressed_chunk->table_id);
 
 	/* new status after recompress should simply be compressed (1)
@@ -132,7 +131,7 @@ recompress_chunk_segmentwise_impl(Chunk *uncompressed_chunk)
 	 * and make decisions based on them.
 	 */
 	Relation uncompressed_chunk_rel = table_open(uncompressed_chunk->table_id, ExclusiveLock);
-	Relation compressed_chunk_rel = table_open(compressed_chunk->table_id, ExclusiveLock);
+	Relation compressed_chunk_rel = table_open(settings->fd.compress_relid, ExclusiveLock);
 
 	/*
 	 * Calculate and add the column dimension ranges for the src chunk used by chunk skipping

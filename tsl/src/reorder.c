@@ -14,6 +14,7 @@
 /* see postgres commit ab5e9caa4a3ec4765348a0482e88edcf3f6aab4a */
 
 #include <postgres.h>
+#include "ts_catalog/compression_settings.h"
 #include "utils.h"
 #include <access/amapi.h>
 #include <access/multixact.h>
@@ -153,19 +154,20 @@ tsl_move_chunk(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("\"%s\" is not a chunk", get_rel_name(chunk_id))));
 
-	if (ts_chunk_contains_compressed_data(chunk))
-	{
-		Chunk *chunk_parent = ts_chunk_get_compressed_chunk_parent(chunk);
+	const CompressionSettings *settings =
+		ts_compression_settings_get_by_compress_relid(chunk->table_id);
 
+	if (settings)
+	{
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot directly move internal compression data"),
 				 errdetail("Chunk \"%s\" contains compressed data for chunk \"%s\" and cannot be "
 						   "moved directly.",
 						   get_rel_name(chunk_id),
-						   get_rel_name(chunk_parent->table_id)),
+						   get_rel_name(settings->fd.relid)),
 				 errhint("Moving chunk \"%s\" will also move the compressed data.",
-						 get_rel_name(chunk_parent->table_id))));
+						 get_rel_name(settings->fd.relid))));
 	}
 
 	/* If chunk is compressed move it by altering tablespace on both chunks */

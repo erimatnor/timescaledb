@@ -65,6 +65,7 @@
 #include "compression/create.h"
 #include "debug_assert.h"
 #include "extension.h"
+#include "foreign_key.h"
 #include "guc.h"
 #include "hypercore_handler.h"
 #include "relstats.h"
@@ -246,21 +247,20 @@ lazy_build_hypercore_info_cache(Relation rel, bool create_chunk_constraints,
 							NameStr(ht->fd.table_name)),
 					 errhint("Enable compression on the hypertable.")));
 
-		Chunk *c_chunk = create_compress_chunk(ht_compressed, chunk, InvalidOid);
-
-		hsinfo->compressed_relation_id = c_chunk->fd.id;
+		hsinfo->compressed_relid = create_compress_relation(chunk, InvalidOid);
+		hsinfo->compressed_relation_id = -1;
 		ts_chunk_set_compressed_chunk(chunk);
 
 		if (create_chunk_constraints)
 		{
-			ts_chunk_constraints_create(ht_compressed, c_chunk);
-			ts_trigger_create_all_on_chunk(c_chunk);
-			create_proxy_vacuum_index(rel, c_chunk->table_id);
+			ts_copy_referencing_fk(ht_compressed->main_table_relid, hsinfo->compressed_relid);
+			// ts_trigger_create_all_on_chunk(c_chunk);
+			create_proxy_vacuum_index(rel, hsinfo->compressed_relid);
 			RelationSize before_size = ts_relation_size_impl(RelationGetRelid(rel));
 			create_compression_relation_size_stats(hsinfo->relation_id,
 												   RelationGetRelid(rel),
 												   hsinfo->compressed_relation_id,
-												   c_chunk->table_id,
+												   hsinfo->compressed_relid,
 												   &before_size,
 												   0,
 												   0,

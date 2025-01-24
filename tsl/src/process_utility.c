@@ -4,6 +4,7 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include <postgres.h>
+#include "ts_catalog/compression_settings.h"
 #include <access/xact.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_trigger.h>
@@ -73,9 +74,9 @@ process_copy(ProcessUtilityArgs *args)
 		if (!chunk)
 			return DDL_CONTINUE;
 
-		const Chunk *parent = ts_chunk_get_compressed_chunk_parent(chunk);
+		const CompressionSettings *settings = ts_compression_settings_get_by_compress_relid(relid);
 
-		if (parent && ts_is_hypercore_am(ts_get_rel_am(parent->table_id)))
+		if (settings && ts_is_hypercore_am(ts_get_rel_am(settings->fd.relid)))
 		{
 			/* To avoid returning compressed data twice in a pg_dump, replace
 			 * the 'COPY <relation> TO' with 'COPY (select where false) TO' so
@@ -102,7 +103,7 @@ process_copy(ProcessUtilityArgs *args)
 							   "uncompressed form"
 							   " or use timescaledb.hypercore_copy_to_behavior "
 							   "to change this behavior.",
-							   get_rel_name(parent->table_id))));
+							   get_rel_name(settings->fd.relid))));
 		}
 	}
 

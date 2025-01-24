@@ -51,10 +51,8 @@ select compress_chunk( '_timescaledb_internal._hyper_1_1_chunk');
 select * from _timescaledb_catalog.compression_chunk_size
 order by chunk_id;
 \x
-select  ch1.id, ch1.schema_name, ch1.table_name ,  ch2.table_name as compress_table
-from
-_timescaledb_catalog.chunk ch1, _timescaledb_catalog.chunk ch2
-where ch1.compressed_chunk_id = ch2.id;
+
+SELECT * FROM _timescaledb_catalog.compression_settings ORDER BY relid::regclass;
 
 \set ON_ERROR_STOP 0
 --cannot compress the chunk the second time around

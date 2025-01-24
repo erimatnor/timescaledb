@@ -99,8 +99,8 @@ compression_hypertable_create(Hypertable *ht, Oid owner, Oid tablespace_oid)
 }
 
 Oid
-compression_relation_create(const CompressionSettings *hyper_settings, const char *relname,
-							List *column_defs, Oid tablespace_oid)
+compression_relation_create(const CompressionSettings *hyper_settings, const char *schemaname,
+							const char *relname, List *column_defs, Oid tablespace_oid)
 {
 	ObjectAddress tbladdress;
 	CatalogSecurityContext sec_ctx;
@@ -126,8 +126,7 @@ compression_relation_create(const CompressionSettings *hyper_settings, const cha
 	/* create the compression table */
 	/* NewRelationCreateToastTable calls CommandCounterIncrement */
 	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-	compress_rel = makeRangeVar(create->tablespacename, pstrdup(relname), -1);
-
+	compress_rel = makeRangeVar(pstrdup(schemaname), pstrdup(relname), -1);
 	create->relation = compress_rel;
 	tbladdress = DefineRelation(create, RELKIND_RELATION, owner, NULL, NULL);
 
@@ -146,58 +145,6 @@ compression_relation_create(const CompressionSettings *hyper_settings, const cha
 	create_compressed_chunk_indexes(tbladdress.objectId, hyper_settings);
 
 	return tbladdress.objectId;
-}
-
-Oid
-compression_chunk_create(Chunk *src_chunk, Chunk *chunk, List *column_defs, Oid tablespace_oid)
-{
-	ObjectAddress tbladdress;
-	CatalogSecurityContext sec_ctx;
-	Datum toast_options;
-	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
-	CompressionSettings *settings = ts_compression_settings_get(src_chunk->hypertable_relid);
-
-	Oid owner = ts_rel_get_owner(chunk->hypertable_relid);
-
-	CreateStmt *create;
-	RangeVar *compress_rel;
-
-	create = makeNode(CreateStmt);
-	create->tableElts = column_defs;
-	create->inhRelations = NIL;
-	create->ofTypename = NULL;
-	create->constraints = NIL;
-	create->options = NULL;
-	create->oncommit = ONCOMMIT_NOOP;
-	create->tablespacename = get_tablespace_name(tablespace_oid);
-	create->if_not_exists = false;
-
-	/* Invalid tablespace_oid <=> NULL tablespace name */
-	Assert(!OidIsValid(tablespace_oid) == (create->tablespacename == NULL));
-
-	/* create the compression table */
-	/* NewRelationCreateToastTable calls CommandCounterIncrement */
-	ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-	compress_rel = makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), -1);
-
-	create->relation = compress_rel;
-	tbladdress = DefineRelation(create, RELKIND_RELATION, owner, NULL, NULL);
-	CommandCounterIncrement();
-	chunk->table_id = tbladdress.objectId;
-	ts_copy_relation_acl(chunk->hypertable_relid, chunk->table_id, owner);
-	toast_options =
-		transformRelOptions((Datum) 0, create->options, "toast", validnsps, true, false);
-	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
-	NewRelationCreateToastTable(chunk->table_id, toast_options);
-	ts_catalog_restore_user(&sec_ctx);
-	modify_compressed_toast_table_storage(settings, column_defs, chunk->table_id);
-
-	set_statistics_on_compressed_chunk(chunk->table_id);
-	set_toast_tuple_target_on_chunk(chunk->table_id);
-
-	create_compressed_chunk_indexes(chunk->table_id, settings);
-
-	return chunk->table_id;
 }
 
 static void

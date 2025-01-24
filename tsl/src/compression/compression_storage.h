@@ -17,9 +17,8 @@
 #include "ts_catalog/compression_settings.h"
 
 int32 compression_hypertable_create(Hypertable *ht, Oid owner, Oid tablespace_oid);
-Oid compression_chunk_create(Chunk *src_chunk, Chunk *chunk, List *column_defs, Oid tablespace_oid);
 void modify_compressed_toast_table_storage(const CompressionSettings *settings, List *coldefs,
 										   Oid compress_relid);
 void create_compressed_chunk_indexes(Oid chunk_relid, const CompressionSettings *settings);
-Oid compression_relation_create(const CompressionSettings *hyper_settings, const char *relname,
-								List *column_defs, Oid tablespace_oid);
+Oid compression_relation_create(const CompressionSettings *hyper_settings, const char *schemaname,
+								const char *relname, List *column_defs, Oid tablespace_oid);

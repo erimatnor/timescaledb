@@ -964,15 +964,12 @@ add_chunk_to_vacuum(Hypertable *ht, Oid chunk_relid, void *arg)
 
 	/* If we have a compressed chunk and the chunk is not using hypercore
 	 * access method, make sure to analyze it as well */
-	if (chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID && !ts_is_hypercore_am(chunk->amoid))
+	const CompressionSettings *settings = ts_compression_settings_get(chunk_relid);
+
+	if (settings && !ts_is_hypercore_am(chunk->amoid))
 	{
-		Chunk *comp_chunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, false);
-		/* Compressed chunk might be missing due to concurrent operations */
-		if (comp_chunk)
-		{
-			chunk_vacuum_rel = makeVacuumRelation(NULL, comp_chunk->table_id, NIL);
-			ctx->chunk_rels = lappend(ctx->chunk_rels, chunk_vacuum_rel);
-		}
+		chunk_vacuum_rel = makeVacuumRelation(NULL, settings->fd.compress_relid, NIL);
+		ctx->chunk_rels = lappend(ctx->chunk_rels, chunk_vacuum_rel);
 	}
 }
 
@@ -1306,22 +1303,21 @@ process_truncate(ProcessUtilityArgs *args)
 						 * the truncated region. */
 						if (ts_continuous_agg_hypertable_status(ht->fd.id) == HypertableIsRawTable)
 							ts_continuous_agg_invalidate_chunk(ht, chunk);
+
+						const CompressionSettings *settings = ts_compression_settings_get(relid);
+
 						/* Truncate the compressed chunk too, unless it is a hypercore table. */
-						if (!ts_is_hypercore_am(chunk->amoid) &&
-							chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID)
+						if (!ts_is_hypercore_am(chunk->amoid) && settings)
 						{
-							Chunk *compressed_chunk =
-								ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, false);
-							if (compressed_chunk != NULL && !compressed_chunk->fd.dropped)
-							{
-								/* Create list item into the same context of the list. */
-								oldctx = MemoryContextSwitchTo(parsetreectx);
-								rv = makeRangeVar(NameStr(compressed_chunk->fd.schema_name),
-												  NameStr(compressed_chunk->fd.table_name),
-												  -1);
-								MemoryContextSwitchTo(oldctx);
-								list_changed = true;
-							}
+							Oid namespaceid = get_rel_namespace(relid);
+							char *relname = get_rel_name(relid);
+							char *relnamespace = get_namespace_name(namespaceid);
+
+							/* Create list item into the same context of the list. */
+							oldctx = MemoryContextSwitchTo(parsetreectx);
+							rv = makeRangeVar(relnamespace, relname, -1);
+							MemoryContextSwitchTo(oldctx);
+							list_changed = true;
 						}
 
 						/* if the chunk has statistics enabled on it then reset them */
@@ -1440,8 +1436,10 @@ process_drop_chunk(ProcessUtilityArgs *args, DropStmt *stmt)
 		if (chunk != NULL)
 		{
 			Hypertable *ht;
+			const CompressionSettings *settings =
+				ts_compression_settings_get_by_compress_relid(relid);
 
-			if (ts_chunk_contains_compressed_data(chunk))
+			if (settings)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("dropping compressed chunks not supported"),
@@ -1449,14 +1447,19 @@ process_drop_chunk(ProcessUtilityArgs *args, DropStmt *stmt)
 							 "Please drop the corresponding chunk on the uncompressed hypertable "
 							 "instead.")));
 
+			settings = ts_compression_settings_get(relid);
+
 			/* if cascade is enabled, delete the compressed chunk with cascade too. Otherwise
 			 *  it would be blocked if there are dependent objects */
-			if (stmt->behavior == DROP_CASCADE && chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID)
+			if (stmt->behavior == DROP_CASCADE && settings)
 			{
-				Chunk *compressed_chunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, false);
-				/* The chunk may have been delete by a CASCADE */
-				if (compressed_chunk != NULL)
-					ts_chunk_drop(compressed_chunk, stmt->behavior, DEBUG1);
+				ObjectAddress objaddr = {
+					.classId = RelationRelationId,
+					.objectId = settings->fd.compress_relid,
+				};
+
+				/* Drop the compression table */
+				performDeletion(&objaddr, DROP_RESTRICT, 0);
 			}
 
 			ht = ts_hypertable_cache_get_entry(hcache, chunk->hypertable_relid, CACHE_FLAG_NONE);
@@ -3763,19 +3766,22 @@ process_altertable_chunk_set_tablespace(AlterTableCmd *cmd, Oid relid)
 	if (chunk == NULL)
 		return;
 
-	if (ts_chunk_contains_compressed_data(chunk))
+	const CompressionSettings *settings =
+		ts_compression_settings_get_by_compress_relid(chunk->table_id);
+
+	if (settings)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("changing tablespace of compressed chunk is not supported"),
 				 errhint("Please use the corresponding chunk on the uncompressed hypertable "
 						 "instead.")));
 
-	/* set tablespace for compressed chunk */
-	if (chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID)
-	{
-		Chunk *compressed_chunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, true);
+	settings = ts_compression_settings_get(relid);
 
-		AlterTableInternal(compressed_chunk->table_id, list_make1(cmd), false);
+	/* set tablespace for compressed chunk */
+	if (settings)
+	{
+		AlterTableInternal(settings->fd.compress_relid, list_make1(cmd), false);
 	}
 }
 

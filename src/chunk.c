@@ -2435,6 +2435,7 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 					if (++i < nkeys)
 						appendStringInfoString(info, ", ");
 				}
+				Assert(false);
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
 						 errmsg("chunk not found"),
@@ -3063,14 +3064,6 @@ ts_chunk_exists_with_compression(int32 hypertable_id)
 	}
 	ts_scan_iterator_close(&iterator);
 	return found;
-}
-
-bool
-ts_chunk_contains_compressed_data(const Chunk *chunk)
-{
-	Chunk *parent_chunk = ts_chunk_get_compressed_chunk_parent(chunk);
-
-	return parent_chunk != NULL;
 }
 
 List *

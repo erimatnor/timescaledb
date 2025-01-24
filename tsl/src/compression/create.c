@@ -32,6 +32,7 @@
 #include <utils/builtins.h>
 #include <utils/datum.h>
 #include <utils/guc.h>
+#include <utils/lsyscache.h>
 #include <utils/rel.h>
 #include <utils/syscache.h>
 #include <utils/typcache.h>
@@ -412,10 +413,14 @@ create_compress_relation(const Chunk *src_chunk, Oid table_id)
 
 	if (!OidIsValid(table_id))
 	{
-		Oid tablespace_oid = get_namespace_oid(INTERNAL_SCHEMA_NAME, false);
 		List *column_defs = build_columndefs(settings, src_chunk->table_id);
-		table_id =
-			compression_relation_create(settings, NameStr(tablename), column_defs, tablespace_oid);
+		Oid tablespaceid = get_rel_tablespace(src_chunk->table_id);
+
+		table_id = compression_relation_create(settings,
+											   NameStr(src_chunk->fd.schema_name),
+											   NameStr(tablename),
+											   column_defs,
+											   tablespaceid);
 	}
 
 	if (!OidIsValid(table_id))

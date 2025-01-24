@@ -212,7 +212,6 @@ extern TSDLLEXPORT List *ts_chunk_do_drop_chunks(Hypertable *ht, int64 older_tha
 extern TSDLLEXPORT Chunk *
 ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const char *schema_name,
 									 const char *table_name, Oid chunk_table_relid, bool *created);
-extern TSDLLEXPORT Chunk *ts_chunk_get_compressed_chunk_parent(const Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_is_unordered(const Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_is_partial(const Chunk *chunk);
 extern TSDLLEXPORT bool ts_chunk_is_compressed(const Chunk *chunk);
@@ -221,7 +220,6 @@ extern TSDLLEXPORT bool ts_chunk_validate_chunk_status_for_operation(const Chunk
 																	 ChunkOperation cmd,
 																	 bool throw_error);
 
-extern TSDLLEXPORT bool ts_chunk_contains_compressed_data(const Chunk *chunk);
 extern TSDLLEXPORT ChunkCompressionStatus ts_chunk_get_compression_status(int32 chunk_id);
 extern TSDLLEXPORT Datum ts_chunk_id_from_relid(PG_FUNCTION_ARGS);
 extern TSDLLEXPORT List *ts_chunk_get_chunk_ids_by_hypertable_id(int32 hypertable_id);

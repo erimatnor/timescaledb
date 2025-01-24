@@ -96,11 +96,9 @@ decompress_batches_for_insert(const ChunkInsertState *cis, TupleTableSlot *slot)
 		return;
 	}
 
-	Assert(OidIsValid(cis->compressed_chunk_table_id));
-	Relation in_rel = relation_open(cis->compressed_chunk_table_id, RowExclusiveLock);
 	CompressionSettings *settings = ts_compression_settings_get(RelationGetRelid(cis->rel));
 	Assert(settings);
-
+	Relation in_rel = relation_open(settings->fd.compress_relid, RowExclusiveLock);
 	Bitmapset *index_columns = NULL;
 	Bitmapset *null_columns = NULL;
 	struct decompress_batches_stats stats;
@@ -229,7 +227,6 @@ decompress_batches_for_update_delete(HypertableModifyState *ht_state, Chunk *chu
 	Relation chunk_rel;
 	Relation comp_chunk_rel;
 	Relation matching_index_rel = NULL;
-	Chunk *comp_chunk;
 	BatchFilter *filter;
 
 	ScanKeyData *scankeys = NULL;
@@ -241,7 +238,6 @@ decompress_batches_for_update_delete(HypertableModifyState *ht_state, Chunk *chu
 	int num_mem_scankeys = 0;
 	ScanKeyData *mem_scankeys = NULL;
 
-	comp_chunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, true);
 	CompressionSettings *settings = ts_compression_settings_get(chunk->table_id);
 	bool delete_only = ht_state->mt->operation == CMD_DELETE && !has_joins &&
 					   can_delete_without_decompression(ht_state, settings, chunk, predicates);
@@ -256,7 +252,7 @@ decompress_batches_for_update_delete(HypertableModifyState *ht_state, Chunk *chu
 					   &is_null);
 
 	chunk_rel = table_open(chunk->table_id, RowExclusiveLock);
-	comp_chunk_rel = table_open(comp_chunk->table_id, RowExclusiveLock);
+	comp_chunk_rel = table_open(settings->fd.compress_relid, RowExclusiveLock);
 
 	if (index_filters)
 	{
