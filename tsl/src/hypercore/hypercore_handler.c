@@ -23,6 +23,7 @@
 #include <commands/progress.h>
 #include <commands/vacuum.h>
 #include <common/relpath.h>
+#include <executor/executor.h>
 #include <executor/tuptable.h>
 #include <nodes/bitmapset.h>
 #include <nodes/execnodes.h>
@@ -2790,6 +2791,7 @@ typedef struct IndexBuildCallbackState
 	Bitmapset *orderby_cols;
 	bool is_segmentby_index;
 	MemoryContext decompression_mcxt;
+	MemoryContext batch_mcxt;
 	ArrowArray **arrow_columns;
 } IndexBuildCallbackState;
 
@@ -2834,6 +2836,8 @@ hypercore_index_build_callback(Relation index, ItemPointer tid, Datum *values, b
 	if (tupleIsAlive)
 		icstate->ntuples += num_actual_rows;
 
+	MemoryContextReset(GetPerTupleMemoryContext(icstate->estate));
+
 	/*
 	 * Phase 1: Prepare to process the compressed segment.
 	 *
@@ -2876,10 +2880,11 @@ hypercore_index_build_callback(Relation index, ItemPointer tid, Datum *values, b
 			{
 				const Form_pg_attribute attr =
 					TupleDescAttr(tupdesc, AttrNumberGetAttrOffset(attno));
-				icstate->arrow_columns[i] = arrow_from_compressed(values[i],
-																  attr->atttypid,
-																  CurrentMemoryContext,
-																  icstate->decompression_mcxt);
+				icstate->arrow_columns[i] =
+					arrow_from_compressed(values[i],
+										  attr->atttypid,
+										  GetPerTupleMemoryContext(icstate->estate),
+										  icstate->decompression_mcxt);
 
 				/* The number of elements in the arrow array should be the
 				 * same as the number of rows in the segment (count
