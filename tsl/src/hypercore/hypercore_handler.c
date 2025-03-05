@@ -2976,6 +2976,8 @@ hypercore_index_build_callback(Relation index, ItemPointer tid, Datum *values, b
 		icstate->callback(index, &index_tid, values, isnull, tupleIsAlive, icstate->orig_state);
 		old_mcxt = MemoryContextSwitchTo(icstate->batch_mcxt);
 	}
+
+	MemoryContextSwitchTo(old_mcxt);
 }
 
 /*
