@@ -2913,10 +2913,12 @@ hypercore_index_build_callback(Relation index, ItemPointer tid, Datum *values, b
 
 	for (int rownum = 0; rownum < num_rows; rownum++)
 	{
+		MemoryContext old_mcxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(icstate->estate));
+
 		/* The slot is a table slot, not index slot. But we only fill in the
 		 * columns needed for the index and predicate checks. Therefore, make sure
 		 * other columns are initialized to "null" */
-		memset(slot->tts_isnull, true, sizeof(bool) * slot->tts_tupleDescriptor->natts);
+		MemSet(slot->tts_isnull, true, sizeof(bool) * slot->tts_tupleDescriptor->natts);
 		ExecClearTuple(slot);
 
 		for (int colnum = 0; colnum < natts; colnum++)
@@ -2954,6 +2956,8 @@ hypercore_index_build_callback(Relation index, ItemPointer tid, Datum *values, b
 		ItemPointerData index_tid;
 		hypercore_tid_encode(&index_tid, tid, rownum + 1);
 		Assert(!icstate->is_segmentby_index || rownum == 0);
+
+		MemoryContextSwitchTo(old_mcxt);
 
 		/*
 		 * In a partial index, discard tuples that don't satisfy the
