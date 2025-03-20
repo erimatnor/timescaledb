@@ -1180,3 +1180,20 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+Datum
+chunk_split_chunk(PG_FUNCTION_ARGS)
+{
+	Oid relid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
+	const char *colname = PG_ARGISNULL(1) ? NULL : PG_GETARG_CSTRING(1);
+
+	if (colname != NULL && !PG_ARGISNULL(2))
+	{
+		Oid argtype = get_fn_expr_argtype(fcinfo->flinfo, 2);
+
+		elog(NOTICE, "Argtype is %s", format_type_be(argtype));
+	}
+
+	elog(NOTICE, "split chunk %s at col %s", get_rel_name(relid), colname ? colname : "NoCol");
+	PG_RETURN_VOID();
+}
