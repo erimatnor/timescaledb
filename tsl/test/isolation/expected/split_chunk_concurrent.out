@@ -1,131 +1,169 @@
-unused step name: s1_begin
-unused step name: s1_commit
-unused step name: s1_insert_into_splitting_chunk
-unused step name: s1_row_exclusive_lock
-unused step name: s1_show_chunks
-unused step name: s1_show_data
-unused step name: s2_merge_chunks
-unused step name: s2_show_chunks
-unused step name: s3_begin
-unused step name: s3_commit
-unused step name: s3_show_chunks
-unused step name: s3_show_data
-unused step name: s4_wp_before_routing_off
-unused step name: s4_wp_before_routing_on
-Parsed test spec with 4 sessions
+Parsed test spec with 3 sessions
 
-starting permutation: s4_show_chunks s4_wp_at_end_on s3_split_chunk s1_insert_into_existing_chunk s4_wp_at_end_off s4_show_chunks s4_query_data
-step s4_show_chunks: 
-    select chunk_name, range_start, range_end
-           from timescaledb_information.chunks
-           where hypertable_name = 'readings'
-           order by range_start::timestamptz, chunk_name;
+starting permutation: s3_query_data s3_wp_at_end_on s2_split_chunk s1_insert_into_splitting_chunk_range1 s3_wp_at_end_off s3_query_data
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
 
-chunk_name      |range_start                 |range_end                   
-----------------+----------------------------+----------------------------
-_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
-_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
-(2 rows)
-
-step s4_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+step s3_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
 debug_waitpoint_enable
 ----------------------
                       
 (1 row)
 
-step s3_split_chunk: 
+step s2_split_chunk: 
+    call split_first_chunk('readings');
+ <waiting ...>
+step s1_insert_into_splitting_chunk_range1: 
+    insert into readings values ('2024-02-09 01:05', 4, 4.0);
+ <waiting ...>
+step s3_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s2_split_chunk: <... completed>
+step s1_insert_into_splitting_chunk_range1: <... completed>
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Sun Feb 11 04:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Sun Feb 11 04:00:00 2024 PST]: ("Fri Feb 09 01:05:00 2024 PST",4,4)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Sun Feb 11 04:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 3. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
+
+
+starting permutation: s3_query_data s3_wp_at_end_on s2_split_chunk s1_insert_into_splitting_chunk_range2 s3_wp_at_end_off s3_query_data
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
+
+step s3_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s2_split_chunk: 
+    call split_first_chunk('readings');
+ <waiting ...>
+step s1_insert_into_splitting_chunk_range2: 
+    insert into readings values ('2024-02-12 01:05', 5, 5.0);
+ <waiting ...>
+step s3_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s2_split_chunk: <... completed>
+step s1_insert_into_splitting_chunk_range2: <... completed>
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Sun Feb 11 04:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Sun Feb 11 04:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Mon Feb 12 01:05:00 2024 PST",5,5)
+s3: NOTICE:  [Sun Feb 11 04:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 3. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
+
+
+starting permutation: s3_query_data s3_wp_at_end_on s2_split_chunk s1_insert_into_existing_chunk s3_wp_at_end_off s3_query_data
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
+
+step s3_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s2_split_chunk: 
     call split_first_chunk('readings');
  <waiting ...>
 step s1_insert_into_existing_chunk: 
-    insert into readings values ('2024-01-08 01:05', 5, 5.0);
+    insert into readings values ('2024-02-17 01:05', 6, 6.0);
 
-step s4_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+step s3_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
 debug_waitpoint_release
 -----------------------
                        
 (1 row)
 
-step s3_split_chunk: <... completed>
-step s4_show_chunks: 
-    select chunk_name, range_start, range_end
-           from timescaledb_information.chunks
-           where hypertable_name = 'readings'
-           order by range_start::timestamptz, chunk_name;
-
-chunk_name      |range_start                 |range_end                   
-----------------+----------------------------+----------------------------
-_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Sun Dec 31 04:00:00 2023 PST
-_hyper_X_X_chunk|Sun Dec 31 04:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
-_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
-(3 rows)
-
-step s4_query_data: 
-    select * from readings order by time;
-
-time                        |device|temp
-----------------------------+------+----
-Mon Jan 01 01:00:00 2024 PST|     1|   1
-Mon Jan 08 01:01:00 2024 PST|     2|   2
-Mon Jan 08 01:05:00 2024 PST|     5|   5
-Mon Jan 08 02:00:00 2024 PST|     3|   3
-(4 rows)
+step s2_split_chunk: <... completed>
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Sun Feb 11 04:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Sun Feb 11 04:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 3. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sat Feb 17 01:05:00 2024 PST",6,6)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
 
 
-starting permutation: s4_show_chunks s4_wp_at_end_on s3_split_chunk s1_insert_into_new_chunk s4_wp_at_end_off s4_show_chunks s4_query_data
-step s4_show_chunks: 
-    select chunk_name, range_start, range_end
-           from timescaledb_information.chunks
-           where hypertable_name = 'readings'
-           order by range_start::timestamptz, chunk_name;
+starting permutation: s3_query_data s3_wp_at_end_on s2_split_chunk s1_insert_into_new_chunk s3_wp_at_end_off s3_query_data
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
 
-chunk_name      |range_start                 |range_end                   
-----------------+----------------------------+----------------------------
-_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
-_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
-(2 rows)
-
-step s4_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+step s3_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
 debug_waitpoint_enable
 ----------------------
                       
 (1 row)
 
-step s3_split_chunk: 
+step s2_split_chunk: 
     call split_first_chunk('readings');
  <waiting ...>
 step s1_insert_into_new_chunk: 
-    insert into readings values ('2024-01-11 10:00', 6, 6.0);
+    insert into readings values ('2024-02-23 10:00', 7, 7.0);
  <waiting ...>
-step s4_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+step s3_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
 debug_waitpoint_release
 -----------------------
                        
 (1 row)
 
-step s3_split_chunk: <... completed>
+step s2_split_chunk: <... completed>
 step s1_insert_into_new_chunk: <... completed>
-step s4_show_chunks: 
-    select chunk_name, range_start, range_end
-           from timescaledb_information.chunks
-           where hypertable_name = 'readings'
-           order by range_start::timestamptz, chunk_name;
-
-chunk_name      |range_start                 |range_end                   
-----------------+----------------------------+----------------------------
-_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Sun Dec 31 04:00:00 2023 PST
-_hyper_X_X_chunk|Sun Dec 31 04:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
-_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
-_hyper_X_X_chunk|Wed Jan 10 16:00:00 2024 PST|Wed Jan 17 16:00:00 2024 PST
-(4 rows)
-
-step s4_query_data: 
-    select * from readings order by time;
-
-time                        |device|temp
-----------------------------+------+----
-Mon Jan 01 01:00:00 2024 PST|     1|   1
-Mon Jan 08 01:01:00 2024 PST|     2|   2
-Mon Jan 08 02:00:00 2024 PST|     3|   3
-Thu Jan 11 10:00:00 2024 PST|     6|   6
-(4 rows)
+s3: NOTICE:  ------ 1. chunk ------
+s3: NOTICE:  [Wed Feb 07 16:00:00 2024 PST - Sun Feb 11 04:00:00 2024 PST]: ("Thu Feb 08 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 2. chunk ------
+s3: NOTICE:  [Sun Feb 11 04:00:00 2024 PST - Wed Feb 14 16:00:00 2024 PST]: ("Tue Feb 13 01:00:00 2024 PST",1,1)
+s3: NOTICE:  ------ 3. chunk ------
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Thu Feb 15 01:01:00 2024 PST",2,2)
+s3: NOTICE:  [Wed Feb 14 16:00:00 2024 PST - Wed Feb 21 16:00:00 2024 PST]: ("Sun Feb 18 02:00:00 2024 PST",3,3)
+s3: NOTICE:  ------ 4. chunk ------
+s3: NOTICE:  [Wed Feb 21 16:00:00 2024 PST - Wed Feb 28 16:00:00 2024 PST]: ("Fri Feb 23 10:00:00 2024 PST",7,7)
+step s3_query_data: 
+    call show_per_chunk_data('readings');
 

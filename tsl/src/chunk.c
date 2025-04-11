@@ -1687,6 +1687,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ts_cache_release(hcache);
 	table_close(splitrel, NoLock);
 
+	DEBUG_WAITPOINT("split_chunk_at_end");
+
 	/* Cleanup split rel infos and reindex new chunks */
 	for (int i = 0; i < 2; i++)
 	{
