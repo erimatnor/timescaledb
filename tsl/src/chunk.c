@@ -59,7 +59,6 @@
 #include <utils/syscache.h>
 #include <utils/tuplestore.h>
 
-#include "compat/compat.h"
 #include "annotations.h"
 #include "cache.h"
 #include "chunk.h"
@@ -1189,24 +1188,41 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 typedef struct RelationSplitInfo
 {
+	const Chunk *chunk;
 	BulkInsertState bistate;
 	TupleTableSlot *dstslot;
 	RewriteState rwstate;
+	Oid relid;
 	Relation rel;
+	Oid temp_relid;
+	Relation temp_rel;
 	Datum *values;
 	bool *isnull;
 	TupleConversionMap *tupmap;
 } RelationSplitInfo;
 
 static RelationSplitInfo *
-relation_split_info_create(Relation splitrel, Relation rel, struct VacuumCutoffs *cutoffs)
+relation_split_info_create(Relation splitrel, Relation rel, const Chunk *chunk,
+						   struct VacuumCutoffs *cutoffs)
 {
 	RelationSplitInfo *rsi = palloc0(sizeof(RelationSplitInfo));
+	const char relpersistence = splitrel->rd_rel->relpersistence;
 
+	rsi->chunk = chunk;
+	rsi->relid = RelationGetRelid(rel);
 	rsi->rel = rel;
 	rsi->bistate = GetBulkInsertState();
+
+	rsi->temp_relid = make_new_heap(rsi->relid,
+									splitrel->rd_rel->reltablespace,
+									splitrel->rd_rel->relam,
+									relpersistence,
+									AccessExclusiveLock);
+
+	rsi->temp_rel = table_open(rsi->temp_relid, AccessExclusiveLock);
+
 	rsi->rwstate = begin_heap_rewrite(splitrel,
-									  rel,
+									  rsi->temp_rel,
 									  cutoffs->OldestXmin,
 									  cutoffs->FreezeLimit,
 									  cutoffs->MultiXactCutoff);
@@ -1228,8 +1244,9 @@ relation_split_info_free(RelationSplitInfo *rsi, int ti_options)
 {
 	ExecDropSingleTupleTableSlot(rsi->dstslot);
 	FreeBulkInsertState(rsi->bistate);
-	table_finish_bulk_insert(rsi->rel, ti_options);
+	table_finish_bulk_insert(rsi->temp_rel, ti_options);
 	end_heap_rewrite(rsi->rwstate);
+	table_close(rsi->temp_rel, NoLock);
 	table_close(rsi->rel, NoLock);
 	pfree(rsi->values);
 	pfree(rsi->isnull);
@@ -1280,6 +1297,20 @@ reform_and_rewrite_tuple(HeapTuple tuple, Relation splitrel, RelationSplitInfo *
 	rewrite_heap_tuple(rsi->rwstate, tuple, tupcopy);
 
 	heap_freetuple(tupcopy);
+}
+
+static DimensionSlice *
+hypercube_get_mutable_slice(Hypercube *cube, int32 dimension_id)
+{
+	for (int i = 0; i < cube->num_slices; i++)
+	{
+		DimensionSlice *slice = cube->slices[i];
+
+		if (slice->fd.dimension_id == dimension_id)
+			return slice;
+	}
+
+	return NULL;
 }
 
 /*
@@ -1441,27 +1472,18 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	/*
 	 * Find the existing partition slice for the chunk being split.
 	 */
-	DimensionSlice *slice = NULL;
+	Hypercube *split_cube = ts_hypercube_copy(chunk->cube);
 	Hypercube *new_cube = ts_hypercube_copy(chunk->cube);
+	DimensionSlice *split_slice = hypercube_get_mutable_slice(split_cube, dim->fd.id);
+	DimensionSlice *new_slice = hypercube_get_mutable_slice(new_cube, dim->fd.id);
 
-	for (int i = 0; i < new_cube->num_slices; i++)
-	{
-		DimensionSlice *curr_slice = new_cube->slices[i];
-
-		if (curr_slice->fd.dimension_id == dim->fd.id)
-		{
-			slice = curr_slice;
-			break;
-		}
-	}
-
-	Ensure(slice, "no chunk slice for dimension %s", NameStr(dim->fd.column_name));
+	Ensure(split_slice, "no chunk slice for dimension %s", NameStr(dim->fd.column_name));
 
 	/*
 	 * Pick split point and calculate new ranges. If no split point is given
 	 * by the user, then split in the middle.
 	 */
-	int64 interval_range = slice->fd.range_end - slice->fd.range_start;
+	int64 interval_range = split_slice->fd.range_end - split_slice->fd.range_start;
 	int64 split_point = 0;
 
 	if (have_split_at)
@@ -1474,7 +1496,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 		 * split_at value needs to produce partition ranges of at least length
 		 * 1.
 		 */
-		if (split_point < (slice->fd.range_start + 1) || split_point > (slice->fd.range_end - 2))
+		if (split_point < (split_slice->fd.range_start + 1) ||
+			split_point > (split_slice->fd.range_end - 2))
 		{
 			Oid outfuncid = InvalidOid;
 			bool isvarlena = false;
@@ -1488,30 +1511,17 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 		}
 	}
 	else
-		split_point = slice->fd.range_start + (interval_range / 2);
+		split_point = split_slice->fd.range_start + (interval_range / 2);
 
-	int64 old_end = slice->fd.range_end;
+	int64 old_end = split_slice->fd.range_end;
 
 	/* Update the slice range for the existing chunk */
-	slice->fd.range_end = split_point;
-	chunk_update_constraints(chunk, new_cube);
+	split_slice->fd.range_end = split_point;
 
 	/* Update the slice for the new chunk */
-	slice->fd.range_start = split_point;
-	slice->fd.range_end = old_end;
-	slice->fd.id = 0; /* Must set to 0 to mark as new for it to be created */
-
-	/* Make updated constraints visible */
-	CommandCounterIncrement();
-	bool created = false;
-	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
-															new_cube,
-															NameStr(chunk->fd.schema_name),
-															NULL,
-															InvalidOid,
-															&created);
-	Ensure(created, "could not create chunk for split");
-	Assert(new_chunk);
+	new_slice->fd.range_start = split_point;
+	new_slice->fd.range_end = old_end;
+	new_slice->fd.id = 0; /* Must set to 0 to mark as new for it to be created */
 
 	int ti_options = TABLE_INSERT_SKIP_FSM;
 	TupleTableSlot *srcslot;
@@ -1525,13 +1535,9 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	compute_rel_vacuum_cutoffs(splitrel, &cutoffs);
 
-	Oid new_heap_relid = make_new_heap(RelationGetRelid(splitrel),
-									   splitrel->rd_rel->reltablespace,
-									   splitrel->rd_rel->relam,
-									   relpersistence,
-									   AccessExclusiveLock);
-
-	Relation splitrel_new = table_open(new_heap_relid, AccessExclusiveLock);
+	/* Create a table relation for the new chunk. No chunk metadata is created
+	 * in the catalog at this stage. */
+	const Chunk *new_chunk = ts_chunk_create_object_and_table(ht, new_cube, NULL, NULL);
 	Relation new_chunkrel = table_open(new_chunk->table_id, AccessExclusiveLock);
 
 	estate = CreateExecutorState();
@@ -1540,8 +1546,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	srcslot = MakeSingleTupleTableSlot(RelationGetDescr(splitrel), table_slot_callbacks(splitrel));
 
 	/* Setup the state we need for each new chunk partition */
-	splitinfos[0] = relation_split_info_create(splitrel, splitrel_new, &cutoffs);
-	splitinfos[1] = relation_split_info_create(splitrel, new_chunkrel, &cutoffs);
+	splitinfos[0] = relation_split_info_create(splitrel, splitrel, chunk, &cutoffs);
+	splitinfos[1] = relation_split_info_create(splitrel, new_chunkrel, new_chunk, &cutoffs);
 
 	/* Scan through the rows using SnapshotAny to see everything. */
 	scan = table_beginscan(splitrel, SnapshotAny, 0, NULL);
@@ -1566,6 +1572,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	double tups_recently_dead = 0.0;
 
 	BufferHeapTupleTableSlot *hslot = (BufferHeapTupleTableSlot *) srcslot;
+
+	DEBUG_WAITPOINT("split_chunk_before_tuple_routing");
 
 	while (table_scan_getnextslot(scan, ForwardScanDirection, srcslot))
 	{
@@ -1684,40 +1692,42 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ExecDropSingleTupleTableSlot(srcslot);
 	FreeExecutorState(estate);
 
-	ts_cache_release(hcache);
-	table_close(splitrel, NoLock);
-
 	/* Cleanup split rel infos and reindex new chunks */
 	for (int i = 0; i < 2; i++)
 	{
-		ReindexParams reindex_params = { 0 };
-		int reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
-		Oid chunkrelid = splitinfos[i]->rel->rd_id;
+		RelationSplitInfo *rsi = splitinfos[i];
+		Oid relid = rsi->relid;
+		Oid temp_relid = rsi->temp_relid;
 
-		if (relpersistence == RELPERSISTENCE_UNLOGGED)
-			reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
-		else if (relpersistence == RELPERSISTENCE_PERMANENT)
-			reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
+		if (i == 0)
+		{
+			Assert(RelationGetRelid(rsi->rel) == RelationGetRelid(splitrel));
+			chunk_update_constraints(rsi->chunk, split_cube);
+		}
+		else
+		{
+			ts_chunk_write_metadata(ht, new_chunk);
+		}
+
+		CommandCounterIncrement();
 
 		relation_split_info_free(splitinfos[i], ti_options);
 
-		/* Only reindex new chunks. Existing chunk will have be reindexed
-		 * during the heap swap below. */
-		if (i > 0)
-			reindex_relation_compat(NULL, chunkrelid, reindex_flags, &reindex_params);
+		/* Finally, swap the heap of the chunk */
+		finish_heap_swap(relid,
+						 temp_relid,
+						 false, /* system catalog */
+						 false /* swap toast by content */,
+						 true, /* check constraints */
+						 true, /* internal? */
+						 cutoffs.FreezeLimit,
+						 cutoffs.MultiXactCutoff,
+						 relpersistence);
 	}
 
-	/* Finally, swap the heap of the chunk that we split so that it only
-	 * contains the tuples for its new partition boundaries. */
-	finish_heap_swap(relid,
-					 new_heap_relid,
-					 false, /* system catalog */
-					 false /* swap toast by content */,
-					 true, /* check constraints */
-					 true, /* internal? */
-					 cutoffs.FreezeLimit,
-					 cutoffs.MultiXactCutoff,
-					 relpersistence);
+	ts_cache_release(hcache);
+
+	DEBUG_WAITPOINT("split_chunk_at_end");
 
 	PG_RETURN_VOID();
 }

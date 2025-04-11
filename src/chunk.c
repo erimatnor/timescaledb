@@ -970,6 +970,35 @@ chunk_create_only_table_after_lock(const Hypertable *ht, Hypercube *cube, const 
 	return chunk;
 }
 
+/*
+ * Create a new Chunk object and the associated table relation, but don't
+ * write any metadata.
+ */
+Chunk *
+ts_chunk_create_object_and_table(const Hypertable *ht, Hypercube *cube, const char *schema_name,
+								 const char *table_name)
+{
+	return chunk_create_only_table_after_lock(ht,
+											  cube,
+											  schema_name,
+											  table_name,
+											  NULL,
+											  get_next_chunk_id());
+}
+
+/*
+ * Write all metadata associated with a chunk to the catalog.
+ */
+void
+ts_chunk_write_metadata(const Hypertable *ht, const Chunk *chunk)
+{
+	ts_dimension_slice_insert_multi(chunk->cube->slices, chunk->cube->num_slices);
+	ts_chunk_column_stats_insert(ht, chunk);
+	chunk_add_constraints(chunk);
+	chunk_insert_into_metadata_after_lock(chunk);
+	chunk_create_table_constraints(ht, chunk);
+}
+
 static Chunk *
 chunk_create_from_hypercube_after_lock(const Hypertable *ht, Hypercube *cube,
 									   const char *schema_name, const char *table_name,
