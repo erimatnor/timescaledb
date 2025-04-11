@@ -172,6 +172,11 @@ extern TSDLLEXPORT void ts_chunk_insert_lock(const Chunk *chunk, LOCKMODE lock);
 
 extern TSDLLEXPORT Oid ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht,
 											 const char *tablespacename);
+extern TSDLLEXPORT Chunk *ts_chunk_create_object_and_table(const Hypertable *ht, Hypercube *cube,
+                                                           const char *schema_name,
+                                                           const char *table_name);
+extern TSDLLEXPORT void ts_chunk_write_metadata(const Hypertable *ht, const Chunk *chunk);
+
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_id(int32 id, bool fail_if_not_found);
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found);
 extern TSDLLEXPORT void ts_chunk_free(Chunk *chunk);

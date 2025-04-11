@@ -1068,6 +1068,35 @@ chunk_add_inheritance(Chunk *chunk, const Hypertable *ht)
 	AlterTable(&alterstmt, lockmode, &atcontext);
 }
 
+/*
+ * Create a new Chunk object and the associated table relation, but don't
+ * write any metadata.
+ */
+Chunk *
+ts_chunk_create_object_and_table(const Hypertable *ht, Hypercube *cube, const char *schema_name,
+                                 const char *table_name)
+{
+    return chunk_create_only_table_after_lock(ht,
+                                              cube,
+                                              schema_name,
+                                              table_name,
+                                              NULL,
+                                              get_next_chunk_id());
+}
+
+/*
+ * Write all metadata associated with a chunk to the catalog.
+ */
+void
+ts_chunk_write_metadata(const Hypertable *ht, const Chunk *chunk)
+{
+    ts_dimension_slice_insert_multi(chunk->cube->slices, chunk->cube->num_slices);
+    ts_chunk_column_stats_insert(ht, chunk);
+    chunk_add_constraints(chunk);
+    chunk_insert_into_metadata_after_lock(chunk);
+    chunk_create_table_constraints(ht, chunk);
+}
+
 static Chunk *
 chunk_create_from_hypercube_and_table_after_lock(const Hypertable *ht, Hypercube *cube,
 												 Oid chunk_table_relid, const char *schema_name,
@@ -1177,7 +1206,7 @@ ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const 
 	if (NULL == stub)
 	{
 		/* Serialize chunk creation around the root hypertable */
-		LockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
+		//LockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
 
 		/* Check again after lock */
 		stub = chunk_collides(ht, hc);
@@ -1215,7 +1244,7 @@ ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const 
 		}
 
 		/* We didn't need the lock, so release it */
-		UnlockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
+		//UnlockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
 	}
 
 	Assert(NULL != stub);
@@ -1272,6 +1301,7 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, bool *found, con
 	 * ShareUpdateExclusiveLock, which is the weakest lock possible that
 	 * conflicts with itself. The lock needs to be held until transaction end.
 	 */
+	elog(NOTICE, "taking shareupdate lock");
 	LockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
 
 	DEBUG_WAITPOINT("chunk_create_for_point");

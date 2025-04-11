@@ -47,10 +47,30 @@ setup
         execute format('call split_chunk(%L)', chunk);
     end;
     $$ LANGUAGE plpgsql;
+
+    CREATE VIEW lock_monitor AS(
+SELECT
+  COALESCE(blockingl.relation::regclass::text,blockingl.locktype) as locked_item,
+  now() - blockeda.query_start AS waiting_duration, blockeda.pid AS blocked_pid,
+  blockeda.query as blocked_query, blockedl.mode as blocked_mode,
+  blockinga.pid AS blocking_pid, blockinga.query as blocking_query,
+  blockingl.mode as blocking_mode
+FROM pg_catalog.pg_locks blockedl
+JOIN pg_stat_activity blockeda ON blockedl.pid = blockeda.pid
+JOIN pg_catalog.pg_locks blockingl ON(
+  ( (blockingl.transactionid=blockedl.transactionid) OR
+  (blockingl.relation=blockedl.relation AND blockingl.locktype=blockedl.locktype)
+  ) AND blockedl.pid != blockingl.pid)
+JOIN pg_stat_activity blockinga ON blockingl.pid = blockinga.pid
+  AND blockinga.datid = blockeda.datid
+WHERE NOT blockedl.granted
+AND blockinga.datname = current_database()
+);
 }
 
 teardown {
     drop table readings;
+    drop view lock_monitor;
 }
 
 session "s1"
@@ -97,7 +117,10 @@ step "s3_query_data" {
 step "s3_wp_at_end_on" { SELECT debug_waitpoint_enable('split_chunk_at_end'); }
 step "s3_wp_at_end_off" { SELECT debug_waitpoint_release('split_chunk_at_end'); }
 
+step "s3_locks" {
+   select * from lock_monitor;
 
+}
 # Concurrent insert into chunk being split
 permutation "s3_query_data" "s3_wp_at_end_on" "s2_split_chunk" "s1_insert_into_splitting_chunk_range1" "s3_wp_at_end_off" "s3_query_data"
 
@@ -107,4 +130,4 @@ permutation "s3_query_data" "s3_wp_at_end_on" "s2_split_chunk" "s1_insert_into_s
 permutation "s3_query_data" "s3_wp_at_end_on" "s2_split_chunk" "s1_insert_into_existing_chunk" "s3_wp_at_end_off" "s3_query_data"
 
 # Concurrent insert into new chunk while another chunk is being split
-permutation "s3_query_data" "s3_wp_at_end_on" "s2_split_chunk" "s1_insert_into_new_chunk" "s3_wp_at_end_off" "s3_query_data"
+permutation "s3_query_data" "s3_wp_at_end_on" "s2_split_chunk" "s1_insert_into_new_chunk" "s3_locks" "s3_wp_at_end_off" "s3_query_data"

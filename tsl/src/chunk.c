@@ -25,6 +25,7 @@
 #include <catalog/pg_constraint_d.h>
 #include <catalog/pg_foreign_server.h>
 #include <catalog/pg_foreign_table.h>
+#include <catalog/pg_inherits.h>
 #include <catalog/pg_type_d.h>
 #include <commands/defrem.h>
 #include <commands/tablecmds.h>
@@ -1436,7 +1437,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	/* Serialize chunk creation around the root hypertable. NOTE: also taken
 	 * in ts_chunk_find_or_create_without_cuts() below. */
-	LockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
+	//LockRelationOid(ht->main_table_relid, ShareUpdateExclusiveLock);
 
 	/*
 	 * Find the existing partition slice for the chunk being split.
@@ -1492,9 +1493,17 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	int64 old_end = slice->fd.range_end;
 
+	LOCKTAG		tag;
+	SET_LOCKTAG_RELATION(tag, MyDatabaseId, ht->main_table_relid);
+
+	if (LockHeldByMe(&tag, ShareUpdateExclusiveLock, false))
+	{
+		elog(NOTICE, "ShareUpdateExclusive held by split before update constraints");
+	}
 	/* Update the slice range for the existing chunk */
 	slice->fd.range_end = split_point;
 	chunk_update_constraints(chunk, new_cube);
+
 
 	/* Update the slice for the new chunk */
 	slice->fd.range_start = split_point;
@@ -1503,6 +1512,13 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	/* Make updated constraints visible */
 	CommandCounterIncrement();
+	
+	if (LockHeldByMe(&tag, ShareUpdateExclusiveLock, false))
+	{
+		elog(NOTICE, "ShareUpdateExclusive held by split after update constraints");
+	}
+
+#if 0
 	bool created = false;
 	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
@@ -1511,7 +1527,18 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 															InvalidOid,
 															&created);
 	Ensure(created, "could not create chunk for split");
+#else
+	// This function takes ShareUpdateExclusive to attach the table to inheritance
+	Chunk *new_chunk = ts_chunk_create_object_and_table(ht, new_cube, NameStr(chunk->fd.schema_name), NULL);
+#endif
 	Assert(new_chunk);
+	
+
+	if (LockHeldByMe(&tag, ShareUpdateExclusiveLock, false))
+	{
+		elog(NOTICE, "ShareUpdateExclusive held by split after creating chunk");
+	}
+		
 
 	int ti_options = TABLE_INSERT_SKIP_FSM;
 	TupleTableSlot *srcslot;
@@ -1684,9 +1711,13 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ExecDropSingleTupleTableSlot(srcslot);
 	FreeExecutorState(estate);
 
-	ts_cache_release(hcache);
 	table_close(splitrel, NoLock);
 
+
+	if (LockHeldByMe(&tag, ShareUpdateExclusiveLock, false))
+	{
+		elog(NOTICE, "ShareUpdateExclusive held before heap swap");
+	}
 	DEBUG_WAITPOINT("split_chunk_at_end");
 
 	/* Cleanup split rel infos and reindex new chunks */
@@ -1709,6 +1740,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 			reindex_relation_compat(NULL, chunkrelid, reindex_flags, &reindex_params);
 	}
 
+	ts_chunk_write_metadata(ht, new_chunk);
+	
 	/* Finally, swap the heap of the chunk that we split so that it only
 	 * contains the tuples for its new partition boundaries. */
 	finish_heap_swap(relid,
@@ -1721,5 +1754,6 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 					 cutoffs.MultiXactCutoff,
 					 relpersistence);
 
+	ts_cache_release(hcache);
 	PG_RETURN_VOID();
 }
