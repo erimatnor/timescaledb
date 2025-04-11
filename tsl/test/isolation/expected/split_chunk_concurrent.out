@@ -1,0 +1,131 @@
+unused step name: s1_begin
+unused step name: s1_commit
+unused step name: s1_insert_into_splitting_chunk
+unused step name: s1_row_exclusive_lock
+unused step name: s1_show_chunks
+unused step name: s1_show_data
+unused step name: s2_merge_chunks
+unused step name: s2_show_chunks
+unused step name: s3_begin
+unused step name: s3_commit
+unused step name: s3_show_chunks
+unused step name: s3_show_data
+unused step name: s4_wp_before_routing_off
+unused step name: s4_wp_before_routing_on
+Parsed test spec with 4 sessions
+
+starting permutation: s4_show_chunks s4_wp_at_end_on s3_split_chunk s1_insert_into_existing_chunk s4_wp_at_end_off s4_show_chunks s4_query_data
+step s4_show_chunks: 
+    select chunk_name, range_start, range_end
+           from timescaledb_information.chunks
+           where hypertable_name = 'readings'
+           order by range_start::timestamptz, chunk_name;
+
+chunk_name      |range_start                 |range_end                   
+----------------+----------------------------+----------------------------
+_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
+_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
+(2 rows)
+
+step s4_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s3_split_chunk: 
+    call split_first_chunk('readings');
+ <waiting ...>
+step s1_insert_into_existing_chunk: 
+    insert into readings values ('2024-01-08 01:05', 5, 5.0);
+
+step s4_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s3_split_chunk: <... completed>
+step s4_show_chunks: 
+    select chunk_name, range_start, range_end
+           from timescaledb_information.chunks
+           where hypertable_name = 'readings'
+           order by range_start::timestamptz, chunk_name;
+
+chunk_name      |range_start                 |range_end                   
+----------------+----------------------------+----------------------------
+_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Sun Dec 31 04:00:00 2023 PST
+_hyper_X_X_chunk|Sun Dec 31 04:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
+_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
+(3 rows)
+
+step s4_query_data: 
+    select * from readings order by time;
+
+time                        |device|temp
+----------------------------+------+----
+Mon Jan 01 01:00:00 2024 PST|     1|   1
+Mon Jan 08 01:01:00 2024 PST|     2|   2
+Mon Jan 08 01:05:00 2024 PST|     5|   5
+Mon Jan 08 02:00:00 2024 PST|     3|   3
+(4 rows)
+
+
+starting permutation: s4_show_chunks s4_wp_at_end_on s3_split_chunk s1_insert_into_new_chunk s4_wp_at_end_off s4_show_chunks s4_query_data
+step s4_show_chunks: 
+    select chunk_name, range_start, range_end
+           from timescaledb_information.chunks
+           where hypertable_name = 'readings'
+           order by range_start::timestamptz, chunk_name;
+
+chunk_name      |range_start                 |range_end                   
+----------------+----------------------------+----------------------------
+_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
+_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
+(2 rows)
+
+step s4_wp_at_end_on: SELECT debug_waitpoint_enable('split_chunk_at_end');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s3_split_chunk: 
+    call split_first_chunk('readings');
+ <waiting ...>
+step s1_insert_into_new_chunk: 
+    insert into readings values ('2024-01-11 10:00', 6, 6.0);
+ <waiting ...>
+step s4_wp_at_end_off: SELECT debug_waitpoint_release('split_chunk_at_end');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s3_split_chunk: <... completed>
+step s1_insert_into_new_chunk: <... completed>
+step s4_show_chunks: 
+    select chunk_name, range_start, range_end
+           from timescaledb_information.chunks
+           where hypertable_name = 'readings'
+           order by range_start::timestamptz, chunk_name;
+
+chunk_name      |range_start                 |range_end                   
+----------------+----------------------------+----------------------------
+_hyper_X_X_chunk|Wed Dec 27 16:00:00 2023 PST|Sun Dec 31 04:00:00 2023 PST
+_hyper_X_X_chunk|Sun Dec 31 04:00:00 2023 PST|Wed Jan 03 16:00:00 2024 PST
+_hyper_X_X_chunk|Wed Jan 03 16:00:00 2024 PST|Wed Jan 10 16:00:00 2024 PST
+_hyper_X_X_chunk|Wed Jan 10 16:00:00 2024 PST|Wed Jan 17 16:00:00 2024 PST
+(4 rows)
+
+step s4_query_data: 
+    select * from readings order by time;
+
+time                        |device|temp
+----------------------------+------+----
+Mon Jan 01 01:00:00 2024 PST|     1|   1
+Mon Jan 08 01:01:00 2024 PST|     2|   2
+Mon Jan 08 02:00:00 2024 PST|     3|   3
+Thu Jan 11 10:00:00 2024 PST|     6|   6
+(4 rows)
+
