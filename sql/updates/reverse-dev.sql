@@ -33,5 +33,5 @@ AS '@MODULE_PATHNAME@', 'ts_update_placeholder'
 LANGUAGE C VOLATILE;
 
 -- Split chunk
-DROP PROCEDURE IF EXISTS @extschema@.split_chunk(chunk REGCLASS, column_name NAME, split_at "any", verbose bool);
+DROP PROCEDURE IF EXISTS @extschema@.split_chunk(chunk REGCLASS, column_name NAME, split_at "any");
 

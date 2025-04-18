@@ -39,6 +39,5 @@ UPDATE _timescaledb_catalog.hypertable SET chunk_sizing_func_schema = '_timescal
 CREATE PROCEDURE @extschema@.split_chunk(
     chunk REGCLASS,
     column_name NAME = NULL,
-    split_at "any" = NULL,
-    verbose bool = false
+    split_at "any" = NULL
 ) LANGUAGE C AS '@MODULE_PATHNAME@', 'ts_update_placeholder';

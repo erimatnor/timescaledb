@@ -1195,6 +1195,12 @@ typedef struct RelationSplitInfo
 	Relation rel;
 	Datum *values;
 	bool *isnull;
+	/*
+	 * Tuple mapping is needed in case the old relation has dropped
+	 * columns. New relations (as result of split) are "clean" without dropped
+	 * columns. The tuple map converts tuples between the source and
+	 * destination chunks.
+	 */
 	TupleConversionMap *tupmap;
 } RelationSplitInfo;
 
@@ -1217,8 +1223,8 @@ relation_split_info_create(Relation splitrel, Relation rel, struct VacuumCutoffs
 	rsi->dstslot = MakeSingleTupleTableSlot(RelationGetDescr(rel), table_slot_callbacks(rel));
 	ExecStoreAllNullTuple(rsi->dstslot);
 
-	rsi->values = (Datum *) palloc(RelationGetDescr(splitrel)->natts * sizeof(Datum));
-	rsi->isnull = (bool *) palloc(RelationGetDescr(splitrel)->natts * sizeof(bool));
+	rsi->values = (Datum *) palloc0(RelationGetDescr(splitrel)->natts * sizeof(Datum));
+	rsi->isnull = (bool *) palloc0(RelationGetDescr(splitrel)->natts * sizeof(bool));
 
 	return rsi;
 }
@@ -1240,16 +1246,23 @@ relation_split_info_free(RelationSplitInfo *rsi, int ti_options)
 	rsi->rel = NULL;
 	rsi->bistate = NULL;
 	rsi->dstslot = NULL;
+	rsi->tupmap = NULL;
+	rsi->values = NULL;
+	rsi->isnull = NULL;
 	pfree(rsi);
 }
 
 /*
  * Reconstruct and rewrite the given tuple.
  *
- * Basically taken from heapam module.
+ * Mostly taken from heapam module.
  *
- * The tuple needs to be rewritten because the new tuple doesn't include,
- * e.g., dropped columns.
+ * When splitting a relation in two, the old relation is retained for one of
+ * the result relations while the other is created new. This might lead to a
+ * situation where the two result relations have different attribute mappings
+ * because the old one could have dropped columns while the new one is "clean"
+ * without dropped columns. Therefore, the rewrite function needs to account
+ * for this when the tuple is rewritten.
  */
 static void
 reform_and_rewrite_tuple(HeapTuple tuple, Relation splitrel, RelationSplitInfo *rsi)
@@ -1259,14 +1272,21 @@ reform_and_rewrite_tuple(HeapTuple tuple, Relation splitrel, RelationSplitInfo *
 	HeapTuple tupcopy;
 
 	if (rsi->tupmap)
+	{
+		/*
+		 * If this is the "new" relation, the tuple map might be different
+		 * from the "source" relation.
+		 */
 		tupcopy = execute_attr_map_tuple(tuple, rsi->tupmap);
+	}
 	else
 	{
 		int i;
 
 		heap_deform_tuple(tuple, oldTupDesc, rsi->values, rsi->isnull);
 
-		/* Be sure to null out any dropped columns */
+		/* Be sure to null out any dropped columns if this is the "old"
+		 * relation. A relation created new doesn't have dropped columns. */
 		for (i = 0; i < newTupDesc->natts; i++)
 		{
 			if (TupleDescAttr(newTupDesc, i)->attisdropped)
@@ -1293,10 +1313,8 @@ Datum
 chunk_split_chunk(PG_FUNCTION_ARGS)
 {
 	Oid relid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
-	const char *colname = PG_ARGISNULL(1) ? NULL : PG_GETARG_CSTRING(1);
+	const Name colname = PG_ARGISNULL(1) ? NULL : PG_GETARG_NAME(1);
 	Relation splitrel = table_open(relid, AccessExclusiveLock);
-	bool verbose = PG_ARGISNULL(3) ? false : PG_GETARG_BOOL(3);
-	int elevel = verbose ? INFO : DEBUG1;
 
 	if (splitrel->rd_rel->relkind != RELKIND_RELATION)
 		ereport(ERROR,
@@ -1319,11 +1337,6 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	 */
 	CheckTableNotInUse(splitrel, "split_chunk");
 
-	if (IsSystemRelation(splitrel))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("cannot split system catalog relations")));
-
 	Oid amoid = splitrel->rd_rel->relam;
 
 	if (amoid != HEAP_TABLE_AM_OID)
@@ -1335,8 +1348,9 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	if (chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID)
 		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("splitting a compressed chunk is not supported")));
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("splitting a compressed chunk is not supported"),
+				 errhint("Decompress the chunk before splitting it.")));
 
 	if (chunk->fd.osm_chunk)
 		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("cannot split OSM chunks")));
@@ -1347,7 +1361,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 				 errmsg("cannot split frozen chunk \"%s.%s\" scheduled for tiering",
 						NameStr(chunk->fd.schema_name),
 						NameStr(chunk->fd.table_name)),
-				 errhint("Untier the chunk before splitting.")));
+				 errhint("Untier the chunk before splitting it.")));
 
 	Cache *hcache;
 	const Hypertable *ht =
@@ -1358,13 +1372,13 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	if (colname != NULL)
 	{
 		const Dimension *primary_dim = hyperspace_get_open_dimension(ht->space, 0);
-		dim = ts_hyperspace_get_dimension_by_name(ht->space, DIMENSION_TYPE_ANY, colname);
+		dim = ts_hyperspace_get_dimension_by_name(ht->space, DIMENSION_TYPE_ANY, NameStr(*colname));
 
 		if (dim != NULL && primary_dim->fd.id != dim->fd.id)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("dimension \"%s\" is not a primary for chunk \"%s\"",
-							colname,
+							NameStr(*colname),
 							get_rel_name(relid))));
 	}
 	else
@@ -1376,11 +1390,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("no dimension \"%s\" exists for chunk \"%s\"",
-						colname,
+						colname ? NameStr(*colname) : "null",
 						get_rel_name(relid))));
-
-	Assert(colname == NULL || strcmp(colname, NameStr(dim->fd.column_name)) == 0);
-	colname = NameStr(dim->fd.column_name);
 
 	AttrNumber splitdim_attnum = get_attnum(relid, NameStr(dim->fd.column_name));
 	Oid splitdim_type = get_atttype(relid, splitdim_attnum);
@@ -1674,7 +1685,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	const char *nspname = get_namespace_name(RelationGetNamespace(splitrel));
 
-	ereport(elevel,
+	ereport(DEBUG1,
 			(errmsg("\"%s.%s\": found %.0f removable, %.0f nonremovable row versions",
 					nspname,
 					RelationGetRelationName(splitrel),
@@ -1703,14 +1714,15 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 		relation_split_info_free(splitinfos[i], ti_options);
 
-		/* Only reindex new chunks. Existing chunk will have be reindexed
-		 * during the heap swap below. */
+		/* Only reindex new chunks. Existing chunk will be reindexed during
+		 * the heap swap below. */
 		if (i > 0)
 			reindex_relation_compat(NULL, chunkrelid, reindex_flags, &reindex_params);
 	}
 
 	/* Finally, swap the heap of the chunk that we split so that it only
-	 * contains the tuples for its new partition boundaries. */
+	 * contains the tuples for its new partition boundaries. AccessExclusive
+	 * lock is held during the swap. */
 	finish_heap_swap(relid,
 					 new_heap_relid,
 					 false, /* system catalog */
