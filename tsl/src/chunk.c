@@ -1543,6 +1543,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	splitinfos[0] = relation_split_info_create(splitrel, splitrel_new, &cutoffs);
 	splitinfos[1] = relation_split_info_create(splitrel, new_chunkrel, &cutoffs);
 
+	DEBUG_WAITPOINT("split_chunk_before_tuple_routing");
+
 	/* Scan through the rows using SnapshotAny to see everything. */
 	scan = table_beginscan(splitrel, SnapshotAny, 0, NULL);
 
@@ -1718,6 +1720,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 					 cutoffs.FreezeLimit,
 					 cutoffs.MultiXactCutoff,
 					 relpersistence);
+
+	DEBUG_WAITPOINT("split_chunk_at_end");
 
 	PG_RETURN_VOID();
 }
