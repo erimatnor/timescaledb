@@ -6,9 +6,9 @@ setup
 {
     create table readings (time timestamptz, device int, temp float);
     select create_hypertable('readings', 'time', chunk_time_interval => interval '1 week');
-    insert into readings values ('2024-01-04 01:00', 1, 1.0), ('2024-01-08 02:00', 2, 2.0), ('2024-01-11 01:01', 3, 3.0), ('2024-01-15 02:00', 4, 4.0);
+    insert into readings values ('2024-01-04 01:00', 1, 1.0), ('2024-01-05 02:00', 2, 2.0), ('2024-01-08 02:00', 3, 3.0), ('2024-01-11 01:01', 4, 4.0), ('2024-01-15 02:00', 5, 5.0);
     alter table readings set (timescaledb.compress_orderby='time', timescaledb.compress_segmentby='device');
-           
+
     create or replace procedure drop_one_chunk(hypertable regclass) as $$
     declare
         chunk regclass;
@@ -78,7 +78,7 @@ setup	{
 # grab locks on them.
 step "s1_begin" {
     start transaction isolation level repeatable read;
-    select count(*) > 0 from pg_class;
+    select count(*) > 0 from pg_stat_activity;
 }
 
 step "s1_commit" { commit; }
@@ -94,6 +94,14 @@ step "s1_insert_into_existing_chunk" {
 
 step "s1_insert_into_new_chunk" {
     insert into readings values ('2024-01-18 10:00', 13, 13.0);
+}
+
+step "s1_delete_from_splitting_chunk" {
+    delete from readings where device = 1;
+}
+
+step "s1_update_in_splitting_chunk" {
+    update readings set device = 9 where device = 1;
 }
 
 session "s2"
@@ -112,7 +120,7 @@ setup	{
     set local deadlock_timeout = '100ms';
 }
 
-step "s3_query_data" {    
+step "s3_query_data" {
     call show_all_chunks('readings');
 }
 
@@ -122,6 +130,16 @@ step "s3_wp_before_routing_off" { select debug_waitpoint_release('split_chunk_be
 step "s3_wp_at_end_on" { select debug_waitpoint_enable('split_chunk_at_end'); }
 step "s3_wp_at_end_off" { select debug_waitpoint_release('split_chunk_at_end'); }
 
+step "s4_begin" {
+    start transaction isolation level repeatable read;
+    select count(*) > 0 from pg_stat_activity;
+}
+
+step "s4_query" {
+    select * from readings order by time, device;
+}
+
+step "s4_commit" { commit; }
 
 # Concurrent insert into existing chunk while another chunk is being
 # split. The inserting process should not be blocked.
@@ -145,3 +163,13 @@ permutation "s3_query_data" "s3_wp_before_routing_on" "s2_split_chunk" "s1_inser
 # Concurrent insert into chunk being split. The inserting process
 # locks the chunk first so the split should be blocked.
 permutation "s3_query_data" "s1_begin" "s1_insert_into_splitting_chunk" "s2_split_chunk" "s1_commit" "s3_query_data"
+
+# Delete from splitting chunk
+permutation "s4_begin" "s3_query_data" "s1_begin" "s1_delete_from_splitting_chunk" "s2_split_chunk" "s1_commit" "s3_query_data" "s4_query" "s4_commit" "s4_query"
+permutation "s4_begin" "s3_query_data" "s1_delete_from_splitting_chunk" "s2_split_chunk" "s3_query_data" "s4_query" "s4_commit" "s4_query"
+
+# Delete and update on splitting chunk and concurrent query in
+# repeatable read. The querying process should see the old data after
+# split (including deleted tuple). After commit it sees the update/delete.
+permutation "s3_query_data" "s4_begin" "s1_delete_from_splitting_chunk" "s2_split_chunk" "s3_query_data" "s4_query" "s4_commit" "s4_query" "s3_query_data"
+permutation "s3_query_data" "s4_begin" "s1_update_in_splitting_chunk" "s2_split_chunk" "s3_query_data" "s4_query" "s4_commit" "s4_query" "s3_query_data"
