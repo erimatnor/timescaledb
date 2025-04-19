@@ -1858,6 +1858,8 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p)
 {
 	int matching_chunk_id = 0;
 
+	elog(NOTICE, "Finding point %s " INT64_FORMAT, ts_internal_to_time_string(p->coordinates[0], ht->space->dimensions[0].fd.column_type), p->coordinates[0]);
+	
 	/* The scan context will keep the state accumulated during the scan */
 	ChunkScanCtx ctx;
 	chunk_scan_ctx_init(&ctx, ht, p);
@@ -1880,6 +1882,9 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p)
 	{
 		DimensionSlice *slice = (DimensionSlice *) lfirst(lc);
 
+		elog(NOTICE, "found slice %d "  INT64_FORMAT " " INT64_FORMAT,
+			 slice->fd.id, slice->fd.range_start, slice->fd.range_end);
+		
 		ts_chunk_constraint_scan_iterator_set_slice_id(&iterator, slice->fd.id);
 		ts_scan_iterator_start_or_restart_scan(&iterator);
 

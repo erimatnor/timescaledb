@@ -990,6 +990,8 @@ hypertable_chunk_store_add(const Hypertable *h, const Chunk *input_chunk)
 	/* Add the chunk to the subspace store */
 	old_mcxt = MemoryContextSwitchTo(ts_subspace_store_mcxt(h->chunk_cache));
 	Chunk *cached_chunk = ts_chunk_copy(input_chunk);
+	elog(NOTICE, "storing chunk %s " INT64_FORMAT " " INT64_FORMAT,
+		 NameStr(cached_chunk->fd.table_name), cached_chunk->cube->slices[0]->fd.range_start, cached_chunk->cube->slices[0]->fd.range_end);
 	ts_subspace_store_add(h->chunk_cache,
 						  cached_chunk->cube,
 						  cached_chunk,
@@ -1007,6 +1009,7 @@ ts_hypertable_create_chunk_for_point(const Hypertable *h, const Point *point, bo
 {
 	Assert(ts_subspace_store_get(h->chunk_cache, point) == NULL);
 
+	//elog(NOTICE, "1. CREATE chunk for  point %s " INT64_FORMAT, ts_internal_to_time_string(point->coordinates[0], h->space->dimensions[0].fd.column_type), point->coordinates[0]);
 	Chunk *chunk = ts_chunk_create_for_point(h,
 											 point,
 											 found,
@@ -1028,6 +1031,7 @@ ts_hypertable_create_chunk_for_point(const Hypertable *h, const Point *point, bo
 Chunk *
 ts_hypertable_find_chunk_for_point(const Hypertable *h, const Point *point)
 {
+	//elog(NOTICE, "2. FIND chunk for  point %s " INT64_FORMAT, ts_internal_to_time_string(point->coordinates[0], h->space->dimensions[0].fd.column_type), point->coordinates[0]);
 	Chunk *chunk = ts_subspace_store_get(h->chunk_cache, point);
 	if (chunk != NULL)
 	{

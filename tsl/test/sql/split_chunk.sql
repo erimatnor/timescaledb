@@ -6,6 +6,14 @@
 CREATE ACCESS METHOD testam TYPE TABLE HANDLER heap_tableam_handler;
 set role :ROLE_DEFAULT_PERM_USER;
 
+create view chunk_slices as
+select h.table_name as hypertable_name, c.table_name as chunk_name, ds.range_start, ds.range_end
+from _timescaledb_catalog.chunk c
+join _timescaledb_catalog.chunk_constraint cc on (cc.chunk_id = c.id)
+join _timescaledb_catalog.dimension_slice ds on (ds.id = cc.dimension_slice_id)
+join _timescaledb_catalog.hypertable h on (h.id = c.hypertable_id)
+order by range_start, range_end;
+
 create table splitme (time timestamptz not null, device int, location int, temp float, comment text);
 select create_hypertable('splitme', 'time', 'device', 2, chunk_time_interval => interval '1 week');
 alter table splitme set (timescaledb.compress_orderby='time', timescaledb.compress_segmentby='device');
@@ -75,6 +83,9 @@ call split_chunk('_timescaledb_internal._hyper_1_1_chunk');
 rollback;
 \set ON_ERROR_STOP 1
 
+
+select * from chunk_slices;
+
 call split_chunk('_timescaledb_internal._hyper_1_1_chunk', split_at => '2024-01-04 00:00');
 
 select chunk_name, range_start, range_end
@@ -95,6 +106,7 @@ select t, ceil(random()*10), random()*40
 from generate_series('2024-01-03 23:00'::timestamptz, '2024-01-10 01:00', '10s') t;
 select count(*) from splitme;
 
+select * from chunk_slices;
 -- Add back location just to make things more difficult
 alter table splitme add column location int default 1;
 
@@ -145,14 +157,6 @@ select create_hypertable('splitme_int', 'time', chunk_time_interval => 10::int);
 insert into splitme_int values (1, 1, 1.0), (8, 8, 8.0);
 select ch as int_chunk from show_chunks('splitme_int') ch limit 1 \gset
 
-create view chunk_slices as
-select h.table_name as hypertable_name, c.table_name as chunk_name, ds.range_start, ds.range_end
-from _timescaledb_catalog.chunk c
-join _timescaledb_catalog.chunk_constraint cc on (cc.chunk_id = c.id)
-join _timescaledb_catalog.dimension_slice ds on (ds.id = cc.dimension_slice_id)
-join _timescaledb_catalog.hypertable h on (h.id = c.hypertable_id)
-order by range_start, range_end;
-
 select * from chunk_slices;
 
 call split_chunk(:'int_chunk', split_at => '5');
@@ -183,8 +187,9 @@ alter table splitme drop column comment;
 
 
 select * from chunk_info;
-\c :TEST_DBNAME :ROLE_SUPERUSER
-set role :ROLE_DEFAULT_PERM_USER;
+--\c :TEST_DBNAME :ROLE_SUPERUSER
+--set role :ROLE_DEFAULT_PERM_USER;
+--reset role;
 
 select * from chunk_slices where hypertable_name = 'splitme';
 
@@ -205,6 +210,8 @@ select setseed(0.2);
 --insert into splitme (time, device, location, temp) values ('Sun Jan 07 08:00:00 2024 PST', 5, 2.98879254108163, 16);
 
 --select * from _timescaledb_internal._hyper_1_3_chunk;
+
+select * from _timescaledb_catalog.chunk;
 
 -- Test split with bigger data set
 insert into splitme (time, device, location, temp)

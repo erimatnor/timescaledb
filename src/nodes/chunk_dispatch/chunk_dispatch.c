@@ -70,7 +70,7 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 	bool cis_changed = true;
 	bool found = true;
 	Chunk *chunk = NULL;
-
+	
 	/* Direct inserts into internal compressed hypertable is not supported.
 	 * For compression chunks are created explicitly by compress_chunk and
 	 * inserted into directly so we should never end up in this code path
@@ -83,6 +83,20 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 
 	cis = ts_subspace_store_get(dispatch->cache, point);
 
+	if (cis)
+	{
+		
+		if (point->coordinates[0] == 1704643200000000)
+		{
+			elog(NOTICE, "## GOT DISPATCH cached state for point " INT64_FORMAT " %s",
+				 point->coordinates[0],
+				 ts_internal_to_time_string(point->coordinates[0],
+											dispatch->hypertable->space->dimensions[0].fd.column_type));
+			
+			
+		}
+	
+	}
 	/*
 	 * The chunk search functions may leak memory, so switch to a temporary
 	 * memory context.
@@ -101,6 +115,19 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 		 */
 		chunk = ts_hypertable_find_chunk_for_point(dispatch->hypertable, point);
 
+		if (point->coordinates[0] == 1704643200000000 && chunk)
+		{
+			elog(NOTICE, "## GOT HYPERTABLE cached state for point " INT64_FORMAT " %s %s [ " INT64_FORMAT  ", " INT64_FORMAT " ]",
+			 
+				 point->coordinates[0],
+				 ts_internal_to_time_string(point->coordinates[0],
+											dispatch->hypertable->space->dimensions[0].fd.column_type),
+				 NameStr(chunk->fd.table_name),
+				 chunk->cube->slices[0]->fd.range_start,
+				 chunk->cube->slices[0]->fd.range_end);
+			
+			
+		}
 		/*
 		 * Frozen chunks require at least PG14.
 		 */
@@ -146,6 +173,20 @@ ts_chunk_dispatch_get_chunk_insert_state(ChunkDispatch *dispatch, Point *point,
 
 		cis = ts_chunk_insert_state_create(chunk->table_id, dispatch);
 		ts_subspace_store_add(dispatch->cache, chunk->cube, cis, destroy_chunk_insert_state);
+
+		elog(NOTICE, "******** %p ADD NEW state for chunk %s [ " INT64_FORMAT  ", " INT64_FORMAT " ] point " INT64_FORMAT ,
+			 dispatch->cache,
+			 NameStr(chunk->fd.table_name),
+			 chunk->cube->slices[0]->fd.range_start,
+			 chunk->cube->slices[0]->fd.range_end,
+			point->coordinates[0]);
+		
+		/*if (chunk->cube->slices[0]->fd.range_start == 1704355200000000 &&
+			chunk->cube->slices[0]->fd.range_end == 1704931200000000)
+		{
+			elog(NOTICE, "****** CACHED insert state for chunk %d", chunk->fd.id);
+		}
+		*/
 	}
 	else if (cis->rel->rd_id == dispatch->prev_cis_oid && cis == dispatch->prev_cis)
 	{
@@ -426,6 +467,7 @@ chunk_dispatch_exec(CustomScanState *node)
 		dispatch->hypertable_result_rel_info = dispatch->dispatch_state->mtstate->resultRelInfo;
 	}
 
+	
 	/* Find or create the insert state matching the point */
 	cis = ts_chunk_dispatch_get_chunk_insert_state(dispatch,
 												   point,
@@ -434,7 +476,7 @@ chunk_dispatch_exec(CustomScanState *node)
 
 	if (!cis->use_tam)
 		ts_chunk_dispatch_decompress_batches_for_insert(dispatch, cis, slot);
-
+	
 	MemoryContextSwitchTo(old);
 
 	/*

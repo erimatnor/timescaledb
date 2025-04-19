@@ -11,7 +11,7 @@
 #include "dimension_vector.h"
 #include "hypercube.h"
 #include "subspace_store.h"
-
+#include "nodes/chunk_dispatch/chunk_insert_state.h"
 /*
  * In terms of datastructures, the subspace store is actually a tree. At the
  * root of a tree is a DimensionVec representing the different DimensionSlices
@@ -190,12 +190,35 @@ ts_subspace_store_add(SubspaceStore *subspace_store, const Hypercube *hypercube,
 	MemoryContextSwitchTo(old);
 }
 
+static DimensionSlice *
+dimension_vec_find_slice(const DimensionVec *vec, int64 coordinate)
+{
+	DimensionSlice **res;
+
+	if (vec->num_slices == 0)
+		return NULL;
+
+	Assert(dimension_vec_is_sorted(vec));
+
+	res = (DimensionSlice **) bsearch(&coordinate,
+									  (void *) vec->slices,
+									  vec->num_slices,
+									  sizeof(DimensionSlice *),
+									  cmp_coordinate_and_slice);
+
+	if (res == NULL)
+		return NULL;
+
+	return *res;
+}
+
 void *
 ts_subspace_store_get(const SubspaceStore *subspace_store, const Point *target)
 {
 	int i;
 	DimensionVec *vec = subspace_store->origin->vector;
 	DimensionSlice *match = NULL;
+	DimensionSlice *match_v0 = NULL;
 
 	Assert(target->cardinality == subspace_store->num_dimensions);
 
@@ -212,7 +235,20 @@ ts_subspace_store_get(const SubspaceStore *subspace_store, const Point *target)
 		if (NULL == match)
 			return NULL;
 
+		if (i == 0)
+			match_v0 = match;
+		
 		vec = ((SubspaceStoreInternalNode *) match->storage)->vector;
+	}
+
+	if (target->coordinates[0] == 1704643200000000)
+	{
+		ChunkInsertState *cis = match->storage;
+		
+		elog(NOTICE, "## %p STORE MATCH for point " INT64_FORMAT " [" INT64_FORMAT ", " INT64_FORMAT "] chunk id %d",
+			 subspace_store, target->coordinates[0], match_v0->fd.range_start, match_v0->fd.range_end, cis->chunk_id);
+
+		
 	}
 	Assert(match != NULL);
 	return match->storage;

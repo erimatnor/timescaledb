@@ -1511,7 +1511,12 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	slice->fd.id = 0; /* Must set to 0 to mark as new for it to be created */
 
 	/* Make updated constraints visible */
+	
+	ts_cache_release(hcache);
+	ts_hypertable_cache_invalidate_callback();
 	CommandCounterIncrement();
+	   
+	ht = ts_hypertable_cache_get_cache_and_entry(chunk->hypertable_relid, CACHE_FLAG_NONE, &hcache);
 	bool created = false;
 	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
@@ -1519,6 +1524,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 															NULL,
 															InvalidOid,
 															&created);
+	
+	ts_cache_release(hcache);
 	Ensure(created, "could not create chunk for split");
 	Assert(new_chunk);
 
@@ -1736,7 +1743,6 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	Oid catrelid = catalog_get_table_id(catalog, DIMENSION_SLICE);
 	ts_catalog_invalidate_cache(catrelid, CMD_UPDATE);
 	*/
-	ts_cache_release(hcache);
 	DEBUG_WAITPOINT("split_chunk_at_end");
 
 	PG_RETURN_VOID();
