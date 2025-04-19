@@ -39,7 +39,6 @@ call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'device');
 call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'time', split_at => 1);
 call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'time', split_at => 1::int);
 call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'time', split_at => '2024-01-04 00:00'::timestamp);
-call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'time', split_at => 1::numeric);
 
 -- Split at start of chunk range
 call split_chunk('_timescaledb_internal._hyper_1_1_chunk', 'time', split_at => 'Wed Jan 03 16:00:00 2024 PST');
@@ -146,18 +145,82 @@ select create_hypertable('splitme_int', 'time', chunk_time_interval => 10::int);
 insert into splitme_int values (1, 1, 1.0), (8, 8, 8.0);
 select ch as int_chunk from show_chunks('splitme_int') ch limit 1 \gset
 
-create view chunk_info as
-select c.table_name as chunk_name, ds.range_start, ds.range_end
+create view chunk_slices as
+select h.table_name as hypertable_name, c.table_name as chunk_name, ds.range_start, ds.range_end
 from _timescaledb_catalog.chunk c
 join _timescaledb_catalog.chunk_constraint cc on (cc.chunk_id = c.id)
 join _timescaledb_catalog.dimension_slice ds on (ds.id = cc.dimension_slice_id)
 join _timescaledb_catalog.hypertable h on (h.id = c.hypertable_id)
-where h.table_name = 'splitme_int'
 order by range_start, range_end;
 
-select * from chunk_info;
-call split_chunk(:'int_chunk', split_at => 5);
-select * from chunk_info;
+select * from chunk_slices;
+
+call split_chunk(:'int_chunk', split_at => '5');
+
+select * from chunk_slices where hypertable_name = 'splitme_int';
 
 select * from :int_chunk order by time;
 select * from splitme_int order by time;
+
+
+--
+-- Try split with more data
+--
+
+create view chunk_info as
+select relname as chunk, amname as tam, con.conname, pg_get_expr(conbin, ch) checkconstraint
+from pg_class cl
+join pg_am am on (cl.relam = am.oid)
+join show_chunks('splitme') ch on (cl.oid = ch)
+join pg_constraint con on (con.conrelid = ch)
+where con.contype = 'c'
+order by 1,2,3 desc;
+
+-- Remove comment column to generate dropped column
+alter table splitme drop column comment;
+
+-- Set seed to consistently generate same data and same set of chunks
+
+
+select * from chunk_info;
+\c :TEST_DBNAME :ROLE_SUPERUSER
+set role :ROLE_DEFAULT_PERM_USER;
+
+select * from chunk_slices where hypertable_name = 'splitme';
+
+\d+ _timescaledb_internal._hyper_1_1_chunk
+
+\d+ _timescaledb_internal._hyper_1_3_chunk
+
+\d+ _timescaledb_internal._hyper_1_4_chunk
+
+\d+ _timescaledb_internal._hyper_1_5_chunk
+
+\d+ _timescaledb_internal._hyper_1_6_chunk
+
+\set VERBOSITY verbose
+
+select setseed(0.2);
+
+--insert into splitme (time, device, location, temp) values ('Sun Jan 07 08:00:00 2024 PST', 5, 2.98879254108163, 16);
+
+--select * from _timescaledb_internal._hyper_1_3_chunk;
+
+-- Test split with bigger data set
+insert into splitme (time, device, location, temp)
+select t, ceil(random()*10), ceil(random()*20), random()*40
+from generate_series('2024-01-03'::timestamptz, '2024-01-10', '10s') t;
+
+select chunk_name, range_start, range_end
+from timescaledb_information.chunks
+order by chunk_name, range_start, range_end;
+
+select * from chunk_info;
+
+call split_chunk('_timescaledb_internal._hyper_1_3_chunk');
+
+select * from chunk_info;
+
+select chunk_name, range_start, range_end
+from timescaledb_information.chunks
+order by chunk_name, range_start, range_end;

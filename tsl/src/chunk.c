@@ -1425,10 +1425,8 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 												Int32GetDatum(-1));
 					break;
 				default:
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("invalid type for split_at"),
-							 errhint("The split_at argument requires an explicit cast.")));
+					/* Shouldn't be any time types with other number of args */
+					Ensure(false, "invalid type for split_at");
 			}
 			argtype = splitdim_type;
 		}
@@ -1697,7 +1695,6 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ExecDropSingleTupleTableSlot(srcslot);
 	FreeExecutorState(estate);
 
-	ts_cache_release(hcache);
 	table_close(splitrel, NoLock);
 
 	/* Cleanup split rel infos and reindex new chunks */
@@ -1733,6 +1730,13 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 					 cutoffs.MultiXactCutoff,
 					 relpersistence);
 
+	/* Constraints changed so need to invalidate hypertable cache since it
+	 * also caches chunk constrains for tuple`q routing. */
+	/*Catalog *catalog = ts_catalog_get();
+	Oid catrelid = catalog_get_table_id(catalog, DIMENSION_SLICE);
+	ts_catalog_invalidate_cache(catrelid, CMD_UPDATE);
+	*/
+	ts_cache_release(hcache);
 	DEBUG_WAITPOINT("split_chunk_at_end");
 
 	PG_RETURN_VOID();
