@@ -4,6 +4,7 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include <postgres.h>
+#include <access/attnum.h>
 #include <access/htup.h>
 #include <access/htup_details.h>
 #include <access/multixact.h>
@@ -12,6 +13,7 @@
 #include <access/tableam.h>
 #include <access/transam.h>
 #include <access/tupconvert.h>
+#include <access/tupdesc.h>
 #include <access/xact.h>
 #include <catalog/catalog.h>
 #include <catalog/dependency.h>
@@ -19,11 +21,13 @@
 #include <catalog/namespace.h>
 #include <catalog/objectaddress.h>
 #include <catalog/pg_am.h>
+#include <catalog/pg_attribute.h>
 #include <catalog/pg_class.h>
 #include <catalog/pg_constraint.h>
 #include <catalog/pg_foreign_server.h>
 #include <catalog/pg_foreign_table.h>
 #include <catalog/pg_type.h>
+#include <catalog/toasting.h>
 #include <commands/defrem.h>
 #include <commands/tablecmds.h>
 #include <commands/vacuum.h>
@@ -1187,6 +1191,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 typedef struct RelationSplitInfo
 {
+	Oid relid;
 	BulkInsertState bistate;
 	TupleTableSlot *dstslot;
 	RewriteState rwstate;
@@ -1207,6 +1212,7 @@ relation_split_info_create(Relation srcrel, Relation targetrel, struct VacuumCut
 {
 	RelationSplitInfo *rsi = palloc0(sizeof(RelationSplitInfo));
 
+	rsi->relid = RelationGetRelid(targetrel);
 	rsi->targetrel = targetrel;
 	rsi->bistate = GetBulkInsertState();
 	rsi->rwstate = begin_heap_rewrite(srcrel,
@@ -1299,6 +1305,151 @@ reform_and_rewrite_tuple(HeapTuple tuple, Relation srcrel, const RelationSplitIn
 	rewrite_heap_tuple(rsi->rwstate, tuple, tupcopy);
 
 	heap_freetuple(tupcopy);
+}
+
+static Oid
+make_new_heap_for_split(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod, char relpersistence,
+						LOCKMODE lockmode)
+{
+	TupleDesc OldHeapDesc;
+	TupleDesc NewHeapDesc;
+	char NewHeapName[NAMEDATALEN];
+	Oid OIDNewHeap;
+	Oid toastid;
+	Relation OldHeap;
+	HeapTuple tuple;
+	Datum reloptions;
+	bool isNull;
+	Oid namespaceid;
+
+	OldHeap = table_open(OIDOldHeap, lockmode);
+	OldHeapDesc = RelationGetDescr(OldHeap);
+
+	/* New number of natts */
+	int natts = 0;
+
+	for (int i = 0; i < OldHeapDesc->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(OldHeapDesc, i);
+
+		if (!attr->attisdropped)
+			natts++;
+	}
+
+	NewHeapDesc = CreateTemplateTupleDesc(natts);
+	int j = 0;
+
+	for (int i = 0; i < OldHeapDesc->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(OldHeapDesc, i);
+
+		if (!attr->attisdropped)
+		{
+			AttrNumber src_attno = AttrOffsetGetAttrNumber(i);
+			AttrNumber dst_attno = AttrOffsetGetAttrNumber(j);
+
+			TupleDescCopyEntry(NewHeapDesc, dst_attno, OldHeapDesc, src_attno);
+			j++;
+		}
+	}
+
+	/*
+	 * Note that the NewHeap will not receive any of the defaults or
+	 * constraints associated with the OldHeap; we don't need 'em, and there's
+	 * no reason to spend cycles inserting them into the catalogs only to
+	 * delete them.
+	 */
+
+	/*
+	 * But we do want to use reloptions of the old heap for new heap.
+	 */
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(OIDOldHeap));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", OIDOldHeap);
+	reloptions = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions, &isNull);
+	if (isNull)
+		reloptions = (Datum) 0;
+
+	if (relpersistence == RELPERSISTENCE_TEMP)
+		namespaceid = LookupCreationNamespace("pg_temp");
+	else
+		namespaceid = RelationGetNamespace(OldHeap);
+
+	/*
+	 * Create the new heap, using a temporary name in the same namespace as
+	 * the existing table.  NOTE: there is some risk of collision with user
+	 * relnames.  Working around this seems more trouble than it's worth; in
+	 * particular, we can't create the new heap in a different namespace from
+	 * the old, or we will have problems with the TEMP status of temp tables.
+	 *
+	 * Note: the new heap is not a shared relation, even if we are rebuilding
+	 * a shared rel.  However, we do make the new heap mapped if the source is
+	 * mapped.  This simplifies swap_relation_files, and is absolutely
+	 * necessary for rebuilding pg_class, for reasons explained there.
+	 */
+	snprintf(NewHeapName, sizeof(NewHeapName), "pg_temp_%u_2", OIDOldHeap);
+
+	OIDNewHeap = heap_create_with_catalog(NewHeapName,
+										  namespaceid,
+										  NewTableSpace,
+										  InvalidOid,
+										  InvalidOid,
+										  InvalidOid,
+										  OldHeap->rd_rel->relowner,
+										  NewAccessMethod,
+										  NewHeapDesc,
+										  NIL,
+										  RELKIND_RELATION,
+										  relpersistence,
+										  false,
+										  RelationIsMapped(OldHeap),
+										  ONCOMMIT_NOOP,
+										  reloptions,
+										  false,
+										  true,
+										  true,
+										  OIDOldHeap,
+										  NULL);
+	Assert(OIDNewHeap != InvalidOid);
+
+	ReleaseSysCache(tuple);
+
+	/*
+	 * Advance command counter so that the newly-created relation's catalog
+	 * tuples will be visible to table_open.
+	 */
+	CommandCounterIncrement();
+
+	/*
+	 * If necessary, create a TOAST table for the new relation.
+	 *
+	 * If the relation doesn't have a TOAST table already, we can't need one
+	 * for the new relation.  The other way around is possible though: if some
+	 * wide columns have been dropped, NewHeapCreateToastTable can decide that
+	 * no TOAST table is needed for the new table.
+	 *
+	 * Note that NewHeapCreateToastTable ends with CommandCounterIncrement, so
+	 * that the TOAST table will be visible for insertion.
+	 */
+	toastid = OldHeap->rd_rel->reltoastrelid;
+	if (OidIsValid(toastid))
+	{
+		/* keep the existing toast table's reloptions, if any */
+		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(toastid));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", toastid);
+		reloptions = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions, &isNull);
+		if (isNull)
+			reloptions = (Datum) 0;
+
+		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode, toastid);
+
+		ReleaseSysCache(tuple);
+	}
+
+	table_close(OldHeap, NoLock);
+
+	return OIDNewHeap;
 }
 
 static void
@@ -1669,16 +1820,17 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ts_cache_release(&hcache);
 	ht = ts_hypertable_cache_get_cache_and_entry(chunk->hypertable_relid, CACHE_FLAG_NONE, &hcache);
 	bool created = false;
-	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
+	/*Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
 															NameStr(chunk->fd.schema_name),
 															NULL,
 															InvalidOid,
 															&created);
 	ts_cache_release(&hcache);
+	*/
 
-	Ensure(created, "could not create chunk for split");
-	Assert(new_chunk);
+	// Ensure(created, "could not create chunk for split");
+	// Assert(new_chunk);
 
 	int ti_options = TABLE_INSERT_SKIP_FSM;
 	RelationSplitInfo *splitinfos[2];
@@ -1693,12 +1845,19 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 									   relpersistence,
 									   AccessExclusiveLock);
 
+	Oid new_heap_relid_2 = make_new_heap_for_split(RelationGetRelid(srcrel),
+												   srcrel->rd_rel->reltablespace,
+												   srcrel->rd_rel->relam,
+												   relpersistence,
+												   AccessExclusiveLock);
+
 	/*
 	 * Open the new relations that will receive tuples during split. These are
 	 * closed by relation_split_info_free().
 	 */
 	Relation target1_rel = table_open(new_heap_relid, AccessExclusiveLock);
-	Relation target2_rel = table_open(new_chunk->table_id, AccessExclusiveLock);
+	// Relation target2_rel = table_open(new_chunk->table_id, AccessExclusiveLock);
+	Relation target2_rel = table_open(new_heap_relid_2, AccessExclusiveLock);
 
 	/* Setup the state we need for each new chunk partition */
 	splitinfos[0] = relation_split_info_create(srcrel, target1_rel, &cutoffs);
@@ -1712,20 +1871,35 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 						  splitdim_type,
 						  split_point,
 						  &cutoffs);
-	
+
 	table_close(srcrel, NoLock);
+
+	for (int i = 0; i < 2; i++)
+	{
+		relation_split_info_free(splitinfos[i], ti_options);
+	}
+
+	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
+															new_cube,
+															NameStr(chunk->fd.schema_name),
+															NULL,
+															new_heap_relid_2,
+															&created);
+
+	Ensure(created, "could not create chunk for split");
+	Ensure(new_chunk, "could not create new chunk");
 
 	/* Cleanup split rel infos and reindex new chunks */
 	for (int i = 0; i < 2; i++)
 	{
 		ReindexParams reindex_params = { 0 };
 		int reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
-		Oid chunkrelid = splitinfos[i]->targetrel->rd_id;
+		Oid chunkrelid = splitinfos[i]->relid;
 
 		Ensure(relpersistence == RELPERSISTENCE_PERMANENT, "only permanent chunks can be split");
 		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
 
-		relation_split_info_free(splitinfos[i], ti_options);
+		// relation_split_info_free(splitinfos[i], ti_options);
 
 		/* Only reindex new chunks. Existing chunk will be reindexed during
 		 * the heap swap below. */
