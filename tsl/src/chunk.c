@@ -1235,13 +1235,18 @@ relation_split_info_create(Relation srcrel, Relation targetrel, struct VacuumCut
 }
 
 static void
-relation_split_info_free(RelationSplitInfo *rsi, int ti_options)
+relation_split_info_close(RelationSplitInfo *rsi, int ti_options)
 {
 	ExecDropSingleTupleTableSlot(rsi->dstslot);
 	FreeBulkInsertState(rsi->bistate);
 	table_finish_bulk_insert(rsi->targetrel, ti_options);
 	end_heap_rewrite(rsi->rwstate);
 	table_close(rsi->targetrel, NoLock);
+}
+
+static void
+relation_split_info_free(RelationSplitInfo *rsi, int ti_options)
+{
 	pfree(rsi->values);
 	pfree(rsi->isnull);
 
@@ -1347,8 +1352,15 @@ make_new_heap_for_split(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod, 
 		{
 			AttrNumber src_attno = AttrOffsetGetAttrNumber(i);
 			AttrNumber dst_attno = AttrOffsetGetAttrNumber(j);
-
+			Form_pg_attribute src_attr = TupleDescAttr(OldHeapDesc, i);
+			Form_pg_attribute dst_attr = TupleDescAttr(NewHeapDesc, j);
 			TupleDescCopyEntry(NewHeapDesc, dst_attno, OldHeapDesc, src_attno);
+			
+			dst_attr->attnotnull = src_attr->attnotnull;
+			dst_attr->atthasdef = src_attr->atthasdef;
+			dst_attr->atthasmissing = src_attr->atthasmissing;
+			dst_attr->attidentity = src_attr->attidentity;
+			dst_attr->attgenerated = src_attr->attgenerated;
 			j++;
 		}
 	}
@@ -1876,9 +1888,10 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	for (int i = 0; i < 2; i++)
 	{
-		relation_split_info_free(splitinfos[i], ti_options);
+		relation_split_info_close(splitinfos[i], ti_options);
 	}
 
+	
 	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
 															NameStr(chunk->fd.schema_name),
@@ -1899,7 +1912,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 		Ensure(relpersistence == RELPERSISTENCE_PERMANENT, "only permanent chunks can be split");
 		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
 
-		// relation_split_info_free(splitinfos[i], ti_options);
+		relation_split_info_free(splitinfos[i], ti_options);
 
 		/* Only reindex new chunks. Existing chunk will be reindexed during
 		 * the heap swap below. */
