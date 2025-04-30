@@ -1312,6 +1312,8 @@ reform_and_rewrite_tuple(HeapTuple tuple, Relation srcrel, const RelationSplitIn
 	heap_freetuple(tupcopy);
 }
 
+#define NEW_HEAP 1
+#if NEW_HEAP
 static Oid
 make_new_heap_for_split(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod, char relpersistence,
 						LOCKMODE lockmode)
@@ -1346,13 +1348,12 @@ make_new_heap_for_split(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod, 
 
 	for (int i = 0; i < OldHeapDesc->natts; i++)
 	{
-		Form_pg_attribute attr = TupleDescAttr(OldHeapDesc, i);
+		Form_pg_attribute src_attr = TupleDescAttr(OldHeapDesc, i);
 
-		if (!attr->attisdropped)
+		if (!src_attr->attisdropped)
 		{
 			AttrNumber src_attno = AttrOffsetGetAttrNumber(i);
 			AttrNumber dst_attno = AttrOffsetGetAttrNumber(j);
-			Form_pg_attribute src_attr = TupleDescAttr(OldHeapDesc, i);
 			Form_pg_attribute dst_attr = TupleDescAttr(NewHeapDesc, j);
 			TupleDescCopyEntry(NewHeapDesc, dst_attno, OldHeapDesc, src_attno);
 			
@@ -1463,6 +1464,7 @@ make_new_heap_for_split(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod, 
 
 	return OIDNewHeap;
 }
+#endif
 
 static void
 copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], AttrNumber splitdim_attnum,
@@ -1832,14 +1834,17 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 	ts_cache_release(&hcache);
 	ht = ts_hypertable_cache_get_cache_and_entry(chunk->hypertable_relid, CACHE_FLAG_NONE, &hcache);
 	bool created = false;
-	/*Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
+
+#if !NEW_HEAP
+	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
 															NameStr(chunk->fd.schema_name),
 															NULL,
 															InvalidOid,
 															&created);
+#endif
 	ts_cache_release(&hcache);
-	*/
+
 
 	// Ensure(created, "could not create chunk for split");
 	// Assert(new_chunk);
@@ -1856,21 +1861,24 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 									   srcrel->rd_rel->relam,
 									   relpersistence,
 									   AccessExclusiveLock);
-
+#if NEW_HEAP
 	Oid new_heap_relid_2 = make_new_heap_for_split(RelationGetRelid(srcrel),
 												   srcrel->rd_rel->reltablespace,
 												   srcrel->rd_rel->relam,
 												   relpersistence,
 												   AccessExclusiveLock);
-
+#endif
+	
 	/*
 	 * Open the new relations that will receive tuples during split. These are
 	 * closed by relation_split_info_free().
 	 */
 	Relation target1_rel = table_open(new_heap_relid, AccessExclusiveLock);
-	// Relation target2_rel = table_open(new_chunk->table_id, AccessExclusiveLock);
+#if !NEW_HEAP
+	Relation target2_rel = table_open(new_chunk->table_id, AccessExclusiveLock);
+#else
 	Relation target2_rel = table_open(new_heap_relid_2, AccessExclusiveLock);
-
+#endif
 	/* Setup the state we need for each new chunk partition */
 	splitinfos[0] = relation_split_info_create(srcrel, target1_rel, &cutoffs);
 	splitinfos[1] = relation_split_info_create(srcrel, target2_rel, &cutoffs);
@@ -1891,7 +1899,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 		relation_split_info_close(splitinfos[i], ti_options);
 	}
 
-	
+#if NEW_HEAP
 	Chunk *new_chunk = ts_chunk_find_or_create_without_cuts(ht,
 															new_cube,
 															NameStr(chunk->fd.schema_name),
@@ -1901,7 +1909,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	Ensure(created, "could not create chunk for split");
 	Ensure(new_chunk, "could not create new chunk");
-
+#endif
 	/* Cleanup split rel infos and reindex new chunks */
 	for (int i = 0; i < 2; i++)
 	{

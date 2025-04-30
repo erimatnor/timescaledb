@@ -199,7 +199,13 @@ where con.contype = 'c'
 order by 1,2,3 desc;
 
 -- Remove comment column to generate dropped column
+
+select * from show_chunks('splitme');
+select * from pg_inherits inh join pg_class cl on (cl.oid = inh.inhparent) where cl.relname = 'splitme';
+
 alter table splitme drop column comment;
+
+select attrelid::regclass, * from pg_attribute att join show_chunks('splitme') ch on (ch = attrelid);
 
 select * from chunk_info;
 \c :TEST_DBNAME :ROLE_SUPERUSER
