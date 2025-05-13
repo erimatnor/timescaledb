@@ -379,6 +379,8 @@ extern void row_compressor_clear_batch(RowCompressor *row_compressor, bool chang
 extern void row_compressor_flush(RowCompressor *row_compressor, CommandId mycid,
 								 bool changed_groups);
 extern void row_compressor_append_row(RowCompressor *row_compressor, TupleTableSlot *row);
+extern void row_compressor_process_ordered_slot(RowCompressor *row_compressor, TupleTableSlot *slot,
+												CommandId mycid);
 extern void row_compressor_append_sorted_rows(RowCompressor *row_compressor,
 											  Tuplesortstate *sorted_rel, TupleDesc sorted_desc,
 											  Relation in_rel);

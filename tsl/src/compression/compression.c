@@ -121,8 +121,8 @@ tsl_get_decompress_all_function(CompressionAlgorithm algorithm, Oid type)
 }
 
 static Tuplesortstate *compress_chunk_sort_relation(CompressionSettings *settings, Relation in_rel);
-static void row_compressor_process_ordered_slot(RowCompressor *row_compressor, TupleTableSlot *slot,
-												CommandId mycid);
+// static void row_compressor_process_ordered_slot(RowCompressor *row_compressor, TupleTableSlot
+// *slot, 												CommandId mycid);
 static void row_compressor_update_group(RowCompressor *row_compressor, TupleTableSlot *row);
 static bool row_compressor_new_row_is_in_new_group(RowCompressor *row_compressor,
 												   TupleTableSlot *row);
@@ -938,7 +938,7 @@ row_compressor_append_sorted_rows(RowCompressor *row_compressor, Tuplesortstate 
 	ExecDropSingleTupleTableSlot(slot);
 }
 
-static void
+void
 row_compressor_process_ordered_slot(RowCompressor *row_compressor, TupleTableSlot *slot,
 									CommandId mycid)
 {
