@@ -1360,12 +1360,17 @@ reform_and_rewrite_tuple(HeapTuple tuple, Relation srcrel, const RelationSplitIn
 	heap_freetuple(tupcopy);
 }
 
+#define SPLIT_FACTOR 2
+
 typedef struct SplitPointInfo
 {
 	AttrNumber attnum; /* Attnum of dimension/column we split along */
 	Oid type;		   /* Type of split dimension */
 	int64 point;	   /* Point at which we split */
-	int (*route_tuple)(TupleTableSlot *slot, const struct SplitPointInfo *spi);
+	RelationSplitInfo *rsi[SPLIT_FACTOR];
+	bool return_null;
+	HeapTuple curr_tuple;
+	HeapTuple (*route_tuple)(TupleTableSlot *slot, struct SplitPointInfo *spi, int *routing_index);
 } SplitPointInfo;
 
 typedef struct CompressedSplitPointInfo
@@ -1374,10 +1379,14 @@ typedef struct CompressedSplitPointInfo
 	AttrNumber attnum_min;
 	AttrNumber attnum_max;
 	Relation noncompressed_rel;
+	HeapTupleFields t_heap;
+	Oid t_oid;
+	RowCompressor compressor[SPLIT_FACTOR];
+	int compressor_index;
 } CompressedSplitPointInfo;
 
 static int
-route_non_compressed_tuple_for_split(TupleTableSlot *slot, const struct SplitPointInfo *spi)
+route_tuple(TupleTableSlot *slot, struct SplitPointInfo *spi)
 {
 	bool isnull = false;
 	Datum value = slot_getattr(slot, spi->attnum, &isnull);
@@ -1389,15 +1398,11 @@ route_non_compressed_tuple_for_split(TupleTableSlot *slot, const struct SplitPoi
 	 * supported now, so routing is easy. An N-way split requires, e.g.,
 	 * binary search.
 	 */
-	if (point < spi->point)
-		return 0;
-
-	return 1;
+	return (point < spi->point) ? 0 : 1;
 }
 
-#if 1
 static int
-route_compressed_tuple_for_split(TupleTableSlot *slot, const struct SplitPointInfo *spi)
+route_compressed_tuple(TupleTableSlot *slot, struct SplitPointInfo *spi)
 {
 	const CompressedSplitPointInfo *cspi = (const CompressedSplitPointInfo *) spi;
 	bool isnull = false;
@@ -1418,72 +1423,58 @@ route_compressed_tuple_for_split(TupleTableSlot *slot, const struct SplitPointIn
 	Assert(spi->point >= max_point);
 	return 1;
 }
-#endif
 
-#define SPLIT_FACTOR 2
-
-typedef struct SplitTableScanDescData
-{
-	TableScanDesc tablescan;
-	HeapTupleFields t_heap;
-	Oid t_oid;
-	ItemPointerData tid;
-	RowDecompressor decompressor;
-	RowCompressor compressor[SPLIT_FACTOR];
-	// TupleTableSlot *slots[2];
-	RelationSplitInfo *splitinfos[2];
-	SplitPointInfo *spi;
-	TupleTableSlot *segment_slot;
-	int compressor_index;
-	Buffer buffer;
-	MemoryContext mcxt;
-	bool decompressing;
-} SplitTableScanDescData;
-
-typedef struct SplitTableScanDescData *SplitTableScanDesc;
-
-#if 1
 static HeapTuple
-route_tuple_for_split(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routingindex)
+route_non_compressed_tuple_for_split(TupleTableSlot *slot, struct SplitPointInfo *spi,
+									 int *routing_index)
 {
-	if (sscan->compressor_index == SPLIT_FACTOR)
+	if (spi->curr_tuple)
 	{
-		if (sscan->decompressing)
-		{
-			//row_decompressor_close(&sscan->decompressor);
-			sscan->decompressing = false;
-		}
-		sscan->compressor_index = -1;
-		*routingindex = -1;
-
+		spi->curr_tuple = NULL;
 		return NULL;
 	}
-	else if (sscan->compressor_index >= 0)
+
+	*routing_index = route_tuple(slot, spi);
+	spi->curr_tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
+	return spi->curr_tuple;
+}
+
+static HeapTuple
+route_compressed_tuple_for_split(TupleTableSlot *slot, struct SplitPointInfo *spi,
+								 int *routing_index)
+{
+	CompressedSplitPointInfo *cspi = (CompressedSplitPointInfo *) spi;
+
+	if (cspi->compressor_index == SPLIT_FACTOR)
 	{
-		Assert(sscan->compressor_index >= 0 && sscan->compressor_index < SPLIT_FACTOR);
-		HeapTuple tuple = row_compressor_build_tuple(&sscan->compressor[sscan->compressor_index]);
+		cspi->compressor_index = -1;
+		*routing_index = -1;
+		spi->curr_tuple = NULL;
+		return NULL;
+	}
+	else if (cspi->compressor_index >= 0)
+	{
+		Assert(cspi->compressor_index >= 0 && cspi->compressor_index < SPLIT_FACTOR);
+		HeapTuple tuple = row_compressor_build_tuple(&cspi->compressor[cspi->compressor_index]);
 
-		// ExecStoreHeapTuple(tuple, sscan->segment_slot, true);
 		/* Copy over visibility info */
-		memcpy(&tuple->t_data->t_choice.t_heap, &sscan->t_heap, sizeof(HeapTupleFields));
+		memcpy(&tuple->t_data->t_choice.t_heap, &cspi->t_heap, sizeof(HeapTupleFields));
+		tuple->t_tableOid = cspi->t_oid;
 
-		// ItemPointerCopy(&sscan->tid, &tuple->t_self);
-		tuple->t_tableOid = sscan->t_oid;
+		row_compressor_clear_batch(&cspi->compressor[cspi->compressor_index], false);
+		row_compressor_close(&cspi->compressor[cspi->compressor_index]);
 
-		row_compressor_clear_batch(&sscan->compressor[sscan->compressor_index], false);
-		row_compressor_close(&sscan->compressor[sscan->compressor_index]);
-
-		*routingindex = sscan->compressor_index;
-		sscan->compressor_index++;
+		spi->curr_tuple = tuple;
+		*routing_index = cspi->compressor_index;
+		cspi->compressor_index++;
 
 		return tuple;
 	}
 
-	*routingindex = sscan->spi->route_tuple(slot, sscan->spi);
+	*routing_index = route_compressed_tuple(slot, spi);
 
-	if (*routingindex == -1)
+	if (*routing_index == -1)
 	{
-		CompressedSplitPointInfo *cspi = (CompressedSplitPointInfo *) sscan->spi;
 		HeapTuple tuple;
 		CompressionSettings *csettings =
 			ts_compression_settings_get(RelationGetRelid(cspi->noncompressed_rel));
@@ -1491,225 +1482,61 @@ route_tuple_for_split(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routi
 		tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
 
 		/* Save visibility information */
-		memcpy(&sscan->t_heap, &tuple->t_data->t_choice.t_heap, sizeof(HeapTupleFields));
-		ItemPointerCopy(&tuple->t_self, &sscan->tid);
-		sscan->t_oid = tuple->t_tableOid;
+		memcpy(&cspi->t_heap, &tuple->t_data->t_choice.t_heap, sizeof(HeapTupleFields));
+		cspi->t_oid = tuple->t_tableOid;
 
-		MemoryContext oldmcxt = MemoryContextSwitchTo(sscan->mcxt);
-		sscan->decompressor = build_decompressor(sscan->tablescan->rs_rd, cspi->noncompressed_rel);
-		// build_decompressor_from_tupdesc(slot->tts_tupleDescriptor,
-		//							  RelationGetDescr(cspi->noncompressed_rel));
-		sscan->decompressing = true;
-		tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
-
+		// MemoryContext oldmcxt = MemoryContextSwitchTo(sscan->mcxt);
+		RowDecompressor decompressor =
+			build_decompressor_from_tupdesc(slot->tts_tupleDescriptor,
+											RelationGetDescr(cspi->noncompressed_rel));
 		heap_deform_tuple(tuple,
-						  sscan->decompressor.in_desc,
-						  sscan->decompressor.compressed_datums,
-						  sscan->decompressor.compressed_is_nulls);
+						  decompressor.in_desc,
+						  decompressor.compressed_datums,
+						  decompressor.compressed_is_nulls);
 
-		int nrows = decompress_batch(&sscan->decompressor);
+		int nrows = decompress_batch(&decompressor);
 
 		for (int i = 0; i < SPLIT_FACTOR; i++)
 		{
 			row_compressor_init(csettings,
-								&sscan->compressor[i],
+								&cspi->compressor[i],
 								RelationGetDescr(cspi->noncompressed_rel),
-								sscan->splitinfos[i]->targetrel,
+								spi->rsi[i]->targetrel,
 								false,
 								0);
 		}
 
 		for (int i = 0; i < nrows; i++)
 		{
-			int routing_index =
-				route_non_compressed_tuple_for_split(sscan->decompressor.decompressed_slots[i],
-													 sscan->spi);
+			int routing_index = route_tuple(decompressor.decompressed_slots[i], spi);
 			Assert(routing_index == 0 || routing_index == 1);
-
-			row_compressor_process_ordered_slot(&sscan->compressor[routing_index],
-												sscan->decompressor.decompressed_slots[i],
-												sscan->decompressor.mycid);
+			row_compressor_process_ordered_slot(&cspi->compressor[routing_index],
+												decompressor.decompressed_slots[i],
+												decompressor.mycid);
 		}
 
-		row_decompressor_close(&sscan->decompressor);
-		sscan->compressor_index = 0;
-		MemoryContextSwitchTo(oldmcxt);
+		row_decompressor_close(&decompressor);
+		cspi->compressor_index = 0;
+		// MemoryContextSwitchTo(oldmcxt);
 
-		return route_tuple_for_split(sscan, slot, routingindex);
+		return route_compressed_tuple_for_split(slot, spi, routing_index);
 	}
 
-	sscan->compressor_index = SPLIT_FACTOR;
-	return ExecFetchSlotHeapTuple(slot, false, NULL);
+	Assert(*routing_index >= 0 && *routing_index < SPLIT_FACTOR);
+	cspi->compressor_index = SPLIT_FACTOR;
+	spi->curr_tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
+
+	return spi->curr_tuple;
 }
 
 static void
-copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], SplitPointInfo *spi,
-					  struct VacuumCutoffs *cutoffs)
+copy_tuples_for_split(Relation srcrel, SplitPointInfo *spi, struct VacuumCutoffs *cutoffs)
 {
 	TupleTableSlot *srcslot;
 	MemoryContext oldcxt;
 	EState *estate;
 	ExprContext *econtext;
-	SplitTableScanDescData sscan = {
-		.buffer = InvalidBuffer,
-		.compressor_index = -1,
-		.spi = spi,
-		.mcxt = CurrentMemoryContext,
-	};
-
-	sscan.segment_slot = MakeSingleTupleTableSlot(RelationGetDescr(srcrel), &TTSOpsHeapTuple);
-
-	memcpy(sscan.splitinfos, splitinfos, sizeof(RelationSplitInfo *) * 2);
-
-	estate = CreateExecutorState();
-
-	/* Create the tuple slot */
-	srcslot = table_slot_create(srcrel, NULL);
-
-	/*
-	 * Scan through the rows using SnapshotAny to see everything so that we
-	 * can transfer tuples that are deleted or updated but still visible to
-	 * concurrent transactions.
-	 */
-	sscan.tablescan = table_beginscan(srcrel, SnapshotAny, 0, NULL);
-
-	/*
-	 * Switch to per-tuple memory context and reset it for each tuple
-	 * produced, so we don't leak memory.
-	 */
-	econtext = GetPerTupleExprContext(estate);
-	oldcxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-
-	/*
-	 * Read all the data from the split relation and route the tuples to the
-	 * new partitions. Do some vacuuming and cleanup at the same
-	 * time. Transfer all visibility information to the new relations.
-	 *
-	 * Main loop inspired by heapam_relation_copy_for_cluster() used to run
-	 * CLUSTER and VACUUM FULL on a table.
-	 */
-	double num_tuples = 0.0;
-	double tups_vacuumed = 0.0;
-	double tups_recently_dead = 0.0;
-
-	BufferHeapTupleTableSlot *hslot = (BufferHeapTupleTableSlot *) srcslot;
-	int routingindex = -1;
-
-	while (table_scan_getnextslot(sscan.tablescan, ForwardScanDirection, srcslot))
-	{
-		const RelationSplitInfo *rsi = NULL;
-		HeapTuple tuple;
-		Buffer buf;
-		bool isdead;
-
-		CHECK_FOR_INTERRUPTS();
-		ResetExprContext(econtext);
-
-		tuple = ExecFetchSlotHeapTuple(srcslot, false, NULL);
-		buf = hslot->buffer;
-
-		LockBuffer(buf, BUFFER_LOCK_SHARE);
-
-		switch (HeapTupleSatisfiesVacuum(tuple, cutoffs->OldestXmin, buf))
-		{
-			case HEAPTUPLE_DEAD:
-				/* Definitely dead */
-				isdead = true;
-				break;
-			case HEAPTUPLE_RECENTLY_DEAD:
-				tups_recently_dead += 1;
-				/* fall through */
-				TS_FALLTHROUGH;
-			case HEAPTUPLE_LIVE:
-				/* Live or recently dead, must copy it */
-				isdead = false;
-				break;
-			case HEAPTUPLE_INSERT_IN_PROGRESS:
-				/*
-				 * Since we hold exclusive lock on the relation, normally the
-				 * only way to see this is if it was inserted earlier in our
-				 * own transaction. Give a warning if this case does not
-				 * apply; in any case we better copy it.
-				 */
-				if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple->t_data)))
-					elog(WARNING,
-						 "concurrent insert in progress within table \"%s\"",
-						 RelationGetRelationName(srcrel));
-				/* treat as live */
-				isdead = false;
-				break;
-			case HEAPTUPLE_DELETE_IN_PROGRESS:
-				/*
-				 * Similar situation to INSERT_IN_PROGRESS case.
-				 */
-				if (!TransactionIdIsCurrentTransactionId(
-						HeapTupleHeaderGetUpdateXid(tuple->t_data)))
-					elog(WARNING,
-						 "concurrent delete in progress within table \"%s\"",
-						 RelationGetRelationName(srcrel));
-				/* treat as recently dead */
-				tups_recently_dead += 1;
-				isdead = false;
-				break;
-			default:
-				elog(ERROR, "unexpected HeapTupleSatisfiesVacuum result");
-				isdead = false; /* keep compiler quiet */
-				break;
-		}
-
-		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
-
-		while ((tuple = route_tuple_for_split(&sscan, srcslot, &routingindex)))
-		{
-			Assert(routingindex >= 0 && routingindex < SPLIT_FACTOR);
-			rsi = splitinfos[routingindex];
-
-			if (isdead)
-			{
-				tups_vacuumed += 1;
-				/* heap rewrite module still needs to see it... */
-				if (rewrite_heap_dead_tuple(rsi->rwstate, tuple))
-				{
-					/* A previous recently-dead tuple is now known dead */
-					tups_vacuumed += 1;
-					tups_recently_dead -= 1;
-				}
-			}
-			else
-			{
-				num_tuples++;
-				reform_and_rewrite_tuple(tuple, srcrel, rsi);
-			}
-		}
-	}
-
-	MemoryContextSwitchTo(oldcxt);
-
-	const char *nspname = get_namespace_name(RelationGetNamespace(srcrel));
-
-	ereport(DEBUG1,
-			(errmsg("\"%s.%s\": found %.0f removable, %.0f nonremovable row versions",
-					nspname,
-					RelationGetRelationName(srcrel),
-					tups_vacuumed,
-					num_tuples),
-			 errdetail("%.0f dead row versions cannot be removed yet.", tups_recently_dead)));
-
-	table_endscan(sscan.tablescan);
-	ExecDropSingleTupleTableSlot(srcslot);
-	ExecDropSingleTupleTableSlot(sscan.segment_slot);
-	FreeExecutorState(estate);
-}
-#else
-static void
-copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], SplitPointInfo *spi,
-					  struct VacuumCutoffs *cutoffs)
-{
-	TupleTableSlot *srcslot;
 	TableScanDesc scan;
-	MemoryContext oldcxt;
-	EState *estate;
-	ExprContext *econtext;
 
 	estate = CreateExecutorState();
 
@@ -1743,6 +1570,7 @@ copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], SplitPo
 	double tups_recently_dead = 0.0;
 
 	BufferHeapTupleTableSlot *hslot = (BufferHeapTupleTableSlot *) srcslot;
+	int routingindex = -1;
 
 	while (table_scan_getnextslot(scan, ForwardScanDirection, srcslot))
 	{
@@ -1808,112 +1636,28 @@ copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], SplitPo
 
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 
-		int routing_index = spi->route_tuple(srcslot, spi);
-		// Assert(routing_index == 0 || routing_index == 1);
-
-		if (routing_index == -1)
+		while ((tuple = spi->route_tuple(srcslot, spi, &routingindex)))
 		{
-			CompressedSplitPointInfo *cspi = (CompressedSplitPointInfo *) spi;
-
-			RowDecompressor decompressor;
-			RowCompressor compressor[2];
-			CompressionSettings *csettings =
-				ts_compression_settings_get(RelationGetRelid(cspi->noncompressed_rel));
-
-			decompressor =
-				build_decompressor_from_tupdesc(srcslot->tts_tupleDescriptor,
-												RelationGetDescr(cspi->noncompressed_rel));
-			heap_deform_tuple(tuple,
-							  decompressor.in_desc,
-							  decompressor.compressed_datums,
-							  decompressor.compressed_is_nulls);
-
-			int nrows = decompress_batch(&decompressor);
-
-			row_compressor_init(csettings,
-								&compressor[0],
-								RelationGetDescr(cspi->noncompressed_rel),
-								splitinfos[0]->targetrel,
-								false,
-								0);
-			row_compressor_init(csettings,
-								&compressor[1],
-								RelationGetDescr(cspi->noncompressed_rel),
-								splitinfos[1]->targetrel,
-								false,
-								0);
-
-			for (int i = 0; i < nrows; i++)
-			{
-				routing_index =
-					route_non_compressed_tuple_for_split(decompressor.decompressed_slots[i], spi);
-				Assert(routing_index == 0 || routing_index == 1);
-				row_compressor_append_row(&compressor[routing_index],
-										  decompressor.decompressed_slots[i]);
-			}
-
-			HeapTuple tuple0 = row_compressor_build_tuple(&compressor[0]);
-			HeapTuple tuple1 = row_compressor_build_tuple(&compressor[1]);
-
-			/* Copy over visibility info */
-			memcpy(&tuple0->t_data->t_choice.t_heap,
-				   &tuple->t_data->t_choice.t_heap,
-				   sizeof(HeapTupleFields));
-			memcpy(&tuple1->t_data->t_choice.t_heap,
-				   &tuple->t_data->t_choice.t_heap,
-				   sizeof(HeapTupleFields));
-
-			row_decompressor_close(&decompressor);
-			row_compressor_clear_batch(&compressor[0], false);
-			row_compressor_clear_batch(&compressor[1], false);
-			row_compressor_close(&compressor[0]);
-			row_compressor_close(&compressor[1]);
+			Assert(routingindex >= 0 && routingindex < SPLIT_FACTOR);
+			rsi = spi->rsi[routingindex];
 
 			if (isdead)
 			{
-				tups_vacuumed += 2;
-
-				/* heap rewrite module still needs to see it... */
-				if (rewrite_heap_dead_tuple(splitinfos[0]->rwstate, tuple0))
-				{
-					/* A previous recently-dead tuple is now known dead */
-					tups_vacuumed += 1;
-					tups_recently_dead -= 1;
-				}
-
-				if (rewrite_heap_dead_tuple(splitinfos[1]->rwstate, tuple1))
-				{
-					/* A previous recently-dead tuple is now known dead */
-					tups_vacuumed += 1;
-					tups_recently_dead -= 1;
-				}
-
-				continue;
-			}
-
-			num_tuples += 2;
-			reform_and_rewrite_tuple(tuple0, srcrel, splitinfos[0]);
-			reform_and_rewrite_tuple(tuple1, srcrel, splitinfos[1]);
-			continue;
-		}
-
-		rsi = splitinfos[routing_index];
-
-		if (isdead)
-		{
-			tups_vacuumed += 1;
-			/* heap rewrite module still needs to see it... */
-			if (rewrite_heap_dead_tuple(rsi->rwstate, tuple))
-			{
-				/* A previous recently-dead tuple is now known dead */
 				tups_vacuumed += 1;
-				tups_recently_dead -= 1;
+				/* heap rewrite module still needs to see it... */
+				if (rewrite_heap_dead_tuple(rsi->rwstate, tuple))
+				{
+					/* A previous recently-dead tuple is now known dead */
+					tups_vacuumed += 1;
+					tups_recently_dead -= 1;
+				}
 			}
-			continue;
+			else
+			{
+				num_tuples++;
+				reform_and_rewrite_tuple(tuple, srcrel, rsi);
+			}
 		}
-
-		num_tuples++;
-		reform_and_rewrite_tuple(tuple, srcrel, rsi);
 	}
 
 	MemoryContextSwitchTo(oldcxt);
@@ -1932,14 +1676,12 @@ copy_tuples_for_split(Relation srcrel, RelationSplitInfo *splitinfos[2], SplitPo
 	ExecDropSingleTupleTableSlot(srcslot);
 	FreeExecutorState(estate);
 }
-#endif
 
 static Oid
-do_split(Relation srcrel, Oid new_chunk_relid, struct VacuumCutoffs *cutoffs,
-		 SplitPointInfo *splitpoint)
+do_split(Relation srcrel, Oid new_chunk_relid, struct VacuumCutoffs *cutoffs, SplitPointInfo *spi)
 {
 	int ti_options = TABLE_INSERT_SKIP_FSM;
-	RelationSplitInfo *splitinfos[2];
+
 	char relpersistence = srcrel->rd_rel->relpersistence;
 
 	Oid new_heap_relid = make_new_heap(RelationGetRelid(srcrel),
@@ -1956,12 +1698,12 @@ do_split(Relation srcrel, Oid new_chunk_relid, struct VacuumCutoffs *cutoffs,
 	Relation target2_rel = table_open(new_chunk_relid, AccessExclusiveLock);
 
 	/* Setup the state we need for each new chunk partition */
-	splitinfos[0] = relation_split_info_create(srcrel, target1_rel, cutoffs);
-	splitinfos[1] = relation_split_info_create(srcrel, target2_rel, cutoffs);
+	spi->rsi[0] = relation_split_info_create(srcrel, target1_rel, cutoffs);
+	spi->rsi[1] = relation_split_info_create(srcrel, target2_rel, cutoffs);
 
 	DEBUG_WAITPOINT("split_chunk_before_tuple_routing");
 
-	copy_tuples_for_split(srcrel, splitinfos, splitpoint, cutoffs);
+	copy_tuples_for_split(srcrel, spi, cutoffs);
 
 	table_close(srcrel, NoLock);
 
@@ -1970,12 +1712,12 @@ do_split(Relation srcrel, Oid new_chunk_relid, struct VacuumCutoffs *cutoffs,
 	{
 		ReindexParams reindex_params = { 0 };
 		int reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
-		Oid chunkrelid = splitinfos[i]->targetrel->rd_id;
+		Oid chunkrelid = spi->rsi[i]->targetrel->rd_id;
 
 		Ensure(relpersistence == RELPERSISTENCE_PERMANENT, "only permanent chunks can be split");
 		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
 
-		relation_split_info_free(splitinfos[i], ti_options);
+		relation_split_info_free(spi->rsi[i], ti_options);
 
 		/* Only reindex new chunks. Existing chunk will be reindexed during
 		 * the heap swap below. */
@@ -2225,9 +1967,6 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 
 	ts_cache_release(&hcache);
 
-	//	int ti_options = TABLE_INSERT_SKIP_FSM;
-	//	RelationSplitInfo *splitinfos[2];
-	// RelationSplitInfo *csplitinfos[2];
 	struct VacuumCutoffs cutoffs;
 	struct VacuumCutoffs ccutoffs;
 	char relpersistence = srcrel->rd_rel->relpersistence;
@@ -2272,6 +2011,7 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 			.attnum_min = get_attnum(compress_settings->fd.compress_relid, min_attname),
 			.attnum_max = get_attnum(compress_settings->fd.compress_relid, max_attname),
 			.noncompressed_rel = srcrel,
+			.compressor_index = -1,
 		};
 
 		Relation compressed_srcrel =
