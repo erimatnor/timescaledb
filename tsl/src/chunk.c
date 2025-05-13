@@ -1442,114 +1442,6 @@ typedef struct SplitTableScanDescData
 
 typedef struct SplitTableScanDescData *SplitTableScanDesc;
 
-#if 0
-static bool
-getnextslot(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routingindex)
-{
-	BufferHeapTupleTableSlot *hslot = (BufferHeapTupleTableSlot *) slot;
-	
-	if (sscan->compressor_index >= 0)
-	{
-		Assert(sscan->compressor_index >= 0 && sscan->compressor_index < SPLIT_FACTOR);
-		HeapTuple tuple = row_compressor_build_tuple(&sscan->compressor[sscan->compressor_index]);
-		
-		/* Copy over visibility info */
-		memcpy(&tuple->t_data->t_choice.t_heap,
-			   &sscan->t_heap,
-			   sizeof(HeapTupleFields));
-		
-		ItemPointerCopy(&sscan->tid, &tuple->t_self);
-		tuple->t_tableOid = sscan->t_oid;
-		
-		row_compressor_clear_batch(&sscan->compressor[sscan->compressor_index], false);
-		row_compressor_close(&sscan->compressor[sscan->compressor_index]);
-		
-		
-		//LockBuffer(sscan->buffer, BUFFER_LOCK_SHARE);
-		if (sscan->compressor_index > 0)
-			hslot->buffer = InvalidBuffer;
-		
-		ExecForceStoreHeapTuple(tuple, slot, true);
-		hslot->buffer = sscan->buffer;
-
-		*routingindex = sscan->compressor_index;
-		sscan->compressor_index++;
-		
-		if (sscan->compressor_index == SPLIT_FACTOR)
-		{			
-			row_decompressor_close(&sscan->decompressor);
-			hslot->buffer = InvalidBuffer;
-			sscan->compressor_index = -1;
-		}
-
-		return true;
-	}
-
-	/* Read next "real" tuple */
-	if (!table_scan_getnextslot(sscan->tablescan, ForwardScanDirection, slot))
-		return false;
-
-	*routingindex = sscan->spi->route_tuple(slot, sscan->spi);
-
-	if (*routingindex == -1)
-	{
-		CompressedSplitPointInfo *cspi = (CompressedSplitPointInfo *) sscan->spi;
-		HeapTuple tuple = NULL;
-		CompressionSettings *csettings =
-			ts_compression_settings_get(RelationGetRelid(cspi->noncompressed_rel));
-		
-		tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
-		
-		/* Save visibility information */
-		memcpy(&sscan->t_heap, &tuple->t_data->t_choice.t_heap, sizeof(HeapTupleFields));
-		ItemPointerCopy(&tuple->t_self, &sscan->tid);
-		sscan->t_oid = tuple->t_tableOid;
-		
-		sscan->buffer = hslot->buffer;
-
-		MemoryContext oldmcxt = MemoryContextSwitchTo(sscan->mcxt);
-		sscan->decompressor = build_decompressor_from_tupdesc(slot->tts_tupleDescriptor,
-													   RelationGetDescr(cspi->noncompressed_rel));
-
-		tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
-
-		heap_deform_tuple(tuple,
-						  sscan->decompressor.in_desc,
-						  sscan->decompressor.compressed_datums,
-						  sscan->decompressor.compressed_is_nulls);
-		
-		int nrows = decompress_batch(&sscan->decompressor);
-
-		for (int i = 0; i < SPLIT_FACTOR; i++)
-		{
-			row_compressor_init(csettings,
-								&sscan->compressor[i],
-								RelationGetDescr(cspi->noncompressed_rel),
-								sscan->splitinfos[i]->targetrel,
-								false,
-								0);
-		}
-
-		for (int i = 0; i < nrows; i++)
-		{
-			int routing_index =
-				route_non_compressed_tuple_for_split(sscan->decompressor.decompressed_slots[i],
-													 sscan->spi);
-			Assert(routing_index == 0 || routing_index == 1);
-			row_compressor_append_row(&sscan->compressor[routing_index],
-									  sscan->decompressor.decompressed_slots[i]);
-		}
-		
-		sscan->compressor_index = 0;
-		MemoryContextSwitchTo(oldmcxt);
-		
-		return getnextslot(sscan, slot, routingindex);
-	}
-	
-	return true;
-}
-#endif
-
 #if 1
 static HeapTuple
 route_tuple_for_split(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routingindex)
@@ -1558,7 +1450,7 @@ route_tuple_for_split(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routi
 	{
 		if (sscan->decompressing)
 		{
-			row_decompressor_close(&sscan->decompressor);
+			//row_decompressor_close(&sscan->decompressor);
 			sscan->decompressing = false;
 		}
 		sscan->compressor_index = -1;
@@ -1639,6 +1531,7 @@ route_tuple_for_split(SplitTableScanDesc sscan, TupleTableSlot *slot, int *routi
 												sscan->decompressor.mycid);
 		}
 
+		row_decompressor_close(&sscan->decompressor);
 		sscan->compressor_index = 0;
 		MemoryContextSwitchTo(oldmcxt);
 

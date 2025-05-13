@@ -198,6 +198,7 @@ alter table splitme drop column comment;
 select * from chunk_info;
 \c :TEST_DBNAME :ROLE_SUPERUSER
 set role :ROLE_DEFAULT_PERM_USER;
+select setseed(0.2);
 
 select * from chunk_slices where hypertable_name = 'splitme';
 
@@ -265,7 +266,6 @@ select count(*), sum(device), sum(location), sum(temp) from splitme;
 select count(*), sum(device), sum(location), sum(temp) from _timescaledb_internal._hyper_1_1_chunk;
 select count(*), sum(device), sum(location), sum(temp) from _timescaledb_internal._hyper_1_13_chunk;
 
-select * from timescaledb_information.chunks where chunk_name = '_hyper_1_13_chunk';
 select compress_relid from _timescaledb_catalog.compression_settings where relid = '_timescaledb_internal._hyper_1_13_chunk'::regclass \gset
 
 \d+ :compress_relid
