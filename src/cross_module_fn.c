@@ -165,11 +165,10 @@ columnstore_setup_default(Hypertable *ht, WithClauseResult *with_clause_options)
 static Datum
 error_no_default_fn_pg_community(PG_FUNCTION_ARGS)
 {
+	/* fcinfo->flinfo not always set so don't print original function name */
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("function \"%s\" is not supported under the current \"%s\" license",
-					get_func_name(fcinfo->flinfo->fn_oid),
-					ts_guc_license),
+			 errmsg("function is not supported under the current \"%s\" license", ts_guc_license),
 			 errhint("Upgrade your license to 'timescale' to use this free community feature.")));
 
 	pg_unreachable();

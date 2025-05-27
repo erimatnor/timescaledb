@@ -5,6 +5,7 @@
  */
 
 #include <postgres.h>
+#include "ts_catalog/chunk_rewrite.h"
 #include <access/htup_details.h>
 #include <access/xact.h>
 #include <catalog/index.h>
@@ -1436,6 +1437,7 @@ process_drop_table_chunk(Hypertable *ht, Oid chunk_relid, void *arg)
 	};
 
 	ts_compression_settings_delete(chunk_relid);
+	ts_chunk_rewrite_delete(chunk_relid);
 	performDeletion(&objaddr, stmt->behavior, 0);
 }
 
@@ -5402,15 +5404,16 @@ process_drop_table(EventTriggerDropObject *obj)
 										 false);
 	ts_hypertable_delete_by_name(table->schema, table->name);
 	/*
-	 * Normally, compression settings are cleaned up when deleting the
-	 * hypertable or chunk. However, in some cases, e.g., when a hypertable
-	 * delete cascades to chunks, the chunk relids cannot be resolved from the
-	 * schema and name because the chunk relations are already dropped by
-	 * PostgreSQL when the "drop eventtrigger" is called. Therefore, also try
-	 * to delete compression settings here since the eventtrigger gives us the
-	 * relid of dropped objects.
+	 * Normally, dependent catalogs (like compression settings) are cleaned up
+	 * when deleting the hypertable or chunk. However, in some cases, e.g.,
+	 * when a hypertable delete cascades to chunks, the chunk relids cannot be
+	 * resolved from the schema and name because the chunk relations are
+	 * already dropped by PostgreSQL when the "drop eventtrigger" is
+	 * called. Therefore, also try to delete dependent catalog entries here
+	 * since the eventtrigger gives us the relid of dropped objects.
 	 */
 	ts_compression_settings_delete_any(table->relid);
+	ts_chunk_rewrite_delete(table->relid);
 }
 
 static void

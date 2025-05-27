@@ -37,6 +37,7 @@ typedef enum CatalogTable
 	DIMENSION_SLICE,
 	CHUNK,
 	CHUNK_CONSTRAINT,
+	CHUNK_REWRITE,
 	TABLESPACE,
 	BGW_JOB,
 	BGW_JOB_STAT,
@@ -373,6 +374,7 @@ enum Anum_chunk
 	Anum_chunk_status,
 	Anum_chunk_osm_chunk,
 	Anum_chunk_creation_time,
+	Anum_chunk_pending_merge_oid,
 	_Anum_chunk_max,
 };
 
@@ -389,6 +391,7 @@ typedef struct FormData_chunk
 	int32 status;
 	bool osm_chunk;
 	TimestampTz creation_time;
+	Oid pending_merge_oid;
 } FormData_chunk;
 
 typedef FormData_chunk *Form_chunk;
@@ -1245,6 +1248,38 @@ typedef enum Anum_compression_chunk_size_pkey
 } Anum_compression_chunk_size_pkey;
 
 #define Natts_compression_chunk_size_pkey (_Anum_compression_chunk_size_pkey_max - 1)
+
+#define CHUNK_REWRITE_TABLE_NAME "chunk_rewrite"
+
+typedef enum Anum_chunk_rewrite
+{
+	Anum_chunk_rewrite_chunk_relid = 1,
+	Anum_chunk_rewrite_new_relid,
+	_Anum_chunk_rewrite_max,
+} Anum_chunk_rewrite;
+
+#define Natts_chunk_rewrite (_Anum_chunk_rewrite_max - 1)
+
+typedef struct FormData_chunk_rewrite
+{
+	Oid chunk_relid;
+	Oid new_relid;
+} FormData_chunk_rewrite;
+
+typedef FormData_chunk_rewrite *Form_chunk_rewrite;
+
+enum
+{
+	CHUNK_REWRITE_IDX = 0,
+	_MAX_CHUNK_REWRITE_INDEX,
+};
+typedef enum Anum_chunk_rewrite_pkey
+{
+	Anum_chunk_rewrite_key_chunk_relid = 1,
+	_Anum_chunk_rewrite_key_max,
+} Anum_chunk_rewrite_pkey;
+
+#define Natts_chunk_rewrite_key (_Anum_chunk_rewrite_key_max - 1)
 
 /*
  * The maximum number of indexes a catalog table can have.
