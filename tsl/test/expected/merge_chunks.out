@@ -796,7 +796,7 @@ select * from partitions;
  _hyper_1_3_chunk | device      |           1431655764 | 9223372036854775807
 (6 rows)
 
-call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
+call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
 select * from compression_size_fraction;
  chunk_id | compressed_chunk_id | uncompressed_heap_size_fraction | uncompressed_toast_size_fraction | uncompressed_index_size_fraction | compressed_heap_size_fraction | compressed_toast_size_fraction | compressed_index_size_fraction | numrows_pre_compression_fraction | numrows_post_compression_fraction | numrows_frozen_immediately_fraction 
 ----------+---------------------+---------------------------------+----------------------------------+----------------------------------+-------------------------------+--------------------------------+--------------------------------+----------------------------------+-----------------------------------+-------------------------------------

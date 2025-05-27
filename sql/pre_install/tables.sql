@@ -151,6 +151,7 @@ CREATE TABLE _timescaledb_catalog.chunk (
   status integer NOT NULL DEFAULT 0,
   osm_chunk boolean NOT NULL DEFAULT FALSE,
   creation_time timestamptz NOT NULL,
+  pending_merge_oid regclass NULL,
   -- table constraints
   CONSTRAINT chunk_pkey PRIMARY KEY (id),
   CONSTRAINT chunk_schema_name_table_name_key UNIQUE (schema_name, table_name),

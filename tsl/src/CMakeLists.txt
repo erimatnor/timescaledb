@@ -4,6 +4,7 @@ set(SOURCES
     chunk_merge.c
     chunk_split.c
     chunkwise_agg.c
+    heapswap.c
     init.c
     partialize_finalize.c
     planner.c
