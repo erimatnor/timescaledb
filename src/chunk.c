@@ -170,6 +170,8 @@ chunk_formdata_make_tuple(const FormData_chunk *fd, TupleDesc desc)
 	values[AttrNumberGetAttrOffset(Anum_chunk_status)] = Int32GetDatum(fd->status);
 	values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)] = BoolGetDatum(fd->osm_chunk);
 	values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)] = Int64GetDatum(fd->creation_time);
+	values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_id)] =
+		Int64GetDatum(fd->pending_merge_id);
 
 	return heap_form_tuple(desc, values, nulls);
 }
@@ -211,6 +213,8 @@ ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti)
 	fd->status = DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_chunk_status)]);
 	fd->osm_chunk = DatumGetBool(values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)]);
 	fd->creation_time = DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)]);
+	fd->pending_merge_id =
+		DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_id)]);
 
 	if (should_free)
 		heap_freetuple(tuple);
