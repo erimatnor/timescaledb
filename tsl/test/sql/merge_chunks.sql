@@ -373,7 +373,7 @@ call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_
 select * from compression_size_fraction;
 select count(*), sum(device), round(sum(temp)::numeric, 4) from mergeme;
 select * from partitions;
-call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
+call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
 select * from compression_size_fraction;
 select count(*), sum(device), round(sum(temp)::numeric, 4) from mergeme;
 select * from partitions;
