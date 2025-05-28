@@ -171,8 +171,8 @@ chunk_formdata_make_tuple(const FormData_chunk *fd, TupleDesc desc)
 	values[AttrNumberGetAttrOffset(Anum_chunk_status)] = Int32GetDatum(fd->status);
 	values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)] = BoolGetDatum(fd->osm_chunk);
 	values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)] = Int64GetDatum(fd->creation_time);
-	values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_id)] =
-		Int64GetDatum(fd->pending_merge_id);
+	values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)] =
+		ObjectIdGetDatum(fd->pending_merge_oid);
 
 	return heap_form_tuple(desc, values, nulls);
 }
@@ -214,8 +214,8 @@ ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti)
 	fd->status = DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_chunk_status)]);
 	fd->osm_chunk = DatumGetBool(values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)]);
 	fd->creation_time = DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)]);
-	fd->pending_merge_id =
-		DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_id)]);
+	fd->pending_merge_oid =
+		DatumGetObjectId(values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)]);
 
 	if (should_free)
 		heap_freetuple(tuple);
@@ -5269,9 +5269,22 @@ Datum
 ts_merge_two_chunks(PG_FUNCTION_ARGS)
 {
 	Datum chunks[2] = { PG_GETARG_DATUM(0), PG_GETARG_DATUM(1) };
+	bool concurrently = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(2);
 	ArrayType *chunk_array =
 		construct_array(chunks, 2, REGCLASSOID, sizeof(Oid), true, TYPALIGN_INT);
-	return DirectFunctionCall1(ts_cm_functions->merge_chunks, PointerGetDatum(chunk_array));
+	return DirectFunctionCall2(ts_cm_functions->merge_chunks,
+							   PointerGetDatum(chunk_array),
+							   BoolGetDatum(concurrently));
+}
+
+TS_FUNCTION_INFO_V1(ts_merge_chunks_concurrently);
+
+Datum
+ts_merge_chunks_concurrently(PG_FUNCTION_ARGS)
+{
+	return DirectFunctionCall2(ts_cm_functions->merge_chunks,
+							   PG_GETARG_DATUM(0),
+							   BoolGetDatum(true));
 }
 
 void
