@@ -691,3 +691,15 @@ pg_cmp_u32(uint32 a, uint32 b)
 							   norderbys)                                                          \
 	index_beginscan(heapRelation, indexRelation, snapshot, instrument, nkeys, norderbys)
 #endif
+
+/* Copied from PG17. We can remove it once we deprecate older versions. */
+#if PG17_LT
+static inline void
+initReadOnlyStringInfo(StringInfo str, char *data, int len)
+{
+	str->data = data;
+	str->len = len;
+	str->maxlen = 0; /* read-only */
+	str->cursor = 0;
+}
+#endif
