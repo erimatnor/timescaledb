@@ -19,10 +19,7 @@ setup
                on (cl.oid = inh.inhrelid)
                where inh.inhparent = hypertable;
 
-               
-               raise notice 'merging %', chunks_arr;
                call merge_chunks_concurrently(variadic chunks_arr);
-               raise notice 'finished merge';
     end;
     $$ LANGUAGE plpgsql;
 
