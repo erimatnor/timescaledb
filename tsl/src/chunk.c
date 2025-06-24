@@ -973,7 +973,7 @@ Datum
 chunk_merge_chunks(PG_FUNCTION_ARGS)
 {
 	ArrayType *chunks_array = PG_ARGISNULL(0) ? NULL : PG_GETARG_ARRAYTYPE_P(0);
-	bool concurrently = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+	bool concurrently = (PG_NARGS() > 1 && !PG_ARGISNULL(1)) ? PG_GETARG_BOOL(1) : false;
 	Datum *relids;
 	bool *nulls;
 	int nrelids;
@@ -1290,6 +1290,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	pfree(relids);
 	pfree(nulls);
 
+	bool pop_snapshot = false;
+
 	if (concurrently)
 	{
 		LOCKTAG tag;
@@ -1316,14 +1318,38 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			}
 		}
 		*/
-		SPI_finish();
-		PopActiveSnapshot();
-		CommitTransactionCommand();
 
-		StartTransactionCommand();
+		bool nonatomic = SPI_inside_nonatomic_context();
 
-		/* Push new snapshot for index rebuilds */
-		PushActiveSnapshot(GetTransactionSnapshot());
+		if (nonatomic)
+		{
+			// int rc;
+
+			SPI_commit_and_chain();
+
+			// if ((rc = SPI_finish()) != SPI_OK_FINISH)
+			//	elog(ERROR, "SPI_finish failed: %s", SPI_result_code_string(rc));
+
+			/*
+			 * Connect to SPI manager
+			 */
+			// if ((rc = SPI_connect_ext(!nonatomic ? 0 : SPI_OPT_NONATOMIC)) != SPI_OK_CONNECT)
+			//	elog(ERROR, "SPI_connect failed: %s", SPI_result_code_string(rc));
+
+			// SPI_start_transaction() is dummy because SPI_commit automatically starts new
+			// transaction.
+			// SPI_start_transaction();
+		}
+		else
+		{
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			StartTransactionCommand();
+
+			/* Push new snapshot for index rebuilds */
+			PushActiveSnapshot(GetTransactionSnapshot());
+			pop_snapshot = true;
+		}
 
 		/*
 		 * Now wait.  This ensures that all queries that were planned
@@ -1334,10 +1360,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 * We don't need to concern ourselves with waiting for a lock on the
 		 * partition itself, since we will acquire AccessExclusiveLock below.
 		 */
-		elog(NOTICE, "Waiting for other transactions");
 		SET_LOCKTAG_RELATION(tag, MyDatabaseId, hypertable_relid);
 		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
-		elog(NOTICE, "Finished waiting for other transactions");
 
 		Relation hyper_rel = try_relation_open(hypertable_relid, ShareUpdateExclusiveLock);
 
@@ -1457,8 +1481,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 			table_close(new_crel, NoLock);
 		}
-
-		Assert(lock_upgrade == MERGE_LOCK_ACCESS_EXCLUSIVE);
 	}
 	else
 	{
@@ -1483,13 +1505,12 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		ts_hypercube_free(merged_cube);
 	}
 
-	if (concurrently)
+	if (pop_snapshot)
 		PopActiveSnapshot();
 
 	pfree(relinfos);
 	pfree(crelinfos);
 
-	elog(NOTICE, "End of merge");
 	PG_RETURN_VOID();
 }
 

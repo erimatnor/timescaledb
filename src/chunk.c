@@ -5245,7 +5245,7 @@ Datum
 ts_merge_two_chunks(PG_FUNCTION_ARGS)
 {
 	Datum chunks[2] = { PG_GETARG_DATUM(0), PG_GETARG_DATUM(1) };
-	bool concurrently = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(2);
+	bool concurrently = PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2);
 	ArrayType *chunk_array =
 		construct_array(chunks, 2, REGCLASSOID, sizeof(Oid), true, TYPALIGN_INT);
 	return DirectFunctionCall2(ts_cm_functions->merge_chunks,
