@@ -1326,12 +1326,19 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		}
 		*/
 
-		bool nonatomic = SPI_inside_nonatomic_context();
-
-		if (nonatomic)
+		/*
+		 * Check if we are being called from another procedure that has an SPI
+		 * context. In that case, we need to use SPI calls to start a new
+		 * transaction.
+		 */
+		if (SPI_inside_nonatomic_context())
 		{
 			// int rc;
 
+			/*
+			 * Commit and retain transaction semantics. The commit_and_chain
+			 * call will automatically start a new transaction.
+			 */
 			SPI_commit_and_chain();
 
 			// if ((rc = SPI_finish()) != SPI_OK_FINISH)
@@ -1369,6 +1376,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 */
 		SET_LOCKTAG_RELATION(tag, MyDatabaseId, hypertable_relid);
 		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
+
+		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
 
 		Relation hyper_rel = try_relation_open(hypertable_relid, ShareUpdateExclusiveLock);
 
