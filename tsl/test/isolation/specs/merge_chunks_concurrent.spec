@@ -9,7 +9,7 @@ setup
            insert into readings values ('2024-01-01 01:00', 1, 1.0), ('2024-01-01 01:01', 2, 2.0), ('2024-01-01 02:00', 3, 3.0), ('2024-01-01 02:00', 4, 4.0);
     alter table readings set (timescaledb.compress_orderby='time', timescaledb.compress_segmentby='device');
            
-    create or replace procedure merge_all_chunks(hypertable regclass) as $$
+    create or replace procedure merge_all_chunks(hypertable regclass, concurrent boolean = false) as $$
     declare
         chunks_arr regclass[];
     begin
@@ -19,7 +19,11 @@ setup
                on (cl.oid = inh.inhrelid)
                where inh.inhparent = hypertable;
 
-               call merge_chunks_concurrently(variadic chunks_arr);
+               if concurrent then
+                   call merge_chunks_concurrently(variadic chunks_arr);
+               else
+                   call merge_chunks(variadic chunks_arr);
+               end if;                      
     end;
     $$ LANGUAGE plpgsql;
 
@@ -87,6 +91,9 @@ step "s2_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s2_merge_chunks" {
     call merge_all_chunks('readings');
 }
+step "s2_merge_chunks_concurrently" {
+    call merge_all_chunks('readings', concurrent => true);
+}
 
 step "s2_set_lock_upgrade" {
     set timescaledb.merge_chunks_lock_upgrade_mode='upgrade';
@@ -134,6 +141,9 @@ step "s4_modify" {
 
 step "s4_wp_enable" { SELECT debug_waitpoint_enable('merge_chunks_before_heap_swap'); }
 step "s4_wp_release" { SELECT debug_waitpoint_release('merge_chunks_before_heap_swap'); }
+
+step "s4_wp_concurrent_enable" { SELECT debug_waitpoint_enable('merge_chunks_after_concurrent_wait'); }
+step "s4_wp_concurrent_release" { SELECT debug_waitpoint_release('merge_chunks_after_concurrent_wait'); }
 
 # Run 4 backends:
 #
@@ -187,3 +197,6 @@ permutation "s4_wp_enable" "s2_merge_chunks" "s3_merge_chunks" "s4_wp_release" "
 
 # Test concurrent DROP TABLE on chunk (currently deadlocks because of locks on parent table)
 #permutation "s4_wp_enable" "s2_merge_chunks" "s3_drop_chunks" "s4_wp_release" "s1_show_data" "s1_show_chunks"
+
+# Reader should not be blocked by concurrent merge
+permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
