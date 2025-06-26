@@ -61,6 +61,7 @@
 #include <utils/palloc.h>
 #include <utils/rel.h>
 #include <utils/relcache.h>
+#include <utils/relmapper.h>
 #include <utils/snapmgr.h>
 #include <utils/syscache.h>
 #include <utils/tuplestore.h>
@@ -77,6 +78,7 @@
 #include "debug_point.h"
 #include "extension.h"
 #include "extension_constants.h"
+#include "heapswap.h"
 #include "hypercore/arrow_tts.h"
 #include "hypercore/hypercore_handler.h"
 #include "hypercube.h"
@@ -319,15 +321,15 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 	Ensure(result_minfo != NULL, "no chunk to merge into found");
 	struct VacuumCutoffs *cutoffs = &result_minfo->cutoffs;
 
-	finish_heap_swap(result_minfo->relid,
-					 new_relid,
-					 false, /* system catalog */
-					 false /* swap toast by content */,
-					 false, /* check constraints */
-					 true,	/* internal? */
-					 cutoffs->FreezeLimit,
-					 cutoffs->MultiXactCutoff,
-					 result_minfo->relpersistence);
+	ts_finish_heap_swap(result_minfo->relid,
+						new_relid,
+						false, /* system catalog */
+						false /* swap toast by content */,
+						false, /* check constraints */
+						true,  /* internal? */
+						cutoffs->FreezeLimit,
+						cutoffs->MultiXactCutoff,
+						result_minfo->relpersistence);
 
 	/* Don't need to drop objects for internal compressed relations, they are
 	 * dropped when the main chunk is dropped. */
@@ -1258,6 +1260,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		{
 			RelationMergeInfo *crelinfo = &crelinfos[i];
 			Chunk *cchunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, true);
+			/* Allocate on PortalContext to survive transaction end in
+			 * concurrent mode. */
 			MemoryContext old_mcxt = MemoryContextSwitchTo(PortalContext);
 			crelinfo->chunk = ts_chunk_copy(cchunk);
 			MemoryContextSwitchTo(old_mcxt);
@@ -1367,8 +1371,10 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 * We don't need to concern ourselves with waiting for a lock on the
 		 * partition itself, since we will acquire AccessExclusiveLock below.
 		 */
+		elog(NOTICE, "waiting for queries");
 		SET_LOCKTAG_RELATION(tag, MyDatabaseId, hypertable_relid);
 		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
+		elog(NOTICE, "waiting done");
 
 		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
 
@@ -1499,10 +1505,13 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	DEBUG_WAITPOINT("merge_chunks_before_heap_swap");
 
+	elog(NOTICE, "finish merge");
 	merge_chunks_finish(new_relid, relinfos, nrelids, lock_upgrade);
 
 	if (OidIsValid(new_crelid))
 		merge_chunks_finish(new_crelid, crelinfos, nrelids, lock_upgrade);
+
+	elog(NOTICE, "finished heap swap");
 
 	/* Step 5: Update the dimensional metadata and constraints for the chunk
 	 * we are keeping. */
@@ -2194,15 +2203,15 @@ split_relation(Relation rel, SplitPoint *sp, unsigned int split_factor,
 			/* Finally, swap the heap of the chunk that we split so that it only
 			 * contains the tuples for its new partition boundaries. AccessExclusive
 			 * lock is held during the swap. */
-			finish_heap_swap(sri->relid,
-							 write_relid,
-							 false, /* system catalog */
-							 false /* swap toast by content */,
-							 true, /* check constraints */
-							 true, /* internal? */
-							 scontext.cutoffs.FreezeLimit,
-							 scontext.cutoffs.MultiXactCutoff,
-							 relpersistence);
+			ts_finish_heap_swap(sri->relid,
+								write_relid,
+								false, /* system catalog */
+								false /* swap toast by content */,
+								true, /* check constraints */
+								true, /* internal? */
+								scontext.cutoffs.FreezeLimit,
+								scontext.cutoffs.MultiXactCutoff,
+								relpersistence);
 		}
 		else
 		{
