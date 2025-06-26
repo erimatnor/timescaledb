@@ -536,7 +536,7 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 		.params = list_make1(makeDefElem("concurrently", (Node *) makeInteger(1), -1)),
 	};
 
-	ExecReindex(NULL, &stmt, false);
+	ExecReindex(NULL, &stmt, truese);
 
 #endif
 	/* Report that we are now doing clean up */
