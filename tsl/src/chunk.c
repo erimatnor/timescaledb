@@ -1301,7 +1301,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	pfree(relids);
 	pfree(nulls);
 
-	bool pop_snapshot = false;
+	//	bool pop_snapshot = false;
 
 	if (concurrently)
 	{
@@ -1366,7 +1366,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 			/* Push new snapshot for index rebuilds */
 			PushActiveSnapshot(GetTransactionSnapshot());
-			pop_snapshot = true;
+			// pop_snapshot = true;
 		}
 
 		/*
@@ -1530,8 +1530,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		ts_hypercube_free(merged_cube);
 	}
 
-	if (pop_snapshot)
-		PopActiveSnapshot();
+	// if (pop_snapshot)
+	//	PopActiveSnapshot();
 
 	pfree(relinfos);
 	pfree(crelinfos);
