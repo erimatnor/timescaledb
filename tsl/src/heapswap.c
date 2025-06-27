@@ -456,7 +456,7 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 	if (is_system_catalog)
 		CacheInvalidateCatalog(OIDOldHeap);
 
-	bool pop_snapshot = false;
+	//	bool pop_snapshot = false;
 
 	if (SPI_inside_nonatomic_context())
 	{
@@ -470,7 +470,7 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 
 		/* Push new snapshot for index rebuilds */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		pop_snapshot = true;
+		// pop_snapshot = true;
 	}
 
 	elog(NOTICE, "new transaction after swap");
@@ -536,7 +536,7 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 		.params = list_make1(makeDefElem("concurrently", (Node *) makeInteger(1), -1)),
 	};
 
-	ExecReindex(NULL, &stmt, truese);
+	ExecReindex(NULL, &stmt, true);
 
 #endif
 	/* Report that we are now doing clean up */
@@ -652,7 +652,4 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 		RelationClearMissing(newrel);
 		relation_close(newrel, NoLock);
 	}
-
-	if (pop_snapshot)
-		PopActiveSnapshot();
 }
