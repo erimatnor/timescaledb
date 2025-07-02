@@ -10,6 +10,7 @@
 #include <access/table.h>
 #include <access/toast_internals.h>
 #include <access/xact.h>
+#include <c.h>
 #include <catalog/dependency.h>
 #include <catalog/heap.h>
 #include <catalog/index.h>
@@ -35,6 +36,214 @@
 #include <utils/syscache.h>
 
 #include "heapswap.h"
+
+static NullableDatum *
+get_index_stattargets(Oid indexid, IndexInfo *indInfo)
+{
+	NullableDatum *stattargets;
+
+	/* Extract statistic targets for each attribute */
+	stattargets = palloc0_array(NullableDatum, indInfo->ii_NumIndexAttrs);
+	for (int i = 0; i < indInfo->ii_NumIndexAttrs; i++)
+	{
+		HeapTuple tp;
+		Datum dat;
+		bool isnull;
+
+		tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(indexid), Int16GetDatum(i + 1));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "cache lookup failed for attribute %d of relation %u", i + 1, indexid);
+		dat = SysCacheGetAttr(ATTNUM, tp, Anum_pg_attribute_attstattarget, &isnull);
+		ReleaseSysCache(tp);
+		stattargets[i].value = dat;
+		stattargets[i].isnull = isnull;
+	}
+
+	return stattargets;
+}
+
+/*
+ * Build indexes on NewHeap according to those on OldHeap.
+ *
+ * OldIndexes is the list of index OIDs on OldHeap.
+ *
+ * A list of OIDs of the corresponding indexes created on NewHeap is
+ * returned. The order of items does match, so we can use these arrays to swap
+ * index storage.
+ */
+List *
+ts_build_new_indexes(Relation NewHeap, Relation OldHeap, List *OldIndexes)
+{
+	StringInfo ind_name;
+	ListCell *lc;
+	List *result = NIL;
+
+	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
+
+	ind_name = makeStringInfo();
+
+	foreach (lc, OldIndexes)
+	{
+		Oid ind_oid, ind_oid_new, tbsp_oid;
+		Relation ind;
+		IndexInfo *ind_info;
+		int i, heap_col_id;
+		List *colnames;
+		int16 indnatts;
+		Oid *collations, *opclasses;
+		HeapTuple tup;
+		bool isnull;
+		Datum d;
+		oidvector *oidvec;
+		int2vector *int2vec;
+		size_t oid_arr_size;
+		size_t int2_arr_size;
+		int16 *indoptions;
+		text *reloptions = NULL;
+		bits16 flags;
+		Datum *opclassOptions;
+		NullableDatum *stattargets;
+
+		ind_oid = lfirst_oid(lc);
+		ind = index_open(ind_oid, AccessShareLock);
+		ind_info = BuildIndexInfo(ind);
+
+		tbsp_oid = ind->rd_rel->reltablespace;
+
+		/*
+		 * Index name really doesn't matter, we'll eventually use only their
+		 * storage. Just make them unique within the table.
+		 */
+		resetStringInfo(ind_name);
+		appendStringInfo(ind_name,
+						 "%u_ind_%d",
+						 RelationGetRelid(OldHeap),
+						 list_cell_number(OldIndexes, lc));
+
+		flags = 0;
+		if (ind->rd_index->indisprimary)
+			flags |= INDEX_CREATE_IS_PRIMARY;
+
+		colnames = NIL;
+		indnatts = ind->rd_index->indnatts;
+		oid_arr_size = sizeof(Oid) * indnatts;
+		int2_arr_size = sizeof(int16) * indnatts;
+
+		collations = (Oid *) palloc(oid_arr_size);
+		for (i = 0; i < indnatts; i++)
+		{
+			char *colname;
+
+			heap_col_id = ind->rd_index->indkey.values[i];
+			if (heap_col_id > 0)
+			{
+				Form_pg_attribute att;
+
+				/* Normal attribute. */
+				att = TupleDescAttr(OldHeap->rd_att, heap_col_id - 1);
+				colname = pstrdup(NameStr(att->attname));
+				collations[i] = att->attcollation;
+			}
+			else if (heap_col_id == 0)
+			{
+				HeapTuple tuple;
+				Form_pg_attribute att;
+
+				/*
+				 * Expression column is not present in relcache. What we need
+				 * here is an attribute of the *index* relation.
+				 */
+				tuple = SearchSysCache2(ATTNUM, ObjectIdGetDatum(ind_oid), Int16GetDatum(i + 1));
+				if (!HeapTupleIsValid(tuple))
+					elog(ERROR,
+						 "cache lookup failed for attribute %d of relation %u",
+						 i + 1,
+						 ind_oid);
+				att = (Form_pg_attribute) GETSTRUCT(tuple);
+				colname = pstrdup(NameStr(att->attname));
+				collations[i] = att->attcollation;
+				ReleaseSysCache(tuple);
+			}
+			else
+				elog(ERROR, "Unexpected column number: %d", heap_col_id);
+
+			colnames = lappend(colnames, colname);
+		}
+
+		/*
+		 * Special effort needed for variable length attributes of
+		 * Form_pg_index.
+		 */
+		tup = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(ind_oid));
+		if (!HeapTupleIsValid(tup))
+			elog(ERROR, "cache lookup failed for index %u", ind_oid);
+		d = SysCacheGetAttr(INDEXRELID, tup, Anum_pg_index_indclass, &isnull);
+		Assert(!isnull);
+		oidvec = (oidvector *) DatumGetPointer(d);
+		opclasses = (Oid *) palloc(oid_arr_size);
+		memcpy(opclasses, oidvec->values, oid_arr_size);
+
+		d = SysCacheGetAttr(INDEXRELID, tup, Anum_pg_index_indoption, &isnull);
+		Assert(!isnull);
+		int2vec = (int2vector *) DatumGetPointer(d);
+		indoptions = (int16 *) palloc(int2_arr_size);
+		memcpy(indoptions, int2vec->values, int2_arr_size);
+		ReleaseSysCache(tup);
+
+		tup = SearchSysCache1(RELOID, ObjectIdGetDatum(ind_oid));
+		if (!HeapTupleIsValid(tup))
+			elog(ERROR, "cache lookup failed for index relation %u", ind_oid);
+		d = SysCacheGetAttr(RELOID, tup, Anum_pg_class_reloptions, &isnull);
+		reloptions = !isnull ? DatumGetTextPCopy(d) : NULL;
+		ReleaseSysCache(tup);
+
+		opclassOptions = palloc0(sizeof(Datum) * ind_info->ii_NumIndexAttrs);
+		for (i = 0; i < ind_info->ii_NumIndexAttrs; i++)
+			opclassOptions[i] = get_attoptions(ind_oid, i + 1);
+
+		stattargets = get_index_stattargets(ind_oid, ind_info);
+
+		/*
+		 * Neither parentIndexRelid nor parentConstraintId needs to be passed
+		 * since the new catalog entries (pg_constraint, pg_inherits) would
+		 * eventually be dropped. Therefore there's no need to record valid
+		 * dependency on parents.
+		 */
+		ind_oid_new = index_create(NewHeap,
+								   ind_name->data,
+								   InvalidOid,
+								   InvalidOid, /* parentIndexRelid */
+								   InvalidOid, /* parentConstraintId */
+								   InvalidOid,
+								   ind_info,
+								   colnames,
+								   ind->rd_rel->relam,
+								   tbsp_oid,
+								   collations,
+								   opclasses,
+								   opclassOptions,
+								   indoptions,
+								   stattargets,
+								   PointerGetDatum(reloptions),
+								   flags, /* flags */
+								   0,	  /* constr_flags */
+								   false, /* allow_system_table_mods */
+								   false, /* is_internal */
+								   NULL	  /* constraintId */
+		);
+		result = lappend_oid(result, ind_oid_new);
+
+		index_close(ind, AccessShareLock);
+		list_free_deep(colnames);
+		pfree(collations);
+		pfree(opclasses);
+		pfree(indoptions);
+		if (reloptions)
+			pfree(reloptions);
+	}
+
+	return result;
+}
 
 /*
  * Swap the physical files of two given relations.
@@ -62,7 +271,7 @@
  * their OIDs are emitted into mapped_tables[].  This is hacky but beats
  * having to look the information up again later in finish_heap_swap.
  */
-static void
+void
 ts_swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class, bool swap_toast_by_content,
 					   bool is_internal, TransactionId frozenXid, MultiXactId cutoffMulti,
 					   Oid *mapped_tables)
@@ -424,10 +633,6 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 {
 	ObjectAddress object;
 	Oid mapped_tables[4];
-#if 0
-	int			reindex_flags;
-	ReindexParams reindex_params = {0};
-#endif
 	int i;
 
 	/* Report that we are now swapping relation files */
@@ -436,6 +641,18 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 	/* Zero out possible results from swapped_relation_files */
 	memset(mapped_tables, 0, sizeof(mapped_tables));
 
+	Relation newrel;
+
+	newrel = table_open(OIDOldHeap, NoLock);
+
+	if (OidIsValid(newrel->rd_rel->reltoastrelid))
+	{
+		elog(NOTICE, "opening toast");
+		Relation toastrel1 = table_open(newrel->rd_rel->reltoastrelid, AccessExclusiveLock);
+		table_close(toastrel1, NoLock);
+	}
+
+	table_close(newrel, NoLock);
 	/*
 	 * Swap the contents of the heap relations (including any toast tables).
 	 * Also set old heap's relfrozenxid to frozenXid.
@@ -456,91 +673,50 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 	if (is_system_catalog)
 		CacheInvalidateCatalog(OIDOldHeap);
 
-	//	bool pop_snapshot = false;
-
-	if (SPI_inside_nonatomic_context())
+	if (true)
 	{
-		SPI_commit_and_chain();
+		int reindex_flags;
+		ReindexParams reindex_params = { 0 };
+
+		/*
+		 * Rebuild each index on the relation (but not the toast table, which
+		 * is all-new at this point).  It is important to do this before the
+		 * DROP step because if we are processing a system catalog that will
+		 * be used during DROP, we want to have its indexes available.  There
+		 * is no advantage to the other order anyway because this is all
+		 * transactional, so no chance to reclaim disk space before commit. We
+		 * do not need a final CommandCounterIncrement() because
+		 * reindex_relation does it.
+		 *
+		 * Note: because index_build is called via reindex_relation, it will
+		 * never set indcheckxmin true for the indexes.  This is OK even
+		 * though in some sense we are building new indexes rather than
+		 * rebuilding existing ones, because the new heap won't contain any
+		 * HOT chains at all, let alone broken ones, so it can't be necessary
+		 * to set indcheckxmin.
+		 */
+		reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
+		if (check_constraints)
+			reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
+
+		/*
+		 * Ensure that the indexes have the same persistence as the parent
+		 * relation.
+		 */
+		if (newrelpersistence == RELPERSISTENCE_UNLOGGED)
+			reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
+		else if (newrelpersistence == RELPERSISTENCE_PERMANENT)
+			reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
+
+		/* Report that we are now reindexing relations */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
+
+		reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
 	}
-	else
-	{
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-		StartTransactionCommand();
 
-		/* Push new snapshot for index rebuilds */
-		PushActiveSnapshot(GetTransactionSnapshot());
-		// pop_snapshot = true;
-	}
-
-	elog(NOTICE, "new transaction after swap");
-	/*
-	Relation relRelation = table_open(RelationRelationId, AccessShareLock);
-	HeapTuple reltup1;
-	FormData_pg_class relform1;
-
-	reltup1 = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(OIDOldHeap));
-	if (!HeapTupleIsValid(reltup1))
-		elog(ERROR, "cache lookup failed for relation %u", OIDOldHeap);
-
-	memcpy(&relform1, GETSTRUCT(reltup1), sizeof(FormData_pg_class));
-
-	table_close(relRelation, AccessShareLock);
-
-	LockRelationOid(OIDOldHeap, ShareUpdateExclusiveLock);
-	LockRelationOid(relform1.reltoastrelid, ShareUpdateExclusiveLock);
-	*/
-
-	/*
-	 * Rebuild each index on the relation (but not the toast table, which is
-	 * all-new at this point).  It is important to do this before the DROP
-	 * step because if we are processing a system catalog that will be used
-	 * during DROP, we want to have its indexes available.  There is no
-	 * advantage to the other order anyway because this is all transactional,
-	 * so no chance to reclaim disk space before commit.  We do not need a
-	 * final CommandCounterIncrement() because reindex_relation does it.
-	 *
-	 * Note: because index_build is called via reindex_relation, it will never
-	 * set indcheckxmin true for the indexes.  This is OK even though in some
-	 * sense we are building new indexes rather than rebuilding existing ones,
-	 * because the new heap won't contain any HOT chains at all, let alone
-	 * broken ones, so it can't be necessary to set indcheckxmin.
-	 */
-#if 0
-	reindex_params.options = REINDEXOPT_CONCURRENTLY;
-	reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
-	if (check_constraints)
-		reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
-
-	/*
-	 * Ensure that the indexes have the same persistence as the parent
-	 * relation.
-	 */
-	if (newrelpersistence == RELPERSISTENCE_UNLOGGED)
-		reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
-	else if (newrelpersistence == RELPERSISTENCE_PERMANENT)
-		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
-
-	/* Report that we are now reindexing relations */
-	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
-								 PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
-	reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
-#else
-
-	char *relname = get_rel_name(OIDOldHeap);
-	Oid nspcid = get_rel_namespace(OIDOldHeap);
-	char *nspcname = get_namespace_name(nspcid);
-	ReindexStmt stmt = {
-		.kind = REINDEX_OBJECT_TABLE,
-		.relation = makeRangeVar(nspcname, relname, -1),
-		.params = list_make1(makeDefElem("concurrently", (Node *) makeInteger(1), -1)),
-	};
-
-	ExecReindex(NULL, &stmt, true);
-
-#endif
 	/* Report that we are now doing clean up */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_FINAL_CLEANUP);
+
 	/*
 	 * If the relation being rebuilt is pg_class, swap_relation_files()
 	 * couldn't update pg_class's own pg_class entry (check comments in
@@ -610,18 +786,15 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 	{
 		Relation newrel;
 
-		// newrel = table_open(OIDOldHeap, NoLock);
-		newrel = table_open(OIDOldHeap, ShareUpdateExclusiveLock);
+		newrel = table_open(OIDOldHeap, NoLock);
+
 		if (OidIsValid(newrel->rd_rel->reltoastrelid))
 		{
 			Oid toastidx;
 			char NewToastName[NAMEDATALEN];
 
 			/* Get the associated valid index to be renamed */
-			// toastidx = toast_get_valid_index(newrel->rd_rel->reltoastrelid,
-			//								 NoLock);
-			toastidx =
-				toast_get_valid_index(newrel->rd_rel->reltoastrelid, ShareUpdateExclusiveLock);
+			toastidx = toast_get_valid_index(newrel->rd_rel->reltoastrelid, NoLock);
 
 			/* rename the toast table ... */
 			snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u", OIDOldHeap);
