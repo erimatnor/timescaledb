@@ -127,25 +127,25 @@ refresh either.
 
 ### Hypertable Invalidations Plugin
 
-The hypertable invalidations plugin is available in
-`invalidation_plugin.c` and is used to read hypertable invalidations
-directly from the WAL for a hypertable associated with a continuous
-aggregate.
+The invalidation plugin is available in
+`invalidation_plugin.c` and is used to generate "invalidations" for 
+continuous aggregates. An invalidation is a time range that has been 
+modified in the original hypertable that is the source of data for a
+ continuous aggregate.
 
-To reduce the dependencies on the TimescaleDB version, the hypertable
-invalidation plugin is made as simple as possible and does not use the
+To reduce the dependencies on the TimescaleDB version, the invalidation
+plugin is made as simple as possible and does not use the
 metadata tables of the TimescaleDB extension and instead is configured
 to read specific relids and attribute names when fetching data.
 
 While processing the WAL, the timestamps are collected into ranges
-with the same format as `continuous_agg_hypertable_invalidation_log`
 and (similarly to when using the trigger to record changes) only one
 invalidation range (lowest and highest modified value in microseconds
 since UNIX Epoch) is produced for each modified hypertable in each
 mutating transaction. For the same reasons as above, this means that a
 refresh might materialize more data than necessary.
 
-The invalidations plugin will return a result set consisting of the
+The invalidation plugin will return a result set consisting of the
 modifications done of the primary partition column, but the
 "hypertable_id" of the invalidation will be the relid and it is up to
 the TimescaleDB extension to decode this into a hypertable id.

@@ -5,14 +5,16 @@
  */
 
 /*
- * Cache for the hypertable invalidation log.
+ * Cache for the invalidations read by the plugin.
  *
- * This is used when processing the invalidations in the hypertable and
- * consists of a set of invalidation entries similar to the hypertable
- * invalidation log table. The main difference is that the the hypertable
- * invalidation log table keeps a hypertable id, but the records returned here
- * contains the relid. The reason for this is to avoid dependencies between
- * dynamically loaded extensions (plugin and timescaledb extension).
+ * The cache is used to accumulate invalidations for continuous aggregates based on 
+ * changes to the source hypertable aggregated. When processing the WAL, 
+ * multiple entries in the WAL might invalidate the same or overlapping ranges. The 
+ * cache is used to merge those ranges into singular ranges until the cache is flushed
+ * at the end of a transaction.
+ *
+ * The cache key is the source hypertable relid from which the 
+ * invalidation was generated.
  */
 
 #include <postgres.h>

@@ -2,8 +2,8 @@
 -- Please see the included NOTICE for copyright information and
 -- LICENSE-TIMESCALE for a copy of the license.
 \c :TEST_DBNAME :ROLE_SUPERUSER
--- Test the invalidation plugin and make sure it can return reasonable
--- data. We do that by creating a hypertable and then registering a
+-- Test the invalidation plugin and make sure it can return the
+-- data we expect. We do that by creating a hypertable and then registering a
 -- logical decoding slot on it and using the plugin to get the
 -- changes.
 SET timezone TO UTC;

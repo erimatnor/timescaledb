@@ -22,13 +22,13 @@
 TS_FUNCTION_INFO_V1(ts_invalidation_read_record);
 
 Datum
-ts_invalidation_tuple_get_value(LogicalRepTupleData *tupleData, TupleDesc tupdesc, int attnum,
+ts_invalidation_tuple_get_value(LogicalRepTupleData *tupleData, TupleDesc tupdesc, AttrNumber attnum,
 								bool *isnull)
 {
 	Form_pg_attribute att;
 	Datum result;
 
-	Assert(attnum > 0);
+	Assert(attnum != InvalidAttrNumber);
 
 	att = TupleDescAttr(tupdesc, AttrNumberGetAttrOffset(attnum));
 
