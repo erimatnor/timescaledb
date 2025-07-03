@@ -37,10 +37,9 @@ typedef struct InvalidationsContext
 {
 	LogicalDecodingContext *ctx;
 	ReorderBufferTXN *txn;
-	TupleTableSlot *slot;
 } InvalidationsContext;
 
-typedef void ProcessInvalidationFunction(HypertableInvalidationCacheEntry *, bool,
+typedef void ProcessInvalidationFunction(InvalidationCacheEntry *, bool,
 										 InvalidationsContext *);
 
 extern HTAB *invalidation_cache_create(MemoryContext mcxt);

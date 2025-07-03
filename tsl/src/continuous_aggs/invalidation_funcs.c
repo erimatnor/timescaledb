@@ -8,6 +8,7 @@
 
 #include "invalidation_funcs.h"
 
+#include <access/attnum.h>
 #include <access/tupdesc.h>
 #include <funcapi.h>
 #include <lib/stringinfo.h>
@@ -18,101 +19,32 @@
 #include "cache.h"
 #include "hypertable.h"
 #include "ts_catalog/catalog.h"
+#include "invalidation_plugin_cache.h"
 
 TS_FUNCTION_INFO_V1(ts_invalidation_read_record);
 
-Datum
-ts_invalidation_tuple_get_value(LogicalRepTupleData *tupleData, TupleDesc tupdesc, AttrNumber attnum,
-								bool *isnull)
+enum
 {
-	Form_pg_attribute att;
-	Datum result;
-
-	Assert(attnum != InvalidAttrNumber);
-
-	att = TupleDescAttr(tupdesc, AttrNumberGetAttrOffset(attnum));
-
-	if (att->attisdropped)
-	{
-		*isnull = true;
-		result = (Datum) 0;
-	}
-	else
-	{
-		Assert(AttrNumberGetAttrOffset(attnum) < tupleData->ncols);
-		Assert(tupleData->colstatus[AttrNumberGetAttrOffset(attnum)] == LOGICALREP_COLUMN_BINARY);
-
-		StringInfo colvalue = &tupleData->colvalues[AttrNumberGetAttrOffset(attnum)];
-
-		Oid typreceive, typioparam;
-		TS_DEBUG_LOG("reading type %s from attnum %d", format_type_be(att->atttypid), att->attnum);
-		getTypeBinaryInputInfo(att->atttypid, &typreceive, &typioparam);
-		Assert(OidIsValid(typreceive));
-		result = OidReceiveFunctionCall(typreceive, colvalue, typioparam, att->atttypmod);
-
-		if (colvalue->cursor != colvalue->len)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-					 errmsg("incorrect data format in invalidation record column %d", attnum)));
-
-		*isnull = false;
-	}
-	return result;
-}
-
-/* Look up and replace the hypertable relid with the hypertable id */
-static void
-replace_hypertable_relid_with_hypertable_id(Datum *values)
-{
-	Cache *hcache;
-	Oid hypertable_relid = DatumGetObjectId(values[AttrNumberGetAttrOffset(
-		Anum_continuous_aggs_hypertable_invalidation_log_hypertable_id)]);
-	Hypertable *ht =
-		ts_hypertable_cache_get_cache_and_entry(hypertable_relid, CACHE_FLAG_NONE, &hcache);
-	int32 hypertable_id = ht->fd.id;
-	values[AttrNumberGetAttrOffset(
-		Anum_continuous_aggs_hypertable_invalidation_log_hypertable_id)] =
-		Int32GetDatum(hypertable_id);
-	ts_cache_release(&hcache);
-}
+	Anum_invalidation_entry_hypertable_relid = 1,
+	Anum_invalidation_entry_lowest_modified_value,
+	Anum_invalidation_entry_greatest_modified_value,
+	_Anum_invalidation_entry_max,
+};
 
 /*
  * Create a heap tuple from the invalidation record.
  */
 static HeapTuple
-invalidation_tuple_get_heap_tuple(LogicalRepTupleData *tupleData, TupleDesc tupdesc)
+invalidation_tuple_get_heap_tuple(const InvalidationCacheEntry *entry, TupleDesc tupdesc)
 {
-	Datum values[_Anum_continuous_aggs_hypertable_invalidation_log_max];
-	bool nulls[_Anum_continuous_aggs_hypertable_invalidation_log_max] = { 0 };
+	Datum values[_Anum_invalidation_entry_max];
+	bool nulls[_Anum_invalidation_entry_max] = { 0 };
 
-	for (int attnum = 1; attnum < _Anum_continuous_aggs_hypertable_invalidation_log_max; ++attnum)
-		values[AttrNumberGetAttrOffset(attnum)] =
-			ts_invalidation_tuple_get_value(tupleData,
-											tupdesc,
-											attnum,
-											&nulls[AttrNumberGetAttrOffset(attnum)]);
-
-	/* We store the relid in the invalidation record coming from the
-	 * invalidation plugin so replace it with the hypertable id */
-	replace_hypertable_relid_with_hypertable_id(values);
+	values[AttrNumberGetAttrOffset(Anum_invalidation_entry_hypertable_relid)] = ObjectIdGetDatum(entry->hypertable_relid);
+	values[AttrNumberGetAttrOffset(Anum_invalidation_entry_lowest_modified_value)] = Int64GetDatum(entry->lowest_modified_value);
+	values[AttrNumberGetAttrOffset(Anum_invalidation_entry_greatest_modified_value)] = Int64GetDatum(entry->greatest_modified_value);
 
 	return heap_form_tuple(tupdesc, values, nulls);
-}
-
-/*
- * Decode invalidation tuple in bytea format.
- */
-LogicalRepRelId
-ts_invalidation_tuple_decode(LogicalRepTupleData *tuple, bytea *record)
-{
-	StringInfoData info;
-	initReadOnlyStringInfo(&info, VARDATA_ANY(record), VARSIZE_ANY_EXHDR(record));
-
-	LogicalRepMsgType action = pq_getmsgbyte(&info);
-	TS_DEBUG_LOG("action is %c", action);
-	Ensure(action == LOGICAL_REP_MSG_INSERT, "expected an insert but got byte %02x", action);
-
-	return logicalrep_read_insert(&info, tuple);
 }
 
 /*
@@ -135,11 +67,16 @@ ts_invalidation_read_record(PG_FUNCTION_ARGS)
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	bytea *raw_record = PG_GETARG_BYTEA_P(0);
-	LogicalRepTupleData tupleData;
-
-	ts_invalidation_tuple_decode(&tupleData, raw_record);
-
-	HeapTuple htup = invalidation_tuple_get_heap_tuple(&tupleData, tupdesc);
+	StringInfoData info;
+	InvalidationCacheEntry entry;
+	
+	initReadOnlyStringInfo(&info, VARDATA_ANY(raw_record), VARSIZE_ANY_EXHDR(raw_record));
+	
+	entry.hypertable_relid = pq_getmsgint32(&info);
+	entry.lowest_modified_value = pq_getmsgint64(&info);
+	entry.greatest_modified_value = pq_getmsgint64(&info);
+	
+	HeapTuple htup = invalidation_tuple_get_heap_tuple(&entry, tupdesc);
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(htup));
 }

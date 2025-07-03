@@ -30,7 +30,7 @@ CREATE OR REPLACE FUNCTION _timescaledb_functions.cagg_get_bucket_function_info(
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.cagg_parse_invalidation_record(
     invalidation_record BYTEA,
-    OUT hypertable_id REGCLASS,
+    OUT hypertable_relid REGCLASS,
     OUT lowest_modified_value BIGINT,
     OUT greatest_modified_value BIGINT)
 RETURNS RECORD

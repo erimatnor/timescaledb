@@ -14,14 +14,14 @@ SET datestyle TO ISO;
 SELECT setseed(1);
 
 CREATE FUNCTION get_invalidations(slot text, hypertable name, attr name)
-RETURNS TABLE (hypertable_id int,
+RETURNS TABLE (hypertable_relid regclass,
 	       lowest_modified_value timestamptz,
 	       greatest_modified_value timestamptz) AS $$
 WITH
   changes AS (
       SELECT (_timescaledb_functions.cagg_parse_invalidation_record(data)).*
         FROM pg_logical_slot_get_binary_changes(slot, NULL, NULL, hypertable, attr))
-SELECT hypertable_id,
+SELECT hypertable_relid,
        _timescaledb_functions.to_timestamp(lowest_modified_value),
        _timescaledb_functions.to_timestamp(greatest_modified_value)
   FROM changes
@@ -233,10 +233,10 @@ WITH
         FROM pg_logical_slot_get_binary_changes('my_slot', NULL, NULL,
                                                 'conditions_full', 'recorded_at',
                                                 'conditions_index', 'captured_at'))
-SELECT hypertable_id,
+SELECT hypertable_relid,
        _timescaledb_functions.to_timestamp(lowest_modified_value),
        _timescaledb_functions.to_timestamp(greatest_modified_value)
   FROM changes
-ORDER BY hypertable_id;
+ORDER BY hypertable_relid;
 
 SELECT * FROM pg_drop_replication_slot('my_slot');

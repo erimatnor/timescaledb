@@ -2,8 +2,8 @@
 -- Please see the included NOTICE for copyright information and
 -- LICENSE-TIMESCALE for a copy of the license.
 \c :TEST_DBNAME :ROLE_SUPERUSER
--- Test the invalidation plugin and make sure it can return the
--- data we expect. We do that by creating a hypertable and then registering a
+-- Test the invalidation plugin and make sure it can return reasonable
+-- data. We do that by creating a hypertable and then registering a
 -- logical decoding slot on it and using the plugin to get the
 -- changes.
 SET timezone TO UTC;
@@ -15,14 +15,14 @@ SELECT setseed(1);
 (1 row)
 
 CREATE FUNCTION get_invalidations(slot text, hypertable name, attr name)
-RETURNS TABLE (hypertable_id int,
+RETURNS TABLE (hypertable_relid regclass,
 	       lowest_modified_value timestamptz,
 	       greatest_modified_value timestamptz) AS $$
 WITH
   changes AS (
       SELECT (_timescaledb_functions.cagg_parse_invalidation_record(data)).*
         FROM pg_logical_slot_get_binary_changes(slot, NULL, NULL, hypertable, attr))
-SELECT hypertable_id,
+SELECT hypertable_relid,
        _timescaledb_functions.to_timestamp(lowest_modified_value),
        _timescaledb_functions.to_timestamp(greatest_modified_value)
   FROM changes
@@ -64,18 +64,18 @@ INSERT INTO conditions VALUES
        ('2020-05-02 12:34:56Z', 98, 37.0),
        ('2020-05-02 13:45:00Z', 98, 37.0);
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
-             1 | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
+ conditions       | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
 (2 rows)
 
 -- Generate a single invalidation line and check how that appears.
 INSERT INTO conditions VALUES ('2020-05-01 12:34:56Z', 99, 37.0);
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
 (1 row)
 
 INSERT INTO conditions VALUES
@@ -83,9 +83,9 @@ INSERT INTO conditions VALUES
        ('2020-05-02 13:45:00Z', 99, 37.0);
 -- Check that we got the invalidations
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
 (1 row)
 
 -- This should generate an invalidation including the full range since
@@ -96,23 +96,23 @@ SELECT recorded_at, 99, random()*80 - 40
   	               '2025-03-31'::timestamptz,
 		       '1 minute'::interval) AS recorded_at;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2025-02-01 00:00:00+00 | 2025-03-31 00:00:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2025-02-01 00:00:00+00 | 2025-03-31 00:00:00+00
 (1 row)
 
 UPDATE conditions SET temp = 0.0 WHERE device_id = 99;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
 (1 row)
 
 DELETE FROM conditions WHERE device_id = 99;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
 (1 row)
 
 -- Test that we can do multiple changes (in different transactions) in
@@ -129,13 +129,13 @@ SELECT recorded_at, 99, random()*80 - 40
 UPDATE conditions SET temp = 0.0 WHERE device_id = 99;
 DELETE FROM conditions WHERE device_id = 99;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
-             1 | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
-             1 | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
-             1 | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
-             1 | 2025-02-01 00:00:00+00 | 2025-03-31 00:00:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
+ conditions       | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
+ conditions       | 2020-05-01 12:34:56+00 | 2025-03-31 00:00:00+00
+ conditions       | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
+ conditions       | 2025-02-01 00:00:00+00 | 2025-03-31 00:00:00+00
 (5 rows)
 
 -- Test that we can do multiple changes in a single transaction get
@@ -154,9 +154,9 @@ UPDATE conditions SET temp = 0.0 WHERE device_id = 101;
 DELETE FROM conditions WHERE device_id = 101;
 COMMIT;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-06-01 12:34:56+00 | 2020-07-31 00:00:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-06-01 12:34:56+00 | 2020-07-31 00:00:00+00
 (1 row)
 
 -- Insert some tuples, remove a column, and insert some more data, all
@@ -170,9 +170,9 @@ ALTER TABLE conditions ADD COLUMN temp numeric;
 INSERT INTO conditions VALUES ('2020-05-01 12:34:58Z', 102, 38.0);
 COMMIT;
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             1 | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:58+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:58+00
 (1 row)
 
 -- Test to insert some changes and then drop the table to check that
@@ -200,8 +200,8 @@ SELECT create_hypertable('conditions', 'recorded_at');
 -- New hypertable: we should not see the ones that we inserted before
 -- dropping the old version of the hypertable.
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value | greatest_modified_value 
----------------+-----------------------+-------------------------
+ hypertable_relid | lowest_modified_value | greatest_modified_value 
+------------------+-----------------------+-------------------------
 (0 rows)
 
 -- Insert some data so that we have some entries.
@@ -216,9 +216,9 @@ ERROR:  attribute "does_not_exist" does not exist
 -- attribute after this. (This turned out to be a problem during
 -- testing.)
 SELECT * FROM get_invalidations('my_slot', 'conditions', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             2 | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions       | 2020-05-01 12:34:56+00 | 2020-05-01 12:34:56+00
 (1 row)
 
 -- Test using a table without a primary key but with an index that can
@@ -241,9 +241,9 @@ INSERT INTO conditions_index VALUES
        ('2020-05-02 12:34:56Z', 42, 37.0),
        ('2020-05-02 13:45:00Z', 42, 37.0);
 SELECT * FROM get_invalidations('my_slot', 'conditions_index', 'captured_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             3 | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions_index | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
 (1 row)
 
 -- Test using a table without a primary key but with a replica
@@ -264,9 +264,9 @@ INSERT INTO conditions_full VALUES
        ('2020-05-02 12:34:56Z', 42, 37.0),
        ('2020-05-02 13:45:00Z', 42, 37.0);
 SELECT * FROM get_invalidations('my_slot', 'conditions_full', 'recorded_at');
- hypertable_id | lowest_modified_value  | greatest_modified_value 
----------------+------------------------+-------------------------
-             4 | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
+ hypertable_relid | lowest_modified_value  | greatest_modified_value 
+------------------+------------------------+-------------------------
+ conditions_full  | 2020-05-02 12:34:56+00 | 2020-05-02 13:45:00+00
 (1 row)
 
 -- Test getting invalidations for multiple hypertables in one go, to
@@ -289,15 +289,15 @@ WITH
         FROM pg_logical_slot_get_binary_changes('my_slot', NULL, NULL,
                                                 'conditions_full', 'recorded_at',
                                                 'conditions_index', 'captured_at'))
-SELECT hypertable_id,
+SELECT hypertable_relid,
        _timescaledb_functions.to_timestamp(lowest_modified_value),
        _timescaledb_functions.to_timestamp(greatest_modified_value)
   FROM changes
-ORDER BY hypertable_id;
- hypertable_id |      to_timestamp      |      to_timestamp      
----------------+------------------------+------------------------
-             3 | 2020-05-03 12:00:00+00 | 2020-05-03 13:00:00+00
-             4 | 2020-05-03 11:34:00+00 | 2020-05-03 12:45:00+00
+ORDER BY hypertable_relid;
+ hypertable_relid |      to_timestamp      |      to_timestamp      
+------------------+------------------------+------------------------
+ conditions_index | 2020-05-03 12:00:00+00 | 2020-05-03 13:00:00+00
+ conditions_full  | 2020-05-03 11:34:00+00 | 2020-05-03 12:45:00+00
 (2 rows)
 
 SELECT * FROM pg_drop_replication_slot('my_slot');

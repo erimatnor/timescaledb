@@ -8,6 +8,7 @@
 #include <fmgr.h>
 
 #include <inttypes.h>
+#include <libpq/pqformat.h>
 #include <miscadmin.h>
 
 #include <access/attnum.h>
@@ -83,8 +84,6 @@ typedef struct SeenRelsEntry
 typedef struct InvalidationsPluginData
 {
 	MemoryContext context;
-	Relation logrel;	/* The log relation used for tuples passed back to
-						 * the caller. */
 	HTAB *invals_cache; /* Invalidations cache, for each transaction. */
 } InvalidationsPluginData;
 
@@ -353,43 +352,15 @@ parse_output_parameters(List *options)
 }
 
 static void
-invalidations_write_record(HypertableInvalidationCacheEntry *entry, bool last_write,
+invalidations_write_record(InvalidationCacheEntry *entry, bool last_write,
 						   InvalidationsContext *args)
 {
 	LogicalDecodingContext *ctx = args->ctx;
-	InvalidationsPluginData *data = ctx->output_plugin_private;
-	TupleDesc tupdesc = RelationGetDescr(data->logrel);
-	Datum values[_Anum_continuous_aggs_hypertable_invalidation_log_max];
-	bool isnull[_Anum_continuous_aggs_hypertable_invalidation_log_max] = { false };
-
-	TS_DEBUG_LOG("write entry: hypertable_id=%u, lowest_modified_value=%" PRId64 ", "
-				 "greatest_modified_value=%" PRId64,
-				 entry->hypertable_relid,
-				 entry->lowest_modified_value,
-				 entry->greatest_modified_value);
-
-	/* Copy over the field to the invalidation slot */
-	values[AttrNumberGetAttrOffset(
-		Anum_continuous_aggs_hypertable_invalidation_log_hypertable_id)] =
-		ObjectIdGetDatum(entry->hypertable_relid);
-	values[AttrNumberGetAttrOffset(
-		Anum_continuous_aggs_hypertable_invalidation_log_lowest_modified_value)] =
-		Int64GetDatum(entry->lowest_modified_value);
-	values[AttrNumberGetAttrOffset(
-		Anum_continuous_aggs_hypertable_invalidation_log_greatest_modified_value)] =
-		Int64GetDatum(entry->greatest_modified_value);
-
-	MinimalTuple tuple = heap_form_minimal_tuple(tupdesc, values, isnull);
-	ExecStoreMinimalTuple(tuple, args->slot, true);
 
 	OutputPluginPrepareWrite(ctx, last_write);
-	/* Since we are not writing streamed data, we do not pass in an XID */
-	logicalrep_write_insert(ctx->out,
-							InvalidTransactionId,
-							data->logrel,
-							args->slot,
-							true, /* binary */
-							NULL);
+	pq_sendint32(ctx->out, entry->hypertable_relid);
+	pq_sendint64(ctx->out, entry->lowest_modified_value);
+	pq_sendint64(ctx->out, entry->greatest_modified_value);	
 	OutputPluginWrite(ctx, last_write);
 }
 
@@ -409,12 +380,6 @@ invalidations_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt, boo
 	{
 		List *relinfo_list = parse_output_parameters(ctx->output_plugin_options);
 
-		data->logrel =
-			table_openrv(makeRangeVar(CATALOG_SCHEMA_NAME,
-									  CONTINUOUS_AGGS_HYPERTABLE_INVALIDATION_LOG_TABLE_NAME,
-									  -1),
-						 AccessShareLock);
-
 		init_rel_seen_cache(relinfo_list);
 	}
 }
@@ -423,9 +388,6 @@ static void
 invalidations_shutdown(LogicalDecodingContext *ctx)
 {
 	InvalidationsPluginData *data = ctx->output_plugin_private;
-
-	if (data->logrel)
-		table_close(data->logrel, NoLock);
 
 	MemoryContextDelete(data->context);
 
@@ -459,15 +421,11 @@ static void
 invalidations_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn, XLogRecPtr commit_lsn)
 {
 	InvalidationsPluginData *data = ctx->output_plugin_private;
-	TupleDesc tupdesc = RelationGetDescr(data->logrel);
-	TupleTableSlot *slot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsMinimalTuple);
-
 	invalidation_cache_foreach_record(data->invals_cache,
 									  invalidations_write_record,
 									  &(InvalidationsContext){
-										  .ctx = ctx, .txn = txn, .slot = slot });
+										  .ctx = ctx, .txn = txn,});
 
-	ExecDropSingleTupleTableSlot(slot);
 	invalidation_cache_destroy(data->invals_cache);
 	data->invals_cache = NULL;
 }

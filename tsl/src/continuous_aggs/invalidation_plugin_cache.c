@@ -31,7 +31,7 @@ void
 invalidation_cache_write_record(HTAB *cache, Oid relid, int64 value)
 {
 	bool found;
-	HypertableInvalidationCacheEntry *entry = hash_search(cache, &relid, HASH_ENTER, &found);
+	InvalidationCacheEntry *entry = hash_search(cache, &relid, HASH_ENTER, &found);
 	if (!found)
 		entry->hypertable_relid = relid;
 	if (!found || value < entry->lowest_modified_value)
@@ -45,7 +45,7 @@ invalidation_cache_create(MemoryContext mcxt)
 {
 	HASHCTL ctl = {
 		.keysize = sizeof(Oid),
-		.entrysize = sizeof(HypertableInvalidationCacheEntry),
+		.entrysize = sizeof(InvalidationCacheEntry),
 		.hcxt = mcxt,
 	};
 
@@ -66,7 +66,7 @@ invalidation_cache_foreach_record(HTAB *cache, ProcessInvalidationFunction func,
 								  InvalidationsContext *args)
 {
 	HASH_SEQ_STATUS hash_seq;
-	HypertableInvalidationCacheEntry *entry;
+	InvalidationCacheEntry *entry;
 	int count = hash_get_num_entries(cache);
 
 	hash_seq_init(&hash_seq, cache);
