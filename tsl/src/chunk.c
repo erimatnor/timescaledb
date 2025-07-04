@@ -325,64 +325,79 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 
 	Ensure(result_minfo != NULL, "no chunk to merge into found");
 	struct VacuumCutoffs *cutoffs = &result_minfo->cutoffs;
-#if 0
-	ListCell *lc, *lc2;
+	bool reindex = result_minfo->ind_oids_new == NIL;
 
-	elog(NOTICE, "Swapping index rels");
-
-	forboth (lc, result_minfo->ind_oids_old, lc2, result_minfo->ind_oids_new)
+	if (!reindex)
 	{
-		Oid ind_old = lfirst_oid(lc);
-		Oid ind_new = lfirst_oid(lc2);
-		Oid mapped_tables[4];
-		// Relation     index;
+		ListCell *lc, *lc2;
 
-		// index = index_open(ind_oid, AccessExclusiveLock);
-		LockRelationOid(ind_old, AccessExclusiveLock);
-		LockRelationOid(ind_new, AccessExclusiveLock);
+		forboth (lc, result_minfo->ind_oids_old, lc2, result_minfo->ind_oids_new)
+		{
+			Oid ind_old = lfirst_oid(lc);
+			Oid ind_new = lfirst_oid(lc2);
+			Oid mapped_tables[4];
+			// Relation     index;
 
-		/*
-		 * TODO 1) Do we need to check if ALTER INDEX was executed since the
-		 * new index was created in build_new_indexes()? 2) Specifically for
-		 * the clustering index, should check_index_is_clusterable() be called
-		 * here? (Not sure about the latter: ShareUpdateExclusiveLock on the
-		 * table probably blocks all commands that affect the result of
-		 * check_index_is_clusterable().)
-		 */
-		// ind_rels[nind++] = index;
+			// index = index_open(ind_oid, AccessExclusiveLock);
+			LockRelationOid(ind_old, AccessExclusiveLock);
+			LockRelationOid(ind_new, AccessExclusiveLock);
 
-		/* Zero out possible results from swapped_relation_files */
-		memset(mapped_tables, 0, sizeof(mapped_tables));
+			/*
+			 * TODO 1) Do we need to check if ALTER INDEX was executed since the
+			 * new index was created in build_new_indexes()? 2) Specifically for
+			 * the clustering index, should check_index_is_clusterable() be called
+			 * here? (Not sure about the latter: ShareUpdateExclusiveLock on the
+			 * table probably blocks all commands that affect the result of
+			 * check_index_is_clusterable().)
+			 */
+			// ind_rels[nind++] = index;
 
-		elog(NOTICE,
-			 "swapping index %s %u for %s %u",
-			 get_rel_name(ind_old),
-			 ind_old,
-			 get_rel_name(ind_new),
-			 ind_new);
+			/* Zero out possible results from swapped_relation_files */
+			memset(mapped_tables, 0, sizeof(mapped_tables));
 
-		ts_swap_relation_files(ind_old,
-							   ind_new,
-							   false,
-							   false,
-							   true,
-							   InvalidTransactionId,
-							   InvalidMultiXactId,
-							   mapped_tables);
+			elog(NOTICE,
+				 "swapping index %s %u for %s %u",
+				 get_rel_name(ind_old),
+				 ind_old,
+				 get_rel_name(ind_new),
+				 ind_new);
+
+			ts_swap_relation_files(ind_old,
+								   ind_new,
+								   false,
+								   false,
+								   true,
+								   InvalidTransactionId,
+								   InvalidMultiXactId,
+								   mapped_tables);
+		}
+
+		/* The new indexes must be visible for deletion. */
+		CommandCounterIncrement();
+
+		ts_finish_heap_swap(result_minfo->relid,
+							new_relid,
+							false, /* system catalog */
+							false /* swap toast by content */,
+							false, /* check constraints */
+							true,  /* internal? */
+							false,
+							cutoffs->FreezeLimit,
+							cutoffs->MultiXactCutoff,
+							result_minfo->relpersistence);
 	}
-
-	/* The new indexes must be visible for deletion. */
-	CommandCounterIncrement();
-#endif
-	ts_finish_heap_swap(result_minfo->relid,
-						new_relid,
-						false, /* system catalog */
-						false /* swap toast by content */,
-						false, /* check constraints */
-						true,  /* internal? */
-						cutoffs->FreezeLimit,
-						cutoffs->MultiXactCutoff,
-						result_minfo->relpersistence);
+	else
+	{
+		finish_heap_swap(result_minfo->relid,
+						 new_relid,
+						 false, /* system catalog */
+						 false /* swap toast by content */,
+						 false, /* check constraints */
+						 true,	/* internal? */
+						 cutoffs->FreezeLimit,
+						 cutoffs->MultiXactCutoff,
+						 result_minfo->relpersistence);
+	}
 
 	/* Don't need to drop objects for internal compressed relations, they are
 	 * dropped when the main chunk is dropped. */
@@ -965,18 +980,30 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 
 	pg17_workaround_cleanup(new_rel);
 
-	/* Rebuild indexes */
-	List *ind_oids_old = RelationGetIndexList(result_rel);
-	List *ind_oids_new = ts_build_new_indexes(new_rel, result_rel, ind_oids_old);
-
 	/*
-	 * Need to save index lists on PortlContext because they are needed in
-	 * 2:nd transaction.
+	 * Can't rebuild  indexes on  the temp relation  when using  Hypercore TAM
+	 * because  it  builds an  index  over  both  the non-compressed  and  the
+	 * compressed  chunk and  it  cannot  find the  compressed  chunk when  it
+	 * doesn't exist in metadata.
+	 *
+	 * TODO: It is possible to fix by changing the lookup of compressed rel,
+	 * but that requires more work.
 	 */
-	MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
-	result_minfo->ind_oids_old = list_copy(ind_oids_old);
-	result_minfo->ind_oids_new = list_copy(ind_oids_new);
-	MemoryContextSwitchTo(oldmcxt);
+	if (!ts_is_hypercore_am(new_rel->rd_rel->relam))
+	{
+		/* Rebuild indexes */
+		List *ind_oids_old = RelationGetIndexList(result_rel);
+		List *ind_oids_new = ts_build_new_indexes(new_rel, result_rel, ind_oids_old);
+
+		/*
+		 * Need to save index lists on PortlContext because they are needed in
+		 * 2:nd transaction.
+		 */
+		MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
+		result_minfo->ind_oids_old = list_copy(ind_oids_old);
+		result_minfo->ind_oids_new = list_copy(ind_oids_new);
+		MemoryContextSwitchTo(oldmcxt);
+	}
 
 	/* Update table stats */
 	Relation relRelation = table_open(RelationRelationId, RowExclusiveLock);
@@ -2050,6 +2077,7 @@ split_relation(Relation rel, SplitPoint *sp, unsigned int split_factor,
 								false /* swap toast by content */,
 								true, /* check constraints */
 								true, /* internal? */
+								true, /* reindex */
 								scontext.cutoffs.FreezeLimit,
 								scontext.cutoffs.MultiXactCutoff,
 								relpersistence);

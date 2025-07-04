@@ -629,7 +629,8 @@ ts_swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class, bool swap_toast_
 void
 ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 					bool swap_toast_by_content, bool check_constraints, bool is_internal,
-					TransactionId frozenXid, MultiXactId cutoffMulti, char newrelpersistence)
+					bool reindex, TransactionId frozenXid, MultiXactId cutoffMulti,
+					char newrelpersistence)
 {
 	ObjectAddress object;
 	Oid mapped_tables[4];
@@ -647,7 +648,6 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 
 	if (OidIsValid(newrel->rd_rel->reltoastrelid))
 	{
-		elog(NOTICE, "opening toast");
 		Relation toastrel1 = table_open(newrel->rd_rel->reltoastrelid, AccessExclusiveLock);
 		table_close(toastrel1, NoLock);
 	}
@@ -673,7 +673,7 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 	if (is_system_catalog)
 		CacheInvalidateCatalog(OIDOldHeap);
 
-	if (true)
+	if (reindex)
 	{
 		int reindex_flags;
 		ReindexParams reindex_params = { 0 };
