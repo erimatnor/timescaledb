@@ -355,13 +355,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 			/* Zero out possible results from swapped_relation_files */
 			memset(mapped_tables, 0, sizeof(mapped_tables));
 
-			elog(NOTICE,
-				 "swapping index %s %u for %s %u",
-				 get_rel_name(ind_old),
-				 ind_old,
-				 get_rel_name(ind_new),
-				 ind_new);
-
 			ts_swap_relation_files(ind_old,
 								   ind_new,
 								   false,
@@ -374,30 +367,18 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 
 		/* The new indexes must be visible for deletion. */
 		CommandCounterIncrement();
+	}
 
-		ts_finish_heap_swap(result_minfo->relid,
-							new_relid,
-							false, /* system catalog */
-							false /* swap toast by content */,
-							false, /* check constraints */
-							true,  /* internal? */
-							false,
-							cutoffs->FreezeLimit,
-							cutoffs->MultiXactCutoff,
-							result_minfo->relpersistence);
-	}
-	else
-	{
-		finish_heap_swap(result_minfo->relid,
-						 new_relid,
-						 false, /* system catalog */
-						 false /* swap toast by content */,
-						 false, /* check constraints */
-						 true,	/* internal? */
-						 cutoffs->FreezeLimit,
-						 cutoffs->MultiXactCutoff,
-						 result_minfo->relpersistence);
-	}
+	ts_finish_heap_swap(result_minfo->relid,
+						new_relid,
+						false, /* system catalog */
+						false /* swap toast by content */,
+						false, /* check constraints */
+						true,  /* internal? */
+						reindex,
+						cutoffs->FreezeLimit,
+						cutoffs->MultiXactCutoff,
+						result_minfo->relpersistence);
 
 	/* Don't need to drop objects for internal compressed relations, they are
 	 * dropped when the main chunk is dropped. */

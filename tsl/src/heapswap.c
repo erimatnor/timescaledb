@@ -713,6 +713,12 @@ ts_finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap, bool is_system_catalog,
 
 		reindex_relation(NULL, OIDOldHeap, reindex_flags, &reindex_params);
 	}
+	else
+	{
+		/* Must make changes visible after swap. Normally reindex does it
+		 * implicitly. */
+		CommandCounterIncrement();
+	}
 
 	/* Report that we are now doing clean up */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_FINAL_CLEANUP);
