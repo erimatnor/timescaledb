@@ -1041,8 +1041,10 @@ get_default_interval(Oid dimtype, bool adaptive_chunking)
 		case TIMESTAMPOID:
 		case TIMESTAMPTZOID:
 		case DATEOID:
+		case UUIDOID:
 			interval = adaptive_chunking ? DEFAULT_CHUNK_TIME_INTERVAL_ADAPTIVE :
 										   DEFAULT_CHUNK_TIME_INTERVAL;
+			break;
 			break;
 		default:
 			ereport(ERROR,

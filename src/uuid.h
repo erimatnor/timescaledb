@@ -6,7 +6,9 @@
 #pragma once
 
 #include <postgres.h>
+#include <fmgr.h>
 #include <utils/uuid.h>
 
 extern pg_uuid_t *ts_uuid_create(void);
 extern TSDLLEXPORT pg_uuid_t *ts_create_uuid_v7_from_timestamptz(TimestampTz ts);
+extern Datum ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS);

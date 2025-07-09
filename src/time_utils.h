@@ -39,9 +39,14 @@
 #define TS_TIME_NOBEGIN (PG_INT64_MIN)
 #define TS_TIME_NOEND (PG_INT64_MAX)
 
+#define TS_TIME_UUID_MIN (0x000000000000)
+#define TS_TIME_UUID_MAX (0xFFFFFFFFFFFF)
+
 #define IS_INTEGER_TYPE(type) (type == INT2OID || type == INT4OID || type == INT8OID)
 #define IS_TIMESTAMP_TYPE(type) (type == TIMESTAMPOID || type == TIMESTAMPTZOID || type == DATEOID)
-#define IS_VALID_TIME_TYPE(type) (IS_INTEGER_TYPE(type) || IS_TIMESTAMP_TYPE(type))
+#define IS_UUID_TYPE(type) (type == UUIDOID)
+#define IS_VALID_TIME_TYPE(type)                                                                   \
+	(IS_INTEGER_TYPE(type) || IS_TIMESTAMP_TYPE(type) || IS_UUID_TYPE(type))
 
 #define TS_TIME_DATUM_IS_MIN(timeval, type) (timeval == ts_time_datum_get_min(type))
 #define TS_TIME_DATUM_IS_MAX(timeval, type) (timeval == ts_time_datum_get_max(type))
