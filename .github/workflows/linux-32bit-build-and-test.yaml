@@ -62,6 +62,7 @@ jobs:
           hypercore_parallel
           hypercore_vacuum
           hypercore_vectoragg
+          net
           pg_dump
           telemetry
           transparent_decompress_chunk-*
