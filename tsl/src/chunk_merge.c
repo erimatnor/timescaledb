@@ -14,6 +14,7 @@
 #include <executor/spi.h>
 #include <storage/bufmgr.h>
 #include <utils/acl.h>
+#include <utils/snapmgr.h>
 #include <utils/syscache.h>
 
 #include "chunk.h"
@@ -154,6 +155,7 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 		CommandCounterIncrement();
 	}
 
+	PushActiveSnapshot(GetTransactionSnapshot());
 	ts_finish_heap_swap(result_minfo->relid,
 						new_relid,
 						false, /* system catalog */
@@ -164,6 +166,8 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 						cutoffs->FreezeLimit,
 						cutoffs->MultiXactCutoff,
 						result_minfo->relpersistence);
+
+	PopActiveSnapshot();
 
 	/* Don't need to drop objects for internal compressed relations, they are
 	 * dropped when the main chunk is dropped. */
@@ -1135,6 +1139,13 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		if (OidIsValid(new_crelid))
 			new_cheap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_crelid));
 
+		/* Freeze all chunks before starting new transaction */
+		for (int i = 0; i < nrelids; i++)
+		{
+			Chunk *chunk = relinfos[i].chunk;
+			ts_chunk_set_frozen(chunk);
+		}
+
 		/*
 		 * Check if we are being called from another procedure that has an SPI
 		 * context. In that case, we need to use SPI calls to start a new
@@ -1216,6 +1227,16 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 			if (NULL != crmi->rel && OidIsValid(crmi->rel->rd_rel->reltoastrelid))
 				LockRelationOid(crmi->rel->rd_rel->reltoastrelid, AccessExclusiveLock);
+
+			/* Check that chunk is still frozen as a pre-requisite */
+			if (!ts_chunk_is_frozen(rmi->chunk))
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("chunk \"%s\" might have been modified concurrently",
+								NameStr(crmi->chunk->fd.table_name))));
+
+			/* Chunk is locked again, so we can unfreeze it */
+			ts_chunk_unset_frozen(rmi->chunk);
 
 			/* Now that we know the relations still exist, they can be
 			 * closed. We just need the locks. */
