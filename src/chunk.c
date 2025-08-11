@@ -36,6 +36,7 @@
 #include <utils/array.h>
 #include <utils/builtins.h>
 #include <utils/datum.h>
+#include <utils/elog.h>
 #include <utils/hsearch.h>
 #include <utils/inval.h>
 #include <utils/lsyscache.h>
@@ -5363,4 +5364,25 @@ ts_chunk_detach_by_relid(Oid relid)
 	 * dropped one chunk
 	 */
 	Assert(count == 1);
+}
+
+TS_FUNCTION_INFO_V1(ts_chunk_modify_blocker);
+
+Datum
+ts_chunk_modify_blocker(PG_FUNCTION_ARGS)
+{
+	if (!CALLED_AS_TRIGGER(fcinfo))
+		elog(ERROR, "modify_blocker: not called by trigger manager");
+
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	Ensure(trigdata != NULL, "trigdata has to be set");
+	Ensure(trigdata->tg_relation != NULL, "tg_relation has to be set");
+
+	const char *relname = get_rel_name(trigdata->tg_relation->rd_id);
+	ereport(ERROR,
+			(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+			 errmsg("chunk \"%s\" cannot be modified while being merged", relname),
+			 errhint("Make sure the merge operation completes before modifying the chunk.")));
+
+	PG_RETURN_NULL();
 }

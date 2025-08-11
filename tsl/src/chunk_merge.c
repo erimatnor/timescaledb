@@ -10,10 +10,14 @@
 #include <catalog/heap.h>
 #include <catalog/pg_am.h>
 #include <catalog/pg_constraint.h>
+#include <catalog/pg_trigger_d.h>
 #include <commands/tablecmds.h>
 #include <executor/spi.h>
+#include <nodes/makefuncs.h>
 #include <storage/bufmgr.h>
 #include <utils/acl.h>
+#include <utils/memutils.h>
+#include <utils/palloc.h>
 #include <utils/snapmgr.h>
 #include <utils/syscache.h>
 
@@ -1133,16 +1137,53 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		LOCKTAG tag;
 		char *new_heap_name;
 		char *new_cheap_name = NULL;
+		ObjectAddresses *triggers;
 
 		new_heap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_relid));
 
 		if (OidIsValid(new_crelid))
 			new_cheap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_crelid));
 
+		MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
+		triggers = new_object_addresses();
+		MemoryContextSwitchTo(oldmcxt);
+
 		/* Freeze all chunks before starting new transaction */
 		for (int i = 0; i < nrelids; i++)
 		{
 			Chunk *chunk = relinfos[i].chunk;
+
+			/* TODO: Also add trigger on compressed chunk since it can receive
+			 * direct inserts, updates or be recompressed */
+			CreateTrigStmt stmt = {
+				.type = T_CreateTrigStmt,
+				.row = false,
+				/* Using OR REPLACE option introduced on Postgres 14 */
+				.replace = true,
+				.timing = TRIGGER_TYPE_BEFORE,
+				.trigname = "chunk_merge",
+				.relation =
+					makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), -1),
+				.funcname = list_make2(makeString(FUNCTIONS_SCHEMA_NAME),
+									   makeString("chunk_modify_blocker")),
+				.args = NIL, /* to be filled in later */
+				.events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE | TRIGGER_TYPE_DELETE |
+						  TRIGGER_TYPE_TRUNCATE,
+			};
+
+			ObjectAddress trigaddr = CreateTrigger(&stmt,
+												   NULL,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   NULL,
+												   false,
+												   false);
+
+			add_exact_object_address(&trigaddr, triggers);
 			ts_chunk_set_frozen(chunk);
 		}
 

@@ -87,3 +87,7 @@ CREATE OR REPLACE PROCEDURE @extschema@.attach_chunk(hypertable REGCLASS,
    chunk REGCLASS,
    slices JSONB)
 LANGUAGE C AS '@MODULE_PATHNAME@', 'ts_attach_chunk';
+
+-- Trigger that blocks modifications on a chunk
+CREATE OR REPLACE FUNCTION _timescaledb_functions.chunk_modify_blocker() RETURNS trigger
+AS '@MODULE_PATHNAME@', 'ts_chunk_modify_blocker' LANGUAGE C;
