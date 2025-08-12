@@ -49,6 +49,8 @@
 #include "time_utils.h"
 #include "utils.h"
 #include "uuid.h"
+#include <utils/timestamp.h>
+#include <utils/uuid.h>
 
 typedef struct
 {
@@ -353,18 +355,11 @@ ts_internal_to_time_value(int64 value, Oid type)
 			return DirectFunctionCall1(ts_pg_unix_microseconds_to_date, Int64GetDatum(value));
 		case UUIDOID:
 		{
-			/* Internal time is unix timestamp in microseconds while uuidv7 is
-			 * milliseconds */
-			// int64 ts = value / 1000;
-
-			/*
-			 * FIXME: First-class support for uuidv7 could be tricky here
-			 * because we need to convert back to uuidv7, but we can only
-			 * generate a new random uuid for the bits that are not timestamp.
-			 *
-			 * We probably need to treat the UUID as timestamp internally.
-			 */
-			PG_RETURN_DATUM(0); // Placeholder
+			/* Convert the timestamptz to a UUIDv7 with the "random" bits set to zero */
+			Datum ts =
+				DirectFunctionCall1(ts_pg_unix_microseconds_to_timestamp, Int64GetDatum(value));
+			pg_uuid_t *uuid = ts_create_uuid_v7_from_timestamptz(DatumGetTimestampTz(ts), true);
+			return UUIDPGetDatum(uuid);
 		}
 		default:
 			if (ts_type_is_int8_binary_compatible(type))
@@ -393,6 +388,7 @@ ts_internal_to_time_int64(int64 value, Oid type)
 			return value;
 		case TIMESTAMPOID:
 		case TIMESTAMPTZOID:
+		case UUIDOID:
 			/* we continue ts_time_value_to_internal's incorrect handling of TIMESTAMPs for
 			 * compatibility */
 			return DatumGetInt64(
@@ -400,10 +396,6 @@ ts_internal_to_time_int64(int64 value, Oid type)
 		case DATEOID:
 			return DatumGetInt64(
 				DirectFunctionCall1(ts_pg_unix_microseconds_to_date, Int64GetDatum(value)));
-		case UUIDOID:
-			/* Internal time is unix timestamp in microseconds while
-			 * uuidv7 is milliseconds */
-			return value / 1000;
 		default:
 			elog(ERROR,
 				 "unknown time type \"%s\" in ts_internal_to_time_value",

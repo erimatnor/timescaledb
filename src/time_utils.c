@@ -200,7 +200,7 @@ ts_time_datum_get_min(Oid timetype)
 		case INT8OID:
 			return Int64GetDatum(PG_INT64_MIN);
 		case UUIDOID:
-			return Int64GetDatum(0);
+			return Int64GetDatum(TS_TIME_UUID_MIN);
 		default:
 			break;
 	}
@@ -345,7 +345,7 @@ ts_time_get_min(Oid timetype)
 		case INT8OID:
 			return PG_INT64_MIN;
 		case UUIDOID:
-			return TS_TIME_UUID_MIN / 1000;
+			return TS_TIME_UUID_MIN;
 		default:
 			break;
 	}
@@ -374,7 +374,7 @@ ts_time_get_max(Oid timetype)
 		case INT8OID:
 			return PG_INT64_MAX;
 		case UUIDOID:
-			return TS_TIME_UUID_MAX / 1000;
+			return TS_TIME_UUID_MAX;
 		default:
 			break;
 	}

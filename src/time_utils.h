@@ -39,8 +39,17 @@
 #define TS_TIME_NOBEGIN (PG_INT64_MIN)
 #define TS_TIME_NOEND (PG_INT64_MAX)
 
-#define TS_TIME_UUID_MIN (0x000000000000)
-#define TS_TIME_UUID_MAX (0xFFFFFFFFFFFF)
+#define TS_TIME_UUID_MIN (0x0000000000000000)
+
+/*
+ * A UUIDv7 timestamp is 6 bytes milliseconds + 2 bytes microseconds. The max
+ * UUID value in milliseconds is 0xFFFFFFFFFFFF (6 bytes all 1s) =
+ * 281474976710655. Assuming the 2 bytes of sub-milliseconds is max 999 in
+ * decimal (before it overflows to milliseconds), then converting everything
+ * to microseconds the max becomes 281474976710655 x 1000 + 999 =
+ * 281474976710655999 (0x03E7FFFFFFFFFFFF in hexadecimal).
+ */
+#define TS_TIME_UUID_MAX (0x03E7FFFFFFFFFFFF)
 
 #define IS_INTEGER_TYPE(type) (type == INT2OID || type == INT4OID || type == INT8OID)
 #define IS_TIMESTAMP_TYPE(type) (type == TIMESTAMPOID || type == TIMESTAMPTZOID || type == DATEOID)

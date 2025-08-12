@@ -512,3 +512,109 @@ INSERT INTO part_time_func_null_ret VALUES (1530214157.134, 23.4, 'dev1'),
                                            (1533214157.8734, 22.3, 'dev7');
 ERROR:  partitioning function "public.time_partfunc_null_ret" returned NULL
 \set ON_ERROR_STOP 1
+--
+--
+-- Test "time" partitioning on UUIDv7
+--
+--
+CREATE TABLE uuid_events(id uuid primary key, device int, temp float);
+SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => interval '1 day');
+     create_hypertable     
+---------------------------
+ (18,public,uuid_events,t)
+(1 row)
+
+INSERT INTO uuid_events VALUES
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 01:00 PST'), 1, 1.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 02:00 PST'), 2, 2.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 01:00 PST'), 3, 3.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 02:00 PST'), 4, 4.0);
+SELECT * FROM show_chunks('uuid_events');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_18_13_chunk
+ _timescaledb_internal._hyper_18_14_chunk
+(2 rows)
+
+SELECT (test.show_constraints(ch)).* from show_chunks('uuid_events') ch;
+      Constraint       | Type | Columns |                     Index                     |                                                      Expr                                                      | Deferrable | Deferred | Validated 
+-----------------------+------+---------+-----------------------------------------------+----------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ 13_1_uuid_events_pkey | p    | {id}    | _timescaledb_internal."13_1_uuid_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_20         | c    | {id}    | -                                             | ((id >= '01941f29-7c00-7000-8000-000000000000'::uuid) AND (id < '0194244f-d800-7000-8000-000000000000'::uuid)) | f          | f        | t
+ 14_2_uuid_events_pkey | p    | {id}    | _timescaledb_internal."14_2_uuid_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_21         | c    | {id}    | -                                             | ((id >= '0194244f-d800-7000-8000-000000000000'::uuid) AND (id < '01942976-3400-7000-8000-000000000000'::uuid)) | f          | f        | t
+(4 rows)
+
+SELECT id, device, temp FROM uuid_events;
+                  id                  | device | temp 
+--------------------------------------+--------+------
+ 01942117-de80-7000-91a1-4e2d4c1ef037 |      1 |    1
+ 0194214e-cd00-7000-a3ad-cf4b709a9f4e |      2 |    2
+ 0194263e-3a80-7000-8438-1cc33ab70adf |      3 |    3
+ 01942675-2900-7000-93d7-01b823b46103 |      4 |    4
+(4 rows)
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp FROM uuid_events;
+   timestamptz_from_uuid_v7   | device | temp 
+------------------------------+--------+------
+ Wed Jan 01 01:00:00 2025 PST |      1 |    1
+ Wed Jan 01 02:00:00 2025 PST |      2 |    2
+ Thu Jan 02 01:00:00 2025 PST |      3 |    3
+ Thu Jan 02 02:00:00 2025 PST |      4 |    4
+(4 rows)
+
+select
+    _timescaledb_functions.to_timestamp(range_start) as range_start,
+    _timescaledb_functions.to_timestamp(range_end) as range_end
+from _timescaledb_catalog.dimension_slice ds
+join _timescaledb_catalog.dimension d on (ds.dimension_id = d.id)
+join _timescaledb_catalog.hypertable h on (d.hypertable_id = h.id)
+where h.table_name = 'uuid_events';
+         range_start          |          range_end           
+------------------------------+------------------------------
+ Tue Dec 31 16:00:00 2024 PST | Wed Jan 01 16:00:00 2025 PST
+ Wed Jan 01 16:00:00 2025 PST | Thu Jan 02 16:00:00 2025 PST
+(2 rows)
+
+select
+    _timescaledb_functions.to_timestamp(range_start) as chunk_range_start,
+    _timescaledb_functions.to_timestamp(range_end) as chunk_range_end
+from _timescaledb_catalog.dimension_slice ds
+join _timescaledb_catalog.dimension d on (ds.dimension_id = d.id)
+join _timescaledb_catalog.hypertable h on (d.hypertable_id = h.id)
+where h.table_name = 'uuid_events'
+limit 1 offset 1 \gset
+-- Test that chunk exclusion on uuidv7 column works
+select :'chunk_range_start',  _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+           ?column?           |   uuid_v7_from_timestamptz_zeroed    
+------------------------------+--------------------------------------
+ Wed Jan 01 16:00:00 2025 PST | 0194244f-d800-7000-8000-000000000000
+(1 row)
+
+explain analyze verbose
+select _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+from uuid_events where id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+                                                                                    QUERY PLAN                                                                                    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result  (cost=0.15..51.29 rows=966 width=20) (actual time=0.004..0.005 rows=2 loops=1)
+   Output: _timescaledb_functions.timestamptz_from_uuid_v7(uuid_events.id), uuid_events.device, uuid_events.temp
+   ->  Custom Scan (ChunkAppend) on public.uuid_events  (cost=0.15..39.22 rows=966 width=28) (actual time=0.003..0.004 rows=2 loops=1)
+         Output: uuid_events.id, uuid_events.device, uuid_events.temp
+         Startup Exclusion: true
+         Runtime Exclusion: false
+         Chunks excluded during startup: 1
+         ->  Index Scan using "13_1_uuid_events_pkey" on _timescaledb_internal._hyper_18_13_chunk  (cost=0.15..19.61 rows=483 width=28) (actual time=0.002..0.003 rows=2 loops=1)
+               Output: _hyper_18_13_chunk.id, _hyper_18_13_chunk.device, _hyper_18_13_chunk.temp
+               Index Cond: (_hyper_18_13_chunk.id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Jan 01 16:00:00 2025 PST'::timestamp with time zone))
+ Planning Time: 0.162 ms
+ Execution Time: 0.066 ms
+(12 rows)
+
+select _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+from uuid_events where id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+   timestamptz_from_uuid_v7   | device | temp 
+------------------------------+--------+------
+ Wed Jan 01 01:00:00 2025 PST |      1 |    1
+ Wed Jan 01 02:00:00 2025 PST |      2 |    2
+(2 rows)
+

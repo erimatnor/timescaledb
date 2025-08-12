@@ -7,14 +7,14 @@ AS '@MODULE_PATHNAME@', 'ts_uuid_generate_v7' LANGUAGE C VOLATILE STRICT PARALLE
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.uuid_v7_from_timestamptz(
   ts TIMESTAMPTZ,
-  zero BOOLEAN
+  zero BOOLEAN = false
 ) RETURNS UUID
 AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(
   ts TIMESTAMPTZ  
 ) RETURNS UUID
-AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz_zeroed' LANGUAGE C STABLE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.timestamptz_from_uuid_v7(
   uuid UUID
@@ -25,4 +25,3 @@ CREATE OR REPLACE FUNCTION _timescaledb_functions.uuid_version(
   uuid UUID
 ) RETURNS INTEGER
 AS '@MODULE_PATHNAME@', 'ts_uuid_version' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-

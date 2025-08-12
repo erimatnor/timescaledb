@@ -302,3 +302,50 @@ INSERT INTO part_time_func_null_ret VALUES (1530214157.134, 23.4, 'dev1'),
                                            (1533214157.8734, 22.3, 'dev7');
 \set ON_ERROR_STOP 1
 
+
+--
+--
+-- Test "time" partitioning on UUIDv7
+--
+--
+CREATE TABLE uuid_events(id uuid primary key, device int, temp float);
+SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => interval '1 day');
+INSERT INTO uuid_events VALUES
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 01:00 PST'), 1, 1.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 02:00 PST'), 2, 2.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 01:00 PST'), 3, 3.0),
+       (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 02:00 PST'), 4, 4.0);
+
+SELECT * FROM show_chunks('uuid_events');
+
+SELECT (test.show_constraints(ch)).* from show_chunks('uuid_events') ch;
+SELECT id, device, temp FROM uuid_events;
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp FROM uuid_events;
+
+select
+    _timescaledb_functions.to_timestamp(range_start) as range_start,
+    _timescaledb_functions.to_timestamp(range_end) as range_end
+from _timescaledb_catalog.dimension_slice ds
+join _timescaledb_catalog.dimension d on (ds.dimension_id = d.id)
+join _timescaledb_catalog.hypertable h on (d.hypertable_id = h.id)
+where h.table_name = 'uuid_events';
+
+select
+    _timescaledb_functions.to_timestamp(range_start) as chunk_range_start,
+    _timescaledb_functions.to_timestamp(range_end) as chunk_range_end
+from _timescaledb_catalog.dimension_slice ds
+join _timescaledb_catalog.dimension d on (ds.dimension_id = d.id)
+join _timescaledb_catalog.hypertable h on (d.hypertable_id = h.id)
+where h.table_name = 'uuid_events'
+limit 1 offset 1 \gset
+
+-- Test that chunk exclusion on uuidv7 column works
+select :'chunk_range_start',  _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+
+explain analyze verbose
+select _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+from uuid_events where id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+
+select _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+from uuid_events where id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
