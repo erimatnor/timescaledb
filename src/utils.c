@@ -18,6 +18,7 @@
 #include <catalog/pg_inherits.h>
 #include <catalog/pg_operator.h>
 #include <catalog/pg_type.h>
+#include <catalog/pg_type_d.h>
 #include <commands/event_trigger.h>
 #include <commands/tablecmds.h>
 #include <fmgr.h>
@@ -191,8 +192,11 @@ ts_time_value_to_internal(Datum time_val, Oid type_oid)
 
 			return DatumGetInt64(res);
 		case UUIDOID:
+		{
 			/* UUIDv7 unix timestamps are in milliseconds */
-			return DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
+			Datum ts = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
+			return ts_time_value_to_internal(ts, TIMESTAMPTZOID);
+		}
 		default:
 			elog(ERROR, "unknown time type \"%s\"", format_type_be(type_oid));
 			return -1;
@@ -297,6 +301,11 @@ ts_time_value_to_internal_or_infinite(Datum time_val, Oid type_oid)
 			}
 
 			return ts_time_value_to_internal(time_val, type_oid);
+		}
+		case UUIDOID:
+		{
+			Datum ts = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
+			return ts_time_value_to_internal_or_infinite(ts, TIMESTAMPTZOID);
 		}
 		default:
 			return ts_time_value_to_internal(time_val, type_oid);
