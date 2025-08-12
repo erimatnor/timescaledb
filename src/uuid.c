@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include <fmgr.h>
 #include <port/pg_bswap.h>
 #include <utils/timestamp.h>
 #include <utils/uuid.h>
@@ -57,7 +58,7 @@ ts_uuid_generate(PG_FUNCTION_ARGS)
 }
 
 pg_uuid_t *
-ts_create_uuid_v7_from_timestamptz(TimestampTz ts)
+ts_create_uuid_v7_from_timestamptz(TimestampTz ts, bool zero)
 {
 	/*
 	 * TimestampTz is a 64bit integer, counting the microseconds from 2000-01-01.
@@ -76,7 +77,8 @@ ts_create_uuid_v7_from_timestamptz(TimestampTz ts)
 	uint64_t timestamp_be = pg_hton64(epoch_millis << 16);
 	pg_uuid_t *uuid = (pg_uuid_t *) palloc0(sizeof(pg_uuid_t));
 
-	pg_backend_random((char *) uuid, UUID_LEN);
+	if (!zero)
+		pg_backend_random((char *) uuid, UUID_LEN);
 
 	/* Overwrite the first 48 bits with the timestamp */
 	memcpy(uuid->data, &timestamp_be, 6);
@@ -103,7 +105,7 @@ TS_FUNCTION_INFO_V1(ts_uuid_generate_v7);
 Datum
 ts_uuid_generate_v7(PG_FUNCTION_ARGS)
 {
-	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(GetCurrentTimestamp()));
+	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(GetCurrentTimestamp(), false));
 }
 
 TS_FUNCTION_INFO_V1(ts_uuid_v7_from_timestamptz);
@@ -112,7 +114,19 @@ Datum
 ts_uuid_v7_from_timestamptz(PG_FUNCTION_ARGS)
 {
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
-	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(timestamp));
+	bool zero = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+
+	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(timestamp, zero));
+}
+
+TS_FUNCTION_INFO_V1(ts_uuid_v7_from_timestamptz_zeroed);
+
+Datum
+ts_uuid_v7_from_timestamptz_zeroed(PG_FUNCTION_ARGS)
+{
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
+
+	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(timestamp, true));
 }
 
 TS_FUNCTION_INFO_V1(ts_timestamptz_from_uuid_v7);
