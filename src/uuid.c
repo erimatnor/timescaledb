@@ -135,6 +135,10 @@ Datum
 ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS)
 {
 	pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
+	int version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
+
+	if (version != 7)
+		PG_RETURN_NULL();
 
 	/* Big endian timestamp in milliseconds from Unix Epoch */
 	uint64 timestamp_be = 0;
@@ -153,7 +157,7 @@ ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS)
 	/* Add up the whole to get microseconds */
 	TimestampTz ts = timestamp_millis * 1000 + subms_timestamp;
 
-	return TimestampTzGetDatum(ts);
+	PG_RETURN_TIMESTAMPTZ(ts);
 }
 
 TS_FUNCTION_INFO_V1(ts_uuid_version);
