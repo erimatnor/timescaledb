@@ -54,7 +54,7 @@ TS_FUNCTION_INFO_V1(ts_uuid_generate);
 Datum
 ts_uuid_generate(PG_FUNCTION_ARGS)
 {
-	return UUIDPGetDatum(ts_uuid_create());
+	PG_RETURN_UUID_P(ts_uuid_create());
 }
 
 pg_uuid_t *
@@ -105,7 +105,7 @@ TS_FUNCTION_INFO_V1(ts_uuid_generate_v7);
 Datum
 ts_uuid_generate_v7(PG_FUNCTION_ARGS)
 {
-	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(GetCurrentTimestamp(), false));
+	PG_RETURN_UUID_P(ts_create_uuid_v7_from_timestamptz(GetCurrentTimestamp(), false));
 }
 
 TS_FUNCTION_INFO_V1(ts_uuid_v7_from_timestamptz);
@@ -116,7 +116,7 @@ ts_uuid_v7_from_timestamptz(PG_FUNCTION_ARGS)
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
 	bool zero = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
 
-	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(timestamp, zero));
+	PG_RETURN_UUID_P(ts_create_uuid_v7_from_timestamptz(timestamp, zero));
 }
 
 TS_FUNCTION_INFO_V1(ts_uuid_v7_from_timestamptz_zeroed);
@@ -126,7 +126,7 @@ ts_uuid_v7_from_timestamptz_zeroed(PG_FUNCTION_ARGS)
 {
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
 
-	return UUIDPGetDatum(ts_create_uuid_v7_from_timestamptz(timestamp, true));
+	PG_RETURN_UUID_P(ts_create_uuid_v7_from_timestamptz(timestamp, true));
 }
 
 TS_FUNCTION_INFO_V1(ts_timestamptz_from_uuid_v7);
@@ -135,7 +135,13 @@ Datum
 ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS)
 {
 	pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
-	int version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
+	int version;
+
+	/* Check that the variant field corresponds to RFC9562 */
+	if ((uuid->data[8] & 0xc0) != 0x80)
+		PG_RETURN_NULL();
+
+	version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
 
 	if (version != 7)
 		PG_RETURN_NULL();
@@ -166,6 +172,13 @@ Datum
 ts_uuid_version(PG_FUNCTION_ARGS)
 {
 	pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
-	int version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
+	int version;
+
+	/* Check that the variant field corresponds to RFC9562 */
+	if ((uuid->data[8] & 0xc0) != 0x80)
+		PG_RETURN_NULL();
+
+	version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
+
 	PG_RETURN_INT32(version);
 }

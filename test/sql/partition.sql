@@ -308,6 +308,7 @@ INSERT INTO part_time_func_null_ret VALUES (1530214157.134, 23.4, 'dev1'),
 -- Test "time" partitioning on UUIDv7
 --
 --
+SELECT setseed(0.3);
 CREATE TABLE uuid_events(id uuid primary key, device int, temp float);
 SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => interval '1 day');
 INSERT INTO uuid_events VALUES
