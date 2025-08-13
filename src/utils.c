@@ -152,7 +152,7 @@ ts_time_value_to_internal(Datum time_val, Oid type_oid)
 		elog(ERROR, "unknown time type \"%s\"", format_type_be(type_oid));
 	}
 
-	if (IS_INTEGER_TYPE(type_oid))
+	if (IS_INTEGER_TYPE(type_oid) || IS_UUID_TYPE(type_oid))
 	{
 		/* Integer time types have no distinction between min, max and
 		 * infinity. We don't want min and max to be turned into infinity for
@@ -194,11 +194,8 @@ ts_time_value_to_internal(Datum time_val, Oid type_oid)
 
 			return DatumGetInt64(res);
 		case UUIDOID:
-		{
-			/* UUIDv7 unix timestamps are in milliseconds */
-			Datum ts = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
-			return ts_time_value_to_internal(ts, TIMESTAMPTZOID);
-		}
+			res = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
+			return ts_time_value_to_internal(res, TIMESTAMPTZOID);
 		default:
 			elog(ERROR, "unknown time type \"%s\"", format_type_be(type_oid));
 			return -1;
