@@ -194,8 +194,25 @@ ts_time_value_to_internal(Datum time_val, Oid type_oid)
 
 			return DatumGetInt64(res);
 		case UUIDOID:
+		{
+#if 0
 			res = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
-			return ts_time_value_to_internal(res, TIMESTAMPTZOID);
+			int64 unixtime = ts_time_value_to_internal(res, TIMESTAMPTZOID);
+			return unixtime;
+#else
+			uint64 unixtime_ms = 0;
+
+			if (!ts_uuid_v7_extract_unixtime_ms(DatumGetUUIDP(time_val), &unixtime_ms, NULL))
+			{
+				elog(NOTICE,
+					 "UUID %s is not v7",
+					 DatumGetCString(DirectFunctionCall1(uuid_out, time_val)));
+			}
+
+			/* Convert to microseconds */
+			return unixtime_ms * 1000;
+#endif
+		}
 		default:
 			elog(ERROR, "unknown time type \"%s\"", format_type_be(type_oid));
 			return -1;
@@ -303,8 +320,23 @@ ts_time_value_to_internal_or_infinite(Datum time_val, Oid type_oid)
 		}
 		case UUIDOID:
 		{
+#if 0
 			Datum ts = DirectFunctionCall1(ts_timestamptz_from_uuid_v7, time_val);
-			return ts_time_value_to_internal_or_infinite(ts, TIMESTAMPTZOID);
+            int64 unixtime = ts_time_value_to_internal_or_infinite(ts, TIMESTAMPTZOID);
+
+			return unixtime;
+#else
+			uint64 unixtime_ms = 0;
+
+			if (!ts_uuid_v7_extract_unixtime_ms(DatumGetUUIDP(time_val), &unixtime_ms, NULL))
+			{
+				elog(NOTICE,
+					 "UUID %s is not v7",
+					 DatumGetCString(DirectFunctionCall1(uuid_out, time_val)));
+			}
+
+			return unixtime_ms * 1000;
+#endif
 		}
 		default:
 			return ts_time_value_to_internal(time_val, type_oid);

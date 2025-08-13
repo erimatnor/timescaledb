@@ -129,6 +129,43 @@ ts_uuid_v7_from_timestamptz_zeroed(PG_FUNCTION_ARGS)
 	PG_RETURN_UUID_P(ts_create_uuid_v7_from_timestamptz(timestamp, true));
 }
 
+bool
+ts_uuid_v7_extract_unixtime_ms(const pg_uuid_t *uuid, uint64 *unixtime_ms, uint16 *sub_ms)
+{
+	bool is_uuidv7 = true;
+	int version = 0;
+
+	/* Check that the variant field corresponds to RFC9562 */
+	if ((uuid->data[8] & 0xc0) != 0x80)
+	{
+		elog(WARNING, "variant field is wrong");
+		is_uuidv7 = false;
+	}
+
+	version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
+
+	if (version != 7)
+	{
+		elog(WARNING, "not a version 7 uuid");
+		is_uuidv7 = false;
+	}
+
+	/* Big endian timestamp in milliseconds from Unix Epoch */
+	uint64 timestamp_be = 0;
+	memcpy(&timestamp_be, uuid->data, 6);
+
+	/* The timestamp is now milliseconds from Unix Epoch (1970-01-01)*/
+	*unixtime_ms = (pg_ntoh64(timestamp_be)) >> 16;
+
+	if (sub_ms)
+	{
+		/* Optionally, get the sub ms part as well, reversing the scaling */
+		*sub_ms = (((uuid->data[6] & 0xF) << 8) | uuid->data[7]) * 1000 / (1 << 12);
+	}
+
+	return is_uuidv7;
+}
+
 TS_FUNCTION_INFO_V1(ts_timestamptz_from_uuid_v7);
 
 Datum
@@ -136,37 +173,19 @@ ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS)
 {
 	pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
 	bool sub_ms = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
-	int version;
+	uint64 unixtime_millis = 0;
+	uint16 subms_timestamp = 0;
 
-	/* Check that the variant field corresponds to RFC9562 */
-	if ((uuid->data[8] & 0xc0) != 0x80)
+	if (!ts_uuid_v7_extract_unixtime_ms(uuid, &unixtime_millis, &subms_timestamp))
 		PG_RETURN_NULL();
-
-	version = (uuid->data[6] & 0xf0) >> 4; /* Get the version from the UUID */
-
-	if (version != 7)
-		PG_RETURN_NULL();
-
-	/* Big endian timestamp in milliseconds from Unix Epoch */
-	uint64 timestamp_be = 0;
-	memcpy(&timestamp_be, uuid->data, 6);
-
-	/* The timestamp is now milliseconds from Unix Epoch (1970-01-01)*/
-	uint64 timestamp = (pg_ntoh64(timestamp_be)) >> 16;
-	uint32 subms_timestamp = 0;
-
-	if (sub_ms)
-	{
-		/* Get the sub ms part as well, reversing the scaling */
-		subms_timestamp = (((uuid->data[6] & 0xF) << 8) | uuid->data[7]) * 1000 / (1 << 12);
-	}
 
 	/* Milliseconds timestamp from PG Epoch (2000-01-01) */
 	uint64 timestamp_millis =
-		(timestamp - ((uint64) (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY) * 1000ULL);
+		(unixtime_millis -
+		 ((uint64) (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY) * 1000ULL);
 
 	/* Add up the whole to get microseconds */
-	TimestampTz ts = timestamp_millis * 1000 + subms_timestamp;
+	TimestampTz ts = timestamp_millis * 1000 + (sub_ms ? subms_timestamp : 0);
 
 	PG_RETURN_TIMESTAMPTZ(ts);
 }
