@@ -11,13 +11,18 @@ CREATE OR REPLACE FUNCTION _timescaledb_functions.uuid_v7_from_timestamptz(
 ) RETURNS UUID
 AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz' LANGUAGE C VOLATILE STRICT PARALLEL SAFE;
 
+--
+-- When generating a timestamp with no random bits, and a timestamp
+-- with time zone, the function can be immutable.
+--
 CREATE OR REPLACE FUNCTION _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(
   ts TIMESTAMPTZ  
 ) RETURNS UUID
-AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz_zeroed' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz_zeroed' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.timestamptz_from_uuid_v7(
-  uuid UUID
+  uuid UUID,
+  sub_ms BOOLEAN = false -- extract a sub-millisecond timestamp based on rand_a bits
 ) RETURNS TIMESTAMPTZ
 AS '@MODULE_PATHNAME@', 'ts_timestamptz_from_uuid_v7' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
