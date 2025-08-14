@@ -1041,8 +1041,10 @@ get_default_interval(Oid dimtype, bool adaptive_chunking)
 		case TIMESTAMPOID:
 		case TIMESTAMPTZOID:
 		case DATEOID:
+		case UUIDOID:
 			interval = adaptive_chunking ? DEFAULT_CHUNK_TIME_INTERVAL_ADAPTIVE :
 										   DEFAULT_CHUNK_TIME_INTERVAL;
+			break;
 			break;
 		default:
 			ereport(ERROR,
@@ -1085,10 +1087,12 @@ dimension_interval_to_internal(const char *colname, Oid dimtype, Oid valuetype, 
 			interval = get_validated_integer_interval(dimtype, DatumGetInt64(value));
 			break;
 		case INTERVALOID:
-			if (!IS_TIMESTAMP_TYPE(dimtype))
+			if (!IS_TIMESTAMP_TYPE(dimtype) && !IS_UUID_TYPE(dimtype))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("invalid interval type for %s dimension", format_type_be(dimtype)),
+						 errmsg("invalid interval type %s for %s dimension",
+								format_type_be(valuetype),
+								format_type_be(dimtype)),
 						 errhint("Use an interval of type integer.")));
 
 			interval = interval_to_usec(DatumGetIntervalP(value));
@@ -1096,7 +1100,9 @@ dimension_interval_to_internal(const char *colname, Oid dimtype, Oid valuetype, 
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("invalid interval type for %s dimension", format_type_be(dimtype)),
+					 errmsg("invalid interval type %s for %s dimension",
+							format_type_be(valuetype),
+							format_type_be(dimtype)),
 					 IS_TIMESTAMP_TYPE(dimtype) ?
 						 errhint("Use an interval of type integer or interval.") :
 						 errhint("Use an interval of type integer.")));

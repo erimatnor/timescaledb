@@ -302,3 +302,66 @@ INSERT INTO part_time_func_null_ret VALUES (1530214157.134, 23.4, 'dev1'),
                                            (1533214157.8734, 22.3, 'dev7');
 \set ON_ERROR_STOP 1
 
+--
+--
+-- Test "time" partitioning on UUIDv7
+--
+--
+SELECT setseed(0.3);
+CREATE TABLE uuid_events(id uuid primary key, device int, temp float);
+SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => interval '1 day');
+
+-- 
+-- It is possible to generate UUIDs like follows, but the random
+-- generator used doesn't respect setseed() so used constant UUIDs for
+-- determinism.
+--
+-- (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 01:00 PST'), 1, 1.0),
+-- (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-01 02:00 PST'), 2, 2.0),
+-- (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 01:00 PST'), 3, 3.0),
+-- (_timescaledb_functions.uuid_v7_from_timestamptz('2025-01-02 02:00 PST'), 4, 4.0);
+--
+INSERT INTO uuid_events VALUES
+       ('0194214e-cd00-7000-a9a7-63f1416dab45', 2, 2.0),
+       ('01942117-de80-7000-8121-f12b2b69dd96', 1, 1.0),
+       ('0194263e-3a80-7000-8f40-82c987b1bc1f', 3, 3.0),
+       ('01942675-2900-7000-8db1-a98694b18785', 4, 4.0);
+
+SELECT * FROM show_chunks('uuid_events');
+
+SELECT (test.show_constraints(ch)).* from show_chunks('uuid_events') ch;
+SELECT id, device, temp FROM uuid_events;
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+FROM uuid_events;
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+FROM uuid_events ORDER BY id;
+
+SELECT
+    _timescaledb_functions.to_timestamp(range_start) AS range_start,
+    _timescaledb_functions.to_timestamp(range_end) AS range_end
+FROM _timescaledb_catalog.dimension_slice ds
+JOIN _timescaledb_catalog.dimension d ON (ds.dimension_id = d.id)
+JOIN _timescaledb_catalog.hypertable h ON (d.hypertable_id = h.id)
+WHERE h.table_name = 'uuid_events';
+
+SELECT
+    _timescaledb_functions.to_timestamp(range_start) AS chunk_range_start,
+    _timescaledb_functions.to_timestamp(range_end) AS chunk_range_end
+FROM _timescaledb_catalog.dimension_slice ds
+JOIN _timescaledb_catalog.dimension d ON (ds.dimension_id = d.id)
+JOIN _timescaledb_catalog.hypertable h ON (d.hypertable_id = h.id)
+WHERE h.table_name = 'uuid_events'
+LIMIT 1 OFFSET 1 \gset
+
+-- Test that chunk exclusion on uuidv7 column works
+SELECT :'chunk_range_start',  _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+
+EXPLAIN (verbose, costs off, timing off)
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+FROM uuid_events WHERE id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id), device, temp
+FROM uuid_events WHERE id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed(:'chunk_range_start');
+
