@@ -24,7 +24,8 @@ AS '@MODULE_PATHNAME@', 'ts_uuid_v7_from_timestamptz_zeroed' LANGUAGE C IMMUTABL
 
 CREATE OR REPLACE FUNCTION _timescaledb_functions.timestamptz_from_uuid_v7(
   uuid UUID,
-  sub_ms BOOLEAN = false -- extract a sub-millisecond timestamp based on rand_a bits
+  sub_ms BOOLEAN = false, -- extract a sub-millisecond timestamp based on rand_a bits
+  ignore_version BOOLEAN = false -- extract a v7 timestamp even if not a v7 UUID
 ) RETURNS TIMESTAMPTZ
 AS '@MODULE_PATHNAME@', 'ts_timestamptz_from_uuid_v7' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 

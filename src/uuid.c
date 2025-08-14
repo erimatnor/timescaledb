@@ -172,10 +172,12 @@ ts_timestamptz_from_uuid_v7(PG_FUNCTION_ARGS)
 {
 	pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
 	bool sub_ms = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+	bool ignore_version = PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2);
 	uint64 unixtime_millis = 0;
 	uint16 subms_timestamp = 0;
 
-	if (!ts_uuid_v7_extract_unixtime_ms(uuid, &unixtime_millis, &subms_timestamp))
+	if (!ts_uuid_v7_extract_unixtime_ms(uuid, &unixtime_millis, &subms_timestamp) &&
+		!ignore_version)
 		PG_RETURN_NULL();
 
 	/* Milliseconds timestamp from PG Epoch (2000-01-01) */
