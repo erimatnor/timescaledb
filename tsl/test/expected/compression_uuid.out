@@ -331,10 +331,10 @@ FROM
   uuids
 WHERE
   _timescaledb_functions.uuid_version(u) = 7;
-                                                                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                                                                          
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                                                                                                                                                QUERY PLAN                                                                                                                                                                                                                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Aggregate
-   Output: count(*), count(*) FILTER (WHERE (u < '0197a7a9-b48c-7000-8000-000000000000'::uuid)), count(*) FILTER (WHERE (_timescaledb_functions.timestamptz_from_uuid_v7(u, false) < 'Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone)), count(*) FILTER (WHERE (u >= _timescaledb_functions.uuid_v7_from_timestamptz('Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone, true))), count(*) FILTER (WHERE (_timescaledb_functions.timestamptz_from_uuid_v7(u, false) >= 'Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone))
+   Output: count(*), count(*) FILTER (WHERE (u < '0197a7a9-b48c-7000-8000-000000000000'::uuid)), count(*) FILTER (WHERE (_timescaledb_functions.timestamptz_from_uuid_v7(u, false, false) < 'Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone)), count(*) FILTER (WHERE (u >= _timescaledb_functions.uuid_v7_from_timestamptz('Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone, true))), count(*) FILTER (WHERE (_timescaledb_functions.timestamptz_from_uuid_v7(u, false, false) >= 'Wed Jun 25 08:16:46.348 2025 PDT'::timestamp with time zone))
    ->  Seq Scan on public.uuids
          Output: i, u
          Filter: (_timescaledb_functions.uuid_version(uuids.u) = 7)
@@ -364,6 +364,189 @@ WHERE
 ---+----+-----
 (0 rows)
 
+-- Make sure UUIDv7 compression is enabled
+SET timescaledb.enable_uuid_compression = true;
+-- Test compression on uuid partitioning column
+CREATE TABLE uuid_part (id uuid, value int);
+SELECT create_hypertable('uuid_part', by_range('id', interval '1 month'));
+NOTICE:  adding not-null constraint to column "id"
+ create_hypertable 
+-------------------
+ (5,t)
+(1 row)
+
+INSERT INTO uuid_part SELECT u, i FROM uuids WHERE _timescaledb_functions.uuid_version(u) = 7;
+SELECT * FROM show_chunks('uuid_part');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_5_30_chunk
+ _timescaledb_internal._hyper_5_31_chunk
+ _timescaledb_internal._hyper_5_32_chunk
+ _timescaledb_internal._hyper_5_33_chunk
+ _timescaledb_internal._hyper_5_34_chunk
+(5 rows)
+
+ALTER TABLE uuid_part SET (timescaledb.compress, timescaledb.compress_orderby = 'id');
+-- Show how data is spread across chunks
+SELECT tableoid::regclass, count(*) FROM uuid_part GROUP BY tableoid;
+                tableoid                 | count 
+-----------------------------------------+-------
+ _timescaledb_internal._hyper_5_33_chunk |     1
+ _timescaledb_internal._hyper_5_34_chunk |     3
+ _timescaledb_internal._hyper_5_31_chunk |     1
+ _timescaledb_internal._hyper_5_30_chunk |   101
+ _timescaledb_internal._hyper_5_32_chunk |     1
+(5 rows)
+
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+ count 
+-------
+     3
+(1 row)
+
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   Output: count(*)
+   ->  Index Only Scan using _hyper_5_34_chunk_uuid_part_id_idx on _timescaledb_internal._hyper_5_34_chunk
+         Index Cond: ((_hyper_5_34_chunk.id >= '0198a23a-8180-7000-8000-000000000000'::uuid) AND (_hyper_5_34_chunk.id < '0198ac87-3980-7000-8000-000000000000'::uuid))
+(4 rows)
+
+-- Compress
+SELECT compress_chunk(ch) FROM show_chunks('uuid_part') ch;
+             compress_chunk              
+-----------------------------------------
+ _timescaledb_internal._hyper_5_30_chunk
+ _timescaledb_internal._hyper_5_31_chunk
+ _timescaledb_internal._hyper_5_32_chunk
+ _timescaledb_internal._hyper_5_33_chunk
+ _timescaledb_internal._hyper_5_34_chunk
+(5 rows)
+
+-- Check that chunk exclusion and filtering works as expected on
+-- compressed UUID data.
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+ count 
+-------
+     3
+(1 row)
+
+-- Check that chunk exclusion still works and that filters are pushed
+-- down to a min-max scan on the compressed chunk.
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+                                                                                                      QUERY PLAN                                                                                                      
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate
+   Output: count(*)
+   ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_34_chunk
+         Filter: ((_hyper_5_34_chunk.id >= '0198a23a-8180-7000-8000-000000000000'::uuid) AND (_hyper_5_34_chunk.id < '0198ac87-3980-7000-8000-000000000000'::uuid))
+         ->  Index Scan using compress_hyper_6_39_chunk__ts_meta_min_1__ts_meta_max_1_idx on _timescaledb_internal.compress_hyper_6_39_chunk
+               Output: compress_hyper_6_39_chunk._ts_meta_count, compress_hyper_6_39_chunk._ts_meta_min_1, compress_hyper_6_39_chunk._ts_meta_max_1, compress_hyper_6_39_chunk.id, compress_hyper_6_39_chunk.value
+               Index Cond: ((compress_hyper_6_39_chunk._ts_meta_min_1 < '0198ac87-3980-7000-8000-000000000000'::uuid) AND (compress_hyper_6_39_chunk._ts_meta_max_1 >= '0198a23a-8180-7000-8000-000000000000'::uuid))
+(7 rows)
+
+-- Insert non-v7 UUIDs
+INSERT INTO uuid_part SELECT u, i FROM uuids WHERE _timescaledb_functions.uuid_version(u) != 7;
+-- Recompress
+SELECT compress_chunk(ch) FROM show_chunks('uuid_part') ch;
+NOTICE:  chunk "_hyper_5_30_chunk" is already converted to columnstore
+NOTICE:  chunk "_hyper_5_31_chunk" is already converted to columnstore
+NOTICE:  chunk "_hyper_5_32_chunk" is already converted to columnstore
+NOTICE:  chunk "_hyper_5_33_chunk" is already converted to columnstore
+NOTICE:  chunk "_hyper_5_34_chunk" is already converted to columnstore
+             compress_chunk              
+-----------------------------------------
+ _timescaledb_internal._hyper_5_30_chunk
+ _timescaledb_internal._hyper_5_31_chunk
+ _timescaledb_internal._hyper_5_32_chunk
+ _timescaledb_internal._hyper_5_33_chunk
+ _timescaledb_internal._hyper_5_34_chunk
+ _timescaledb_internal._hyper_5_40_chunk
+ _timescaledb_internal._hyper_5_41_chunk
+ _timescaledb_internal._hyper_5_42_chunk
+(8 rows)
+
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
+                                                                                                             QUERY PLAN                                                                                                              
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: count(*)
+   ->  Gather
+         Output: (PARTIAL count(*))
+         Workers Planned: 2
+         ->  Parallel Append
+               ->  Partial Aggregate
+                     Output: PARTIAL count(*)
+                     ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_32_chunk
+                           Filter: (_hyper_5_32_chunk.id >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+                           ->  Parallel Seq Scan on _timescaledb_internal.compress_hyper_6_37_chunk
+                                 Output: compress_hyper_6_37_chunk._ts_meta_count, compress_hyper_6_37_chunk._ts_meta_min_1, compress_hyper_6_37_chunk._ts_meta_max_1, compress_hyper_6_37_chunk.id, compress_hyper_6_37_chunk.value
+                                 Filter: (compress_hyper_6_37_chunk._ts_meta_max_1 >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+               ->  Partial Aggregate
+                     Output: PARTIAL count(*)
+                     ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_33_chunk
+                           Filter: (_hyper_5_33_chunk.id >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+                           ->  Parallel Seq Scan on _timescaledb_internal.compress_hyper_6_38_chunk
+                                 Output: compress_hyper_6_38_chunk._ts_meta_count, compress_hyper_6_38_chunk._ts_meta_min_1, compress_hyper_6_38_chunk._ts_meta_max_1, compress_hyper_6_38_chunk.id, compress_hyper_6_38_chunk.value
+                                 Filter: (compress_hyper_6_38_chunk._ts_meta_max_1 >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+               ->  Partial Aggregate
+                     Output: PARTIAL count(*)
+                     ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_40_chunk
+                           Filter: (_hyper_5_40_chunk.id >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+                           ->  Parallel Seq Scan on _timescaledb_internal.compress_hyper_6_43_chunk
+                                 Output: compress_hyper_6_43_chunk._ts_meta_count, compress_hyper_6_43_chunk._ts_meta_min_1, compress_hyper_6_43_chunk._ts_meta_max_1, compress_hyper_6_43_chunk.id, compress_hyper_6_43_chunk.value
+                                 Filter: (compress_hyper_6_43_chunk._ts_meta_max_1 >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+               ->  Partial Aggregate
+                     Output: PARTIAL count(*)
+                     ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_41_chunk
+                           Filter: (_hyper_5_41_chunk.id >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+                           ->  Parallel Seq Scan on _timescaledb_internal.compress_hyper_6_44_chunk
+                                 Output: compress_hyper_6_44_chunk._ts_meta_count, compress_hyper_6_44_chunk._ts_meta_min_1, compress_hyper_6_44_chunk._ts_meta_max_1, compress_hyper_6_44_chunk.id, compress_hyper_6_44_chunk.value
+                                 Filter: (compress_hyper_6_44_chunk._ts_meta_max_1 >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+               ->  Partial Aggregate
+                     Output: PARTIAL count(*)
+                     ->  Custom Scan (ColumnarScan) on _timescaledb_internal._hyper_5_42_chunk
+                           Filter: (_hyper_5_42_chunk.id >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+                           ->  Parallel Seq Scan on _timescaledb_internal.compress_hyper_6_45_chunk
+                                 Output: compress_hyper_6_45_chunk._ts_meta_count, compress_hyper_6_45_chunk._ts_meta_min_1, compress_hyper_6_45_chunk._ts_meta_max_1, compress_hyper_6_45_chunk.id, compress_hyper_6_45_chunk.value
+                                 Filter: (compress_hyper_6_45_chunk._ts_meta_max_1 >= '01b8dc7d-2800-7000-8000-000000000000'::uuid)
+(41 rows)
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
+   timestamptz_from_uuid_v7   
+------------------------------
+ Mon Feb 03 04:05:06 2059 PST
+ Thu Jul 08 09:10:11 2100 PDT
+ 
+ 
+ 
+(5 rows)
+
+SELECT tableoid::regclass, _timescaledb_functions.timestamptz_from_uuid_v7(id, ignore_version=>true) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
+                tableoid                 |     timestamptz_from_uuid_v7     
+-----------------------------------------+----------------------------------
+ _timescaledb_internal._hyper_5_32_chunk | Mon Feb 03 04:05:06 2059 PST
+ _timescaledb_internal._hyper_5_33_chunk | Thu Jul 08 09:10:11 2100 PDT
+ _timescaledb_internal._hyper_5_40_chunk | Fri Jan 05 07:05:07.139 9370 PST
+ _timescaledb_internal._hyper_5_41_chunk | Tue Jan 26 02:14:19.811 4500 PST
+ _timescaledb_internal._hyper_5_42_chunk | Tue Jun 04 03:44:30.737 3252 PDT
+(5 rows)
+
 -- Cleanup
 DROP TABLE t;
 DROP TABLE subms;
@@ -371,4 +554,5 @@ DROP TABLE uuids;
 DROP TABLE mixed_compressed;
 DROP TABLE compressed_chunks;
 DROP TABLE compression_info;
+DROP TABLE uuid_part;
 RESET timescaledb.enable_uuid_compression;

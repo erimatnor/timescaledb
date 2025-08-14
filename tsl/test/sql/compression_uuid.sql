@@ -212,6 +212,34 @@ WHERE
 GROUP BY 1
 ORDER BY 1;
 
+-- Filter UUIDs on timestamp part by using both zeroed UUID and
+-- extracted timestamp. Both methods should yield the same count.
+SELECT
+  count(*) AS count_total,
+  count(*) FILTER (WHERE u < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Jun 25 08:16:46.348 2025 PDT')) AS count_below_on_uuid,
+  count(*) FILTER (WHERE _timescaledb_functions.timestamptz_from_uuid_v7(u) < 'Wed Jun 25 08:16:46.348 2025 PDT') AS count_below_on_time,
+  count(*) FILTER (WHERE u >= _timescaledb_functions.uuid_v7_from_timestamptz('Wed Jun 25 08:16:46.348 2025 PDT', true)) AS count_above_on_uuid,
+  count(*) FILTER (WHERE _timescaledb_functions.timestamptz_from_uuid_v7(u) >= 'Wed Jun 25 08:16:46.348 2025 PDT') AS count_above_on_time
+FROM
+  uuids
+WHERE
+  _timescaledb_functions.uuid_version(u) = 7;
+
+-- The EXPLAIN shows how the immutable "zeroed" function can be
+-- constified for better performance, unlike the parameter version of
+-- the function doing the same thing:
+EXPLAIN (verbose, costs off)
+SELECT
+  count(*) AS count_total,
+  count(*) FILTER (WHERE u < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Jun 25 08:16:46.348 2025 PDT')) AS count_below_on_uuid,
+  count(*) FILTER (WHERE _timescaledb_functions.timestamptz_from_uuid_v7(u) < 'Wed Jun 25 08:16:46.348 2025 PDT') AS count_below_on_time,
+  count(*) FILTER (WHERE u >= _timescaledb_functions.uuid_v7_from_timestamptz('Wed Jun 25 08:16:46.348 2025 PDT', true)) AS count_above_on_uuid,
+  count(*) FILTER (WHERE _timescaledb_functions.timestamptz_from_uuid_v7(u) >= 'Wed Jun 25 08:16:46.348 2025 PDT') AS count_above_on_time
+FROM
+  uuids
+WHERE
+  _timescaledb_functions.uuid_version(u) = 7;
+
 -- Sub ms timestamp test:
 --   generate all microseconds timestamps between the two dates below and
 --   generate a UUID v7 based on the timestamp and
@@ -234,16 +262,60 @@ FROM
 WHERE
   (x.ts - x.ts2) > '00:00:00.000001' OR (x.ts - x.ts2) < '-00:00:00.000001';
 
+-- Make sure UUIDv7 compression is enabled
+SET timescaledb.enable_uuid_compression = true;
 
 -- Test compression on uuid partitioning column
 CREATE TABLE uuid_part (id uuid, value int);
 SELECT create_hypertable('uuid_part', by_range('id', interval '1 month'));
 
-INSERT INTO uuid_part SELECT u, i FROM uuids;
+INSERT INTO uuid_part SELECT u, i FROM uuids WHERE _timescaledb_functions.uuid_version(u) = 7;
 SELECT * FROM show_chunks('uuid_part');
 ALTER TABLE uuid_part SET (timescaledb.compress, timescaledb.compress_orderby = 'id');
+
+-- Show how data is spread across chunks
+SELECT tableoid::regclass, count(*) FROM uuid_part GROUP BY tableoid;
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+
+-- Compress
 SELECT compress_chunk(ch) FROM show_chunks('uuid_part') ch;
-SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id, true), id FROM uuid_part;
+
+-- Check that chunk exclusion and filtering works as expected on
+-- compressed UUID data.
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+
+-- Check that chunk exclusion still works and that filters are pushed
+-- down to a min-max scan on the compressed chunk.
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 13 2025 PDT') AND
+      id < _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('Wed Aug 15 2025 PDT');
+
+-- Insert non-v7 UUIDs
+INSERT INTO uuid_part SELECT u, i FROM uuids WHERE _timescaledb_functions.uuid_version(u) != 7;
+
+-- Recompress
+SELECT compress_chunk(ch) FROM show_chunks('uuid_part') ch;
+
+EXPLAIN (verbose, costs off)
+SELECT count(*) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
+
+SELECT _timescaledb_functions.timestamptz_from_uuid_v7(id) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
+
+
+SELECT tableoid::regclass, _timescaledb_functions.timestamptz_from_uuid_v7(id, ignore_version=>true) FROM uuid_part
+WHERE id >= _timescaledb_functions.uuid_v7_from_timestamptz_zeroed('2030-01-01');
 
 -- Cleanup
 DROP TABLE t;
@@ -252,4 +324,5 @@ DROP TABLE uuids;
 DROP TABLE mixed_compressed;
 DROP TABLE compressed_chunks;
 DROP TABLE compression_info;
+DROP TABLE uuid_part;
 RESET timescaledb.enable_uuid_compression;
