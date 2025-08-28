@@ -820,6 +820,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	const Hypercube *prev_cube = NULL;
 	const MergeLockUpgrade lock_upgrade = merge_chunks_lock_upgrade_mode();
 	int mergeindex = -1;
+	ObjectAddresses *blocker_triggers = NULL;
 
 	PreventCommandIfReadOnly("merge_chunks");
 
@@ -1116,8 +1117,73 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 * resort */
 		if (relinfos[i].isresult)
 			mergeindex = i;
+
+
+		if (concurrently)
+		{
+			/* TODO: Also add trigger on compressed chunk since it can receive
+			 * direct inserts, updates or be recompressed */
+			char *schemaname = pstrdup(NameStr(chunk->fd.schema_name));
+			char *tablename = pstrdup(NameStr(chunk->fd.table_name));
+			CreateTrigStmt stmt = {
+				.type = T_CreateTrigStmt,
+				.row = false,
+				/* Using OR REPLACE option introduced on Postgres 14 */
+				.replace = true,
+				.timing = TRIGGER_TYPE_BEFORE,
+				.trigname = "chunk_merge",
+				.relation =	makeRangeVar(schemaname, tablename, -1),
+				.funcname = list_make2(makeString(FUNCTIONS_SCHEMA_NAME),
+									   makeString("chunk_modify_blocker")),
+				.args = NIL, /* to be filled in later */
+				.events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE | TRIGGER_TYPE_DELETE |
+						  TRIGGER_TYPE_TRUNCATE,
+			};
+
+			ObjectAddress trigaddr = CreateTrigger(&stmt,
+												   NULL,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   InvalidOid,
+												   NULL,
+												   true, /* isInternal */
+												   false); /* inPartition */
+
+			MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
+
+			if (NULL == blocker_triggers)
+				blocker_triggers = new_object_addresses();
+
+			add_exact_object_address(&trigaddr, blocker_triggers);
+			MemoryContextSwitchTo(oldmcxt);
+
+
+			// TODO: Take ExclusiveLock session lock on rel to block inserts across transactions
+		}
 	}
 
+	if (concurrently)
+	{
+		/* Start new transaction to publish trigger and release locks */
+		if (SPI_inside_nonatomic_context())
+		{
+			/*
+			 * Commit and retain transaction semantics. The commit_and_chain
+			 * call will automatically start a new transaction.
+			 */
+			SPI_commit_and_chain();
+		}
+		else
+		{
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			StartTransactionCommand();
+		}
+	}
+	
 	/*
 	 * Now merge all the data into a new temporary heap relation. Do it
 	 * separately for the non-compressed and compressed relations.
@@ -1137,13 +1203,13 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		LOCKTAG tag;
 		char *new_heap_name;
 		char *new_cheap_name = NULL;
-		ObjectAddresses *triggers;
 
 		new_heap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_relid));
 
 		if (OidIsValid(new_crelid))
 			new_cheap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_crelid));
-
+#if 0
+		ObjectAddresses *triggers;
 		MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
 		triggers = new_object_addresses();
 		MemoryContextSwitchTo(oldmcxt);
@@ -1186,7 +1252,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			add_exact_object_address(&trigaddr, triggers);
 			ts_chunk_set_frozen(chunk);
 		}
-
+#endif
 		/*
 		 * Check if we are being called from another procedure that has an SPI
 		 * context. In that case, we need to use SPI calls to start a new
