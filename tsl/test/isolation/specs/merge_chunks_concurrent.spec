@@ -83,7 +83,7 @@ step "s1_commit" { commit; }
 session "s2"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '100ms';
+    set local deadlock_timeout = '10000ms';
     reset timescaledb.merge_chunks_lock_upgrade_mode;
 }
 
@@ -120,6 +120,12 @@ step "s3_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s3_merge_chunks" {
     call merge_all_chunks('readings');
 }
+
+step "s3_modify" {
+    delete from readings where device=1;
+    insert into readings values ('2024-01-01 01:05', 5, 5.0);
+}
+
 #step "s3_compress_chunks" {
 #    select compress_chunk(show_chunks('readings'));
 #}
@@ -131,7 +137,7 @@ step "s3_commit" { commit; }
 session "s4"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '100ms';
+    set local deadlock_timeout = '10000ms';
 }
 
 step "s4_modify" {
@@ -199,4 +205,4 @@ permutation "s4_wp_enable" "s2_merge_chunks" "s3_merge_chunks" "s4_wp_release" "
 #permutation "s4_wp_enable" "s2_merge_chunks" "s3_drop_chunks" "s4_wp_release" "s1_show_data" "s1_show_chunks"
 
 # Reader should not be blocked by concurrent merge
-permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s4_modify" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s3_modify" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"

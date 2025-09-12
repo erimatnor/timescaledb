@@ -18,6 +18,7 @@
 #include <nodes/makefuncs.h>
 #include <nodes/parsenodes.h>
 #include <storage/bufmgr.h>
+#include <storage/lmgr.h>
 #include <storage/lockdefs.h>
 #include <utils/acl.h>
 #include <utils/memutils.h>
@@ -882,6 +883,7 @@ static void
 wait_and_acquire_locks(Oid hyper_relid, RelationMergeInfo *relinfos, RelationMergeInfo *crelinfos,
 					   int nrelids, LOCKMODE lockmode)
 {
+#if 0
 	LOCKTAG tag;
 
 	/*
@@ -897,7 +899,7 @@ wait_and_acquire_locks(Oid hyper_relid, RelationMergeInfo *relinfos, RelationMer
 	WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
 
 	DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
-
+#endif
 	Relation hyper_rel = try_relation_open(hyper_relid, ShareUpdateExclusiveLock);
 
 	for (int i = 0; i < nrelids; i++)
@@ -1018,6 +1020,9 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	const MergeLockUpgrade lock_upgrade = merge_chunks_lock_upgrade_mode();
 	int mergeindex = -1;
 	ObjectAddresses *blocker_triggers = NULL;
+	MemoryContext merge_cxt = NULL;
+	List *rellocks = NIL;
+	List *locktags = NIL;
 
 	PreventCommandIfReadOnly("merge_chunks");
 
@@ -1042,13 +1047,15 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("must specify at least two chunks to merge")));
 
+	/* Create a private memory context that will survive transaction boundaries */
+	merge_cxt = AllocSetContextCreate(PortalContext, "MergeChunksConcurrent", ALLOCSET_SMALL_SIZES);
 	/*
 	 * The RelationMergeInfos are allocated on the Portal context since they
 	 * need to survive across transactions in case of merge with
 	 * "concurrently".
 	 */
-	relinfos = MemoryContextAllocZero(PortalContext, sizeof(struct RelationMergeInfo) * nrelids);
-	crelinfos = MemoryContextAllocZero(PortalContext, sizeof(struct RelationMergeInfo) * nrelids);
+	relinfos = MemoryContextAllocZero(merge_cxt, sizeof(struct RelationMergeInfo) * nrelids);
+	crelinfos = MemoryContextAllocZero(merge_cxt, sizeof(struct RelationMergeInfo) * nrelids);
 
 	/* Sort relids array in order to find duplicates and lock relations in
 	 * consistent order to avoid deadlocks. It doesn't matter that we don't
@@ -1123,6 +1130,23 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		/* Lock toast table to prevent it from being concurrently vacuumed */
 		if (rel->rd_rel->reltoastrelid)
 			LockRelationOid(rel->rd_rel->reltoastrelid, lockmode);
+
+		MemoryContext oldcontext = MemoryContextSwitchTo(merge_cxt);
+		LockRelId *lockrelid;
+		LOCKTAG *heaplocktag;
+
+		/* Add lockrelid of heap relation to the list of locked relations */
+		lockrelid = palloc_object(LockRelId);
+		*lockrelid = rel->rd_lockInfo.lockRelId;
+		rellocks = lappend(rellocks, lockrelid);
+
+		heaplocktag = palloc_object(LOCKTAG);
+
+		/* Save the LOCKTAG for this relation for the wait phase */
+		SET_LOCKTAG_RELATION(*heaplocktag, lockrelid->dbId, lockrelid->relId);
+		locktags = lappend(locktags, heaplocktag);
+
+		MemoryContextSwitchTo(oldcontext);
 
 		/*
 		 * Check for active uses of the relation in the current transaction,
@@ -1238,10 +1262,10 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		relinfo->rel = rel;
 		relinfo->relpersistence = rel->rd_rel->relpersistence;
 		/*
-		 * Make sure the chunk is on the PortalContext to survive
+		 * Make sure the chunk is on the merge_cxt to survive
 		 * transaction when merge is concurrent
 		 */
-		MemoryContext old_mcxt = MemoryContextSwitchTo(PortalContext);
+		MemoryContext old_mcxt = MemoryContextSwitchTo(merge_cxt);
 		relinfo->chunk = ts_chunk_copy(chunk);
 		MemoryContextSwitchTo(old_mcxt);
 	}
@@ -1267,10 +1291,10 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		if (merged_cube == NULL)
 		{
 			/*
-			 * Make sure the chunk is on the PortalContext to survive
+			 * Make sure the chunk is on the merge_cxt to survive
 			 * transaction when merge is concurrent
 			 */
-			MemoryContext old_mcxt = MemoryContextSwitchTo(PortalContext);
+			MemoryContext old_mcxt = MemoryContextSwitchTo(merge_cxt);
 			merged_cube = ts_hypercube_copy(chunk->cube);
 			MemoryContextSwitchTo(old_mcxt);
 			Assert(prev_cube == NULL);
@@ -1295,10 +1319,10 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			RelationMergeInfo *crelinfo = &crelinfos[i];
 			Chunk *cchunk = ts_chunk_get_by_id(chunk->fd.compressed_chunk_id, true);
 			/*
-			 * Allocate on PortalContext to survive transaction end in
+			 * Allocate on merge_cxt to survive transaction end in
 			 * concurrent mode.
 			 */
-			MemoryContext old_mcxt = MemoryContextSwitchTo(PortalContext);
+			MemoryContext old_mcxt = MemoryContextSwitchTo(merge_cxt);
 			crelinfo->chunk = ts_chunk_copy(cchunk);
 			MemoryContextSwitchTo(old_mcxt);
 
@@ -1315,6 +1339,27 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		if (relinfos[i].isresult)
 			mergeindex = i;
 	}
+
+	/* Lock the hypertable parent relation to prevent inserts from routing to
+	 * chunks that we merge */
+	Relation hyper_rel = table_open(hypertable_relid, ShareUpdateExclusiveLock);
+
+	LockRelId *hyper_lockrelid;
+	LOCKTAG *hyper_locktag;
+
+	/* Save the list of locks in private context */
+	MemoryContext oldcontext = MemoryContextSwitchTo(merge_cxt);
+
+	/* Add lockrelid of heap relation to the list of locked relations */
+	hyper_lockrelid = palloc_object(LockRelId);
+	*hyper_lockrelid = hyper_rel->rd_lockInfo.lockRelId;
+	hyper_locktag = palloc_object(LOCKTAG);
+
+	/* Save the LOCKTAG for this parent relation for the wait phase */
+	SET_LOCKTAG_RELATION(*hyper_locktag, hyper_lockrelid->dbId, hyper_lockrelid->relId);
+	// lockTags = lappend(lockTags, hyper_locktag);
+
+	MemoryContextSwitchTo(oldcontext);
 
 	/*
 	 * Now merge all the data into a new temporary heap relation. Do it
@@ -1335,12 +1380,15 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		char *new_heap_name;
 		char *new_cheap_name;
 
-		new_heap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_relid));
+		LockRelationIdForSession(hyper_lockrelid, ShareUpdateExclusiveLock);
+		table_close(hyper_rel, NoLock);
+
+		new_heap_name = MemoryContextStrdup(merge_cxt, get_rel_name(new_relid));
 
 		if (OidIsValid(new_crelid))
-			new_cheap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_crelid));
+			new_cheap_name = MemoryContextStrdup(merge_cxt, get_rel_name(new_crelid));
 
-		MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
+		MemoryContext oldmcxt = MemoryContextSwitchTo(merge_cxt);
 		blocker_triggers = new_object_addresses();
 		MemoryContextSwitchTo(oldmcxt);
 
@@ -1353,10 +1401,20 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			 * rels and triggers will be dropped */
 			if (i == mergeindex)
 			{
-				oldmcxt = MemoryContextSwitchTo(PortalContext);
+				oldmcxt = MemoryContextSwitchTo(merge_cxt);
 				add_exact_object_address(&trigaddr, blocker_triggers);
 				MemoryContextSwitchTo(oldmcxt);
 			}
+		}
+
+		ListCell *lc;
+
+		/* Get a session-level lock on each table. */
+		foreach (lc, rellocks)
+		{
+			LockRelId *lockrelid = (LockRelId *) lfirst(lc);
+
+			LockRelationIdForSession(lockrelid, ExclusiveLock);
 		}
 
 		/*
@@ -1379,12 +1437,17 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			StartTransactionCommand();
 		}
 
+		WaitForLockersMultiple(locktags, AccessExclusiveLock, true);
+
+		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
+
 		wait_and_acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, AccessExclusiveLock);
 		lock_new_heaps(new_relid, new_crelid, new_heap_name, new_cheap_name, AccessExclusiveLock);
 		PushActiveSnapshot(GetTransactionSnapshot());
 	}
 	else
 	{
+		table_close(hyper_rel, NoLock);
 		/* Make new table stats visible */
 		CommandCounterIncrement();
 	}
@@ -1413,12 +1476,27 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	}
 
 	if (concurrently)
+	{
+		ListCell *lc;
+
+		foreach (lc, rellocks)
+		{
+			LockRelId *lockrelid = (LockRelId *) lfirst(lc);
+
+			UnlockRelationIdForSession(lockrelid, ExclusiveLock);
+		}
+
+		UnlockRelationIdForSession(hyper_lockrelid, ShareUpdateExclusiveLock);
+
 		PopActiveSnapshot();
+	}
 
 	pfree(relids);
 	pfree(nulls);
 	pfree(relinfos);
 	pfree(crelinfos);
+
+	MemoryContextDelete(merge_cxt);
 
 	PG_RETURN_VOID();
 }
