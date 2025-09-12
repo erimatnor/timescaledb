@@ -199,4 +199,4 @@ permutation "s4_wp_enable" "s2_merge_chunks" "s3_merge_chunks" "s4_wp_release" "
 #permutation "s4_wp_enable" "s2_merge_chunks" "s3_drop_chunks" "s4_wp_release" "s1_show_data" "s1_show_chunks"
 
 # Reader should not be blocked by concurrent merge
-permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s4_modify" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"

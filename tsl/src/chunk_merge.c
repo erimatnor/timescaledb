@@ -8,16 +8,21 @@
 #include <catalog/catalog.h>
 #include <catalog/dependency.h>
 #include <catalog/heap.h>
+#include <catalog/objectaddress.h>
 #include <catalog/pg_am.h>
 #include <catalog/pg_constraint.h>
 #include <catalog/pg_trigger_d.h>
 #include <commands/tablecmds.h>
+#include <commands/trigger.h>
 #include <executor/spi.h>
 #include <nodes/makefuncs.h>
+#include <nodes/parsenodes.h>
 #include <storage/bufmgr.h>
+#include <storage/lockdefs.h>
 #include <utils/acl.h>
 #include <utils/memutils.h>
 #include <utils/palloc.h>
+#include <utils/rel.h>
 #include <utils/snapmgr.h>
 #include <utils/syscache.h>
 
@@ -159,7 +164,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 		CommandCounterIncrement();
 	}
 
-	PushActiveSnapshot(GetTransactionSnapshot());
 	ts_finish_heap_swap(result_minfo->relid,
 						new_relid,
 						false, /* system catalog */
@@ -170,8 +174,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 						cutoffs->FreezeLimit,
 						cutoffs->MultiXactCutoff,
 						result_minfo->relpersistence);
-
-	PopActiveSnapshot();
 
 	/* Don't need to drop objects for internal compressed relations, they are
 	 * dropped when the main chunk is dropped. */
@@ -769,6 +771,201 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 	return new_relid;
 }
 
+static ObjectAddress
+add_blocking_trigger(const Chunk *chunk)
+{
+	/* TODO: Also add trigger on compressed chunk since it can receive
+	 * direct inserts, updates or be recompressed */
+	char *schemaname = pstrdup(NameStr(chunk->fd.schema_name));
+	char *tablename = pstrdup(NameStr(chunk->fd.table_name));
+	CreateTrigStmt stmt = {
+		.type = T_CreateTrigStmt,
+		.row = true,
+		/* Using OR REPLACE option introduced on Postgres 14 */
+		.replace = true,
+		.timing = TRIGGER_TYPE_BEFORE,
+		.trigname = "chunk_merge",
+		.relation = makeRangeVar(schemaname, tablename, -1),
+		.funcname =
+			list_make2(makeString(FUNCTIONS_SCHEMA_NAME), makeString("chunk_modify_blocker")),
+		.args = NIL, /* to be filled in later */
+		.events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE | TRIGGER_TYPE_DELETE,
+	};
+
+	/* Creating the trigger takes ShareRowExclusiveLock. Already holding
+	 * ExclusiveLock */
+	ObjectAddress trigaddr = CreateTrigger(&stmt,
+										   NULL,
+										   InvalidOid,
+										   InvalidOid,
+										   InvalidOid,
+										   InvalidOid,
+										   InvalidOid,
+										   InvalidOid,
+										   NULL,
+										   true,   /* isInternal */
+										   false); /* inPartition */
+
+	return trigaddr;
+}
+
+static void
+acquire_locks_for_merge(const Relation hyper_rel, RelationMergeInfo *rmi, RelationMergeInfo *crmi,
+						LOCKMODE lockmode)
+{
+	rmi->rel = try_table_open(rmi->relid, lockmode);
+
+	if (OidIsValid(crmi->relid))
+		crmi->rel = try_relation_open(crmi->relid, lockmode);
+
+	if (NULL == hyper_rel)
+	{
+		if (NULL != rmi->rel)
+			elog(WARNING,
+				 "dangling chunk \"%s\" remains, can't fix",
+				 RelationGetRelationName(rmi->rel));
+
+		if (NULL != crmi->rel)
+			elog(WARNING,
+				 "dangling compressed chunk \"%s\" remains, can't fix",
+				 RelationGetRelationName(crmi->rel));
+
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("hypertable \"%s\" was removed concurrently",
+						RelationGetRelationName(hyper_rel))));
+	}
+
+	if (NULL == rmi->rel)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("chunk \"%s\" was removed concurrently",
+						NameStr(rmi->chunk->fd.table_name))));
+
+	if (OidIsValid(crmi->relid) && NULL == crmi->rel)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("chunk \"%s\" was removed concurrently",
+						NameStr(crmi->chunk->fd.table_name))));
+	/* Re-lock toast tables, heap swap expects it */
+	if (OidIsValid(rmi->rel->rd_rel->reltoastrelid))
+		LockRelationOid(rmi->rel->rd_rel->reltoastrelid, lockmode);
+
+	if (NULL != crmi->rel && OidIsValid(crmi->rel->rd_rel->reltoastrelid))
+		LockRelationOid(crmi->rel->rd_rel->reltoastrelid, lockmode);
+
+#if 0
+	/* Check that chunk is still frozen as a pre-requisite */
+	if (!ts_chunk_is_frozen(rmi->chunk))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("chunk \"%s\" might have been modified concurrently",
+						NameStr(crmi->chunk->fd.table_name))));
+
+	/* Chunk is locked again, so we can unfreeze it */
+	ts_chunk_unset_frozen(rmi->chunk);
+#endif
+
+	/* Now that we know the relations still exist, they can be
+	 * closed. We just need the locks. */
+	table_close(rmi->rel, NoLock);
+	rmi->rel = NULL;
+
+	if (NULL != crmi->rel)
+	{
+		table_close(crmi->rel, NoLock);
+		crmi->rel = NULL;
+	}
+}
+
+static void
+wait_and_acquire_locks(Oid hyper_relid, RelationMergeInfo *relinfos, RelationMergeInfo *crelinfos,
+					   int nrelids, LOCKMODE lockmode)
+{
+	LOCKTAG tag;
+
+	/*
+	 * Now wait.  This ensures that all queries that were planned
+	 * including the partition are finished before we finalize the merge
+	 * and change catalog entries.  We don't need or indeed want to
+	 * acquire this lock, though -- that would block later queries.
+	 *
+	 * We don't need to concern ourselves with waiting for a lock on the
+	 * partition itself, since we will acquire AccessExclusiveLock below.
+	 */
+	SET_LOCKTAG_RELATION(tag, MyDatabaseId, hyper_relid);
+	WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
+
+	DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
+
+	Relation hyper_rel = try_relation_open(hyper_relid, ShareUpdateExclusiveLock);
+
+	for (int i = 0; i < nrelids; i++)
+	{
+		acquire_locks_for_merge(hyper_rel, &relinfos[i], &crelinfos[i], lockmode);
+	}
+
+	table_close(hyper_rel, NoLock);
+}
+
+static void
+lock_new_heaps(Oid new_relid, Oid new_crelid, const char *new_heap_name, const char *new_cheap_name,
+			   LOCKMODE lockmode)
+{
+	/*
+	 * Re-lock the new heaps, including any toast tables.
+	 */
+	Relation new_rel = try_table_open(new_relid, lockmode);
+
+	if (NULL == new_rel)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("new heap \"%s\" was removed concurrently", new_heap_name)));
+
+	if (OidIsValid(new_rel->rd_rel->reltoastrelid))
+	{
+		Relation new_toast_rel = table_open(new_rel->rd_rel->reltoastrelid, lockmode);
+		List *indexes = RelationGetIndexList(new_toast_rel);
+		ListCell *lc;
+
+		foreach (lc, indexes)
+		{
+			Oid indexrelid = lfirst_oid(lc);
+			LockRelationOid(indexrelid, lockmode);
+		}
+		table_close(new_toast_rel, NoLock);
+	}
+
+	table_close(new_rel, NoLock);
+
+	if (OidIsValid(new_crelid))
+	{
+		Relation new_crel = try_table_open(new_crelid, lockmode);
+
+		if (NULL == new_crel)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("new compressed heap \"%s\" was removed concurrently",
+							new_cheap_name)));
+
+		if (OidIsValid(new_crel->rd_rel->reltoastrelid))
+		{
+			Relation new_toast_crel = table_open(new_crel->rd_rel->reltoastrelid, lockmode);
+
+			List *indexes = RelationGetIndexList(new_toast_crel);
+			ListCell *lc;
+
+			foreach (lc, indexes)
+			{
+				Oid indexrelid = lfirst_oid(lc);
+				LockRelationOid(indexrelid, lockmode);
+			}
+			table_close(new_toast_crel, NoLock);
+		}
+
+		table_close(new_crel, NoLock);
+	}
+}
 /*
  * Merge N chunk relations into one chunk based on Oids.
  *
@@ -898,7 +1095,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			(lock_upgrade == MERGE_LOCK_ACCESS_EXCLUSIVE) ? AccessExclusiveLock : ExclusiveLock;
 
 		if (concurrently)
-			lockmode = ShareUpdateExclusiveLock;
+			lockmode = ExclusiveLock;
 
 		rel = try_table_open(relid, lockmode);
 
@@ -982,7 +1179,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		if (chunk->fd.compressed_chunk_id != INVALID_CHUNK_ID)
 		{
 			Oid crelid = ts_chunk_get_relid(chunk->fd.compressed_chunk_id, false);
-			LockRelationOid(crelid, AccessExclusiveLock);
+			LockRelationOid(crelid, lockmode);
 
 			if (mergeindex == -1)
 				mergeindex = i;
@@ -1117,73 +1314,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 * resort */
 		if (relinfos[i].isresult)
 			mergeindex = i;
-
-
-		if (concurrently)
-		{
-			/* TODO: Also add trigger on compressed chunk since it can receive
-			 * direct inserts, updates or be recompressed */
-			char *schemaname = pstrdup(NameStr(chunk->fd.schema_name));
-			char *tablename = pstrdup(NameStr(chunk->fd.table_name));
-			CreateTrigStmt stmt = {
-				.type = T_CreateTrigStmt,
-				.row = false,
-				/* Using OR REPLACE option introduced on Postgres 14 */
-				.replace = true,
-				.timing = TRIGGER_TYPE_BEFORE,
-				.trigname = "chunk_merge",
-				.relation =	makeRangeVar(schemaname, tablename, -1),
-				.funcname = list_make2(makeString(FUNCTIONS_SCHEMA_NAME),
-									   makeString("chunk_modify_blocker")),
-				.args = NIL, /* to be filled in later */
-				.events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE | TRIGGER_TYPE_DELETE |
-						  TRIGGER_TYPE_TRUNCATE,
-			};
-
-			ObjectAddress trigaddr = CreateTrigger(&stmt,
-												   NULL,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   NULL,
-												   true, /* isInternal */
-												   false); /* inPartition */
-
-			MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
-
-			if (NULL == blocker_triggers)
-				blocker_triggers = new_object_addresses();
-
-			add_exact_object_address(&trigaddr, blocker_triggers);
-			MemoryContextSwitchTo(oldmcxt);
-
-
-			// TODO: Take ExclusiveLock session lock on rel to block inserts across transactions
-		}
 	}
 
-	if (concurrently)
-	{
-		/* Start new transaction to publish trigger and release locks */
-		if (SPI_inside_nonatomic_context())
-		{
-			/*
-			 * Commit and retain transaction semantics. The commit_and_chain
-			 * call will automatically start a new transaction.
-			 */
-			SPI_commit_and_chain();
-		}
-		else
-		{
-			PopActiveSnapshot();
-			CommitTransactionCommand();
-			StartTransactionCommand();
-		}
-	}
-	
 	/*
 	 * Now merge all the data into a new temporary heap relation. Do it
 	 * separately for the non-compressed and compressed relations.
@@ -1200,59 +1332,33 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	if (concurrently)
 	{
-		LOCKTAG tag;
 		char *new_heap_name;
-		char *new_cheap_name = NULL;
+		char *new_cheap_name;
 
 		new_heap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_relid));
 
 		if (OidIsValid(new_crelid))
 			new_cheap_name = MemoryContextStrdup(PortalContext, get_rel_name(new_crelid));
-#if 0
-		ObjectAddresses *triggers;
+
 		MemoryContext oldmcxt = MemoryContextSwitchTo(PortalContext);
-		triggers = new_object_addresses();
+		blocker_triggers = new_object_addresses();
 		MemoryContextSwitchTo(oldmcxt);
 
-		/* Freeze all chunks before starting new transaction */
 		for (int i = 0; i < nrelids; i++)
 		{
 			Chunk *chunk = relinfos[i].chunk;
+			ObjectAddress trigaddr = add_blocking_trigger(chunk);
 
-			/* TODO: Also add trigger on compressed chunk since it can receive
-			 * direct inserts, updates or be recompressed */
-			CreateTrigStmt stmt = {
-				.type = T_CreateTrigStmt,
-				.row = false,
-				/* Using OR REPLACE option introduced on Postgres 14 */
-				.replace = true,
-				.timing = TRIGGER_TYPE_BEFORE,
-				.trigname = "chunk_merge",
-				.relation =
-					makeRangeVar(NameStr(chunk->fd.schema_name), NameStr(chunk->fd.table_name), -1),
-				.funcname = list_make2(makeString(FUNCTIONS_SCHEMA_NAME),
-									   makeString("chunk_modify_blocker")),
-				.args = NIL, /* to be filled in later */
-				.events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE | TRIGGER_TYPE_DELETE |
-						  TRIGGER_TYPE_TRUNCATE,
-			};
-
-			ObjectAddress trigaddr = CreateTrigger(&stmt,
-												   NULL,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   InvalidOid,
-												   NULL,
-												   false,
-												   false);
-
-			add_exact_object_address(&trigaddr, triggers);
-			ts_chunk_set_frozen(chunk);
+			/* Only need to save trigger Oid for result relation since other
+			 * rels and triggers will be dropped */
+			if (i == mergeindex)
+			{
+				oldmcxt = MemoryContextSwitchTo(PortalContext);
+				add_exact_object_address(&trigaddr, blocker_triggers);
+				MemoryContextSwitchTo(oldmcxt);
+			}
 		}
-#endif
+
 		/*
 		 * Check if we are being called from another procedure that has an SPI
 		 * context. In that case, we need to use SPI calls to start a new
@@ -1273,146 +1379,9 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			StartTransactionCommand();
 		}
 
-		/*
-		 * Now wait.  This ensures that all queries that were planned
-		 * including the partition are finished before we finalize the merge
-		 * and change catalog entries.  We don't need or indeed want to
-		 * acquire this lock, though -- that would block later queries.
-		 *
-		 * We don't need to concern ourselves with waiting for a lock on the
-		 * partition itself, since we will acquire AccessExclusiveLock below.
-		 */
-		SET_LOCKTAG_RELATION(tag, MyDatabaseId, hypertable_relid);
-		WaitForLockersMultiple(list_make1(&tag), AccessExclusiveLock, false);
-
-		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
-
-		Relation hyper_rel = try_relation_open(hypertable_relid, ShareUpdateExclusiveLock);
-
-		for (int i = 0; i < nrelids; i++)
-		{
-			RelationMergeInfo *rmi = &relinfos[i];
-			RelationMergeInfo *crmi = &crelinfos[i];
-
-			rmi->rel = try_table_open(rmi->relid, AccessExclusiveLock);
-
-			if (OidIsValid(crmi->relid))
-				crmi->rel = try_relation_open(crmi->relid, AccessExclusiveLock);
-
-			if (NULL == hyper_rel)
-			{
-				if (NULL != rmi->rel)
-					elog(WARNING,
-						 "dangling chunk \"%s\" remains, can't fix",
-						 RelationGetRelationName(rmi->rel));
-
-				if (NULL != crmi->rel)
-					elog(WARNING,
-						 "dangling compressed chunk \"%s\" remains, can't fix",
-						 RelationGetRelationName(crmi->rel));
-
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("hypertable \"%s\" was removed concurrently",
-								NameStr(hypertable_name))));
-			}
-
-			if (NULL == rmi->rel)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("chunk \"%s\" was removed concurrently",
-								NameStr(rmi->chunk->fd.table_name))));
-
-			if (OidIsValid(crmi->relid) && NULL == crmi->rel)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("chunk \"%s\" was removed concurrently",
-								NameStr(crmi->chunk->fd.table_name))));
-			/* Re-lock toast tables, heap swap expects it */
-			if (OidIsValid(rmi->rel->rd_rel->reltoastrelid))
-				LockRelationOid(rmi->rel->rd_rel->reltoastrelid, AccessExclusiveLock);
-
-			if (NULL != crmi->rel && OidIsValid(crmi->rel->rd_rel->reltoastrelid))
-				LockRelationOid(crmi->rel->rd_rel->reltoastrelid, AccessExclusiveLock);
-
-			/* Check that chunk is still frozen as a pre-requisite */
-			if (!ts_chunk_is_frozen(rmi->chunk))
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("chunk \"%s\" might have been modified concurrently",
-								NameStr(crmi->chunk->fd.table_name))));
-
-			/* Chunk is locked again, so we can unfreeze it */
-			ts_chunk_unset_frozen(rmi->chunk);
-
-			/* Now that we know the relations still exist, they can be
-			 * closed. We just need the locks. */
-			table_close(rmi->rel, NoLock);
-			rmi->rel = NULL;
-
-			if (NULL != crmi->rel)
-			{
-				table_close(crmi->rel, NoLock);
-				crmi->rel = NULL;
-			}
-		}
-
-		table_close(hyper_rel, NoLock);
-
-		/*
-		 * Re-lock the new heaps, including any toast tables.
-		 */
-		Relation new_rel = try_table_open(new_relid, AccessExclusiveLock);
-
-		if (NULL == new_rel)
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("new heap \"%s\" was removed concurrently", new_heap_name)));
-
-		if (OidIsValid(new_rel->rd_rel->reltoastrelid))
-		{
-			Relation new_toast_rel =
-				table_open(new_rel->rd_rel->reltoastrelid, AccessExclusiveLock);
-			List *indexes = RelationGetIndexList(new_toast_rel);
-			ListCell *lc;
-
-			foreach (lc, indexes)
-			{
-				Oid indexrelid = lfirst_oid(lc);
-				LockRelationOid(indexrelid, AccessExclusiveLock);
-			}
-			table_close(new_toast_rel, NoLock);
-		}
-
-		table_close(new_rel, NoLock);
-
-		if (OidIsValid(new_crelid))
-		{
-			Relation new_crel = try_table_open(new_crelid, AccessExclusiveLock);
-
-			if (NULL == new_crel)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("new compressed heap \"%s\" was removed concurrently",
-								new_cheap_name)));
-			if (OidIsValid(new_crel->rd_rel->reltoastrelid))
-			{
-				Relation new_toast_crel =
-					table_open(new_crel->rd_rel->reltoastrelid, AccessExclusiveLock);
-
-				List *indexes = RelationGetIndexList(new_toast_crel);
-				ListCell *lc;
-
-				foreach (lc, indexes)
-				{
-					Oid indexrelid = lfirst_oid(lc);
-					LockRelationOid(indexrelid, AccessExclusiveLock);
-				}
-				table_close(new_toast_crel, NoLock);
-			}
-
-			table_close(new_crel, NoLock);
-		}
+		wait_and_acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, AccessExclusiveLock);
+		lock_new_heaps(new_relid, new_crelid, new_heap_name, new_cheap_name, AccessExclusiveLock);
+		PushActiveSnapshot(GetTransactionSnapshot());
 	}
 	else
 	{
@@ -1436,6 +1405,15 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		chunk_update_constraints(result_minfo->chunk, merged_cube);
 		ts_hypercube_free(merged_cube);
 	}
+
+	if (blocker_triggers != NULL)
+	{
+		performMultipleDeletions(blocker_triggers, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
+		free_object_addresses(blocker_triggers);
+	}
+
+	if (concurrently)
+		PopActiveSnapshot();
 
 	pfree(relids);
 	pfree(nulls);
