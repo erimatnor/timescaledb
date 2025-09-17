@@ -87,7 +87,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 		 * locking the hypertable. This serves as a fast path for the usual case
 		 * where the chunk already exists.
 		 */
-		chunk = ts_hypertable_find_chunk_for_point(ctr->hypertable, point);
+		chunk = ts_hypertable_find_chunk_for_point(ctr->hypertable, point, true);
 
 		/*
 		 * Frozen chunks require at least PG14.

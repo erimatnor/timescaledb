@@ -29,6 +29,7 @@
 #include <funcapi.h>
 #include <miscadmin.h>
 #include <nodes/execnodes.h>
+#include <nodes/lockoptions.h>
 #include <nodes/makefuncs.h>
 #include <storage/lmgr.h>
 #include <tcop/tcopprot.h>
@@ -121,6 +122,7 @@ typedef struct ChunkStubScanCtx
 {
 	ChunkStub *stub;
 	Chunk *chunk;
+	const ScanTupLock *slice_lock;
 	bool is_dropped;
 } ChunkStubScanCtx;
 
@@ -139,7 +141,7 @@ static int chunk_scan_ctx_foreach_chunk_stub(ChunkScanCtx *ctx, on_chunk_stub_fu
 											 uint64 limit);
 static Datum show_chunks_return_srf(FunctionCallInfo fcinfo);
 static int chunk_cmp(const void *ch1, const void *ch2);
-static int chunk_point_find_chunk_id(const Hypertable *ht, const Point *p);
+static int chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices);
 static void init_scan_by_qualified_table_name(ScanIterator *iterator, const char *schema_name,
 											  const char *table_name);
 static Chunk *get_chunks_in_time_range(Hypertable *ht, int64 older_than, int64 newer_than,
@@ -174,8 +176,12 @@ chunk_formdata_make_tuple(const FormData_chunk *fd, TupleDesc desc)
 	values[AttrNumberGetAttrOffset(Anum_chunk_status)] = Int32GetDatum(fd->status);
 	values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)] = BoolGetDatum(fd->osm_chunk);
 	values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)] = Int64GetDatum(fd->creation_time);
-	values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)] =
-		ObjectIdGetDatum(fd->pending_merge_oid);
+
+	if (fd->pending_merge_oid == InvalidOid)
+		nulls[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)] = true;
+	else
+		values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)] =
+			ObjectIdGetDatum(fd->pending_merge_oid);
 
 	return heap_form_tuple(desc, values, nulls);
 }
@@ -217,8 +223,12 @@ ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti)
 	fd->status = DatumGetInt32(values[AttrNumberGetAttrOffset(Anum_chunk_status)]);
 	fd->osm_chunk = DatumGetBool(values[AttrNumberGetAttrOffset(Anum_chunk_osm_chunk)]);
 	fd->creation_time = DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_chunk_creation_time)]);
-	fd->pending_merge_oid =
-		DatumGetObjectId(values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)]);
+
+	if (nulls[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)])
+		fd->pending_merge_oid = InvalidOid;
+	else
+		fd->pending_merge_oid =
+			DatumGetObjectId(values[AttrNumberGetAttrOffset(Anum_chunk_pending_merge_oid)]);
 
 	if (should_free)
 		heap_freetuple(tuple);
@@ -1345,16 +1355,24 @@ ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const 
  * for share. NULL if not found.
  */
 Chunk *
-ts_chunk_find_for_point(const Hypertable *ht, const Point *p)
+ts_chunk_find_for_point(const Hypertable *ht, const Point *p, bool lock_slices)
 {
-	int chunk_id = chunk_point_find_chunk_id(ht, p);
+	elog(NOTICE, "finding chunk for point lock slices %d", lock_slices);
+	int chunk_id = chunk_point_find_chunk_id(ht, p, lock_slices);
 	if (chunk_id == INVALID_CHUNK_ID)
 	{
 		return NULL;
 	}
+	ScanTupLock slice_lock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
 
 	/* The chunk might be dropped, so we don't fail if we haven't found it. */
-	return ts_chunk_get_by_id(chunk_id, /* fail_if_not_found = */ false);
+	return ts_chunk_get_by_id_with_slice_lock(chunk_id,
+											  lock_slices ? &slice_lock : NULL,
+											  /* fail_if_not_found = */ false);
 }
 
 /*
@@ -1380,7 +1398,7 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, const char *sche
 	 * lock. The returned chunk will have all slices locked so that they
 	 * aren't removed.
 	 */
-	int chunk_id = chunk_point_find_chunk_id(ht, p);
+	int chunk_id = chunk_point_find_chunk_id(ht, p, true);
 	if (chunk_id != INVALID_CHUNK_ID)
 	{
 		/* The chunk might be dropped, so we don't fail if we haven't found it. */
@@ -1560,7 +1578,8 @@ ts_chunk_create_base(int32 id, int16 num_constraints, const char relkind)
  * rescanned/recreated.
  */
 Chunk *
-ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkStub *stub)
+ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkStub *stub,
+								   const ScanTupLock *slice_lock)
 {
 	Chunk *chunk = NULL;
 	int num_constraints_hint = stub ? stub->constraints->num_constraints : 2;
@@ -1603,9 +1622,11 @@ ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkS
 	}
 	else
 	{
-		ScanIterator it = ts_dimension_slice_scan_iterator_create(NULL, ti->mctx);
+		elog(NOTICE, "slice iterator create slice_lock %d", slice_lock != NULL);
+		ScanIterator it = ts_dimension_slice_scan_iterator_create(slice_lock, ti->mctx);
 		chunk->cube = ts_hypercube_from_constraints(chunk->constraints, &it);
 		ts_scan_iterator_close(&it);
+		elog(NOTICE, "iterator close");
 	}
 
 	return chunk;
@@ -1630,9 +1651,12 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 	ChunkStubScanCtx *stubctx = arg;
 	Chunk *chunk;
 
-	chunk = ts_chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub);
+	elog(NOTICE, "build from stub");
+	chunk =
+		ts_chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub, stubctx->slice_lock);
 	Assert(!chunk->fd.dropped);
 
+	elog(NOTICE, "fill in hyper relid");
 	/* Fill in table relids. Note that we cannot do this in
 	 * ts_chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
 	 * that function and, in that case, the chunk object is needed to create
@@ -1882,11 +1906,16 @@ chunk_resurrect(const Hypertable *ht, int chunk_id)
 	{
 		TupleInfo *ti = ts_scan_iterator_tuple_info(&iterator);
 		HeapTuple new_tuple;
+		ScanTupLock slice_lock = {
+			.lockmode = LockTupleKeyShare,
+			.waitpolicy = LockWaitBlock,
+		};
 
 		Assert(count == 0 && chunk == NULL);
 		chunk = ts_chunk_build_from_tuple_and_stub(/* chunkptr = */ NULL,
 												   ti,
-												   /* stub = */ NULL);
+												   /* stub = */ NULL,
+												   &slice_lock);
 		Assert(chunk->fd.dropped);
 
 		/* Create data table and related objects */
@@ -1946,7 +1975,7 @@ chunk_resurrect(const Hypertable *ht, int chunk_id)
  * case it needs to live beyond the lifetime of the other data.
  */
 static int
-chunk_point_find_chunk_id(const Hypertable *ht, const Point *p)
+chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices)
 {
 	int matching_chunk_id = 0;
 
@@ -1961,9 +1990,11 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p)
 	{
 		ts_dimension_slice_scan_list(ctx.ht->space->dimensions[dimension_index].fd.id,
 									 p->coordinates[dimension_index],
-									 &all_slices);
+									 &all_slices,
+									 lock_slices);
 	}
 
+	elog(NOTICE, "Found slice list");
 	/* Find constraints matching dimension slices. */
 	ScanIterator iterator = ts_chunk_constraint_scan_iterator_create(CurrentMemoryContext);
 
@@ -2020,6 +2051,7 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p)
 
 	ts_scan_iterator_close(&iterator);
 
+	elog(NOTICE, "done slice list");
 	chunk_scan_ctx_destroy(&ctx);
 
 	return matching_chunk_id;
@@ -2446,9 +2478,12 @@ ts_chunk_get_window(int32 dimension_id, int64 point, int count, MemoryContext mc
 
 static Chunk *
 chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mctx,
-				bool fail_if_not_found, const DisplayKeyData displaykey[])
+				const ScanTupLock *slice_lock, bool fail_if_not_found,
+				const DisplayKeyData displaykey[])
 {
-	ChunkStubScanCtx stubctx = { 0 };
+	ChunkStubScanCtx stubctx = {
+		.slice_lock = slice_lock,
+	};
 	Chunk *chunk;
 	int num_found;
 
@@ -2462,6 +2497,8 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 									ForwardScanDirection,
 									AccessShareLock,
 									mctx);
+
+	elog(NOTICE, "scan internal done");
 	Assert(num_found == 0 || (num_found == 1 && !stubctx.is_dropped));
 	chunk = stubctx.chunk;
 
@@ -2507,6 +2544,11 @@ ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *ta
 		[0] = { .name = "schema_name", .as_string = DatumGetNameString },
 		[1] = { .name = "table_name", .as_string = DatumGetNameString },
 	};
+	ScanTupLock slice_lock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
 
 	/* Early check for rogue input */
 	if (schema_name == NULL || table_name == NULL)
@@ -2543,6 +2585,7 @@ ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *ta
 						   scankey,
 						   2,
 						   mctx,
+						   &slice_lock,
 						   fail_if_not_found,
 						   displaykey);
 }
@@ -2593,7 +2636,7 @@ DatumGetInt32AsString(Datum datum)
 }
 
 Chunk *
-ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
+ts_chunk_get_by_id_with_slice_lock(int32 id, const ScanTupLock *slice_lock, bool fail_if_not_found)
 {
 	ScanKeyData scankey[1];
 	static const DisplayKeyData displaykey[1] = {
@@ -2605,12 +2648,25 @@ ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
 	 */
 	ScanKeyInit(&scankey[0], Anum_chunk_idx_id, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(id));
 
+	elog(NOTICE, "find chunk lock_slice=%d", slice_lock != NULL);
 	return chunk_scan_find(CHUNK_ID_INDEX,
 						   scankey,
 						   1,
 						   CurrentMemoryContext,
+						   slice_lock,
 						   fail_if_not_found,
 						   displaykey);
+}
+
+Chunk *
+ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
+{
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
+	return ts_chunk_get_by_id_with_slice_lock(id, &tuplock, fail_if_not_found);
 }
 
 /*
@@ -2913,10 +2969,8 @@ chunk_tuple_delete(TupleInfo *ti, Oid relid, DropBehavior behavior, bool preserv
 				 * - T1: Adds a chunk constraint referencing dimension
 				 *   slice X (which is about to be deleted by T2).
 				 */
-				ScanTupLock tuplock = {
-					.lockmode = LockTupleExclusive,
-					.waitpolicy = LockWaitBlock,
-				};
+				ScanTupLock tuplock = { .lockmode = LockTupleExclusive,
+										.waitpolicy = LockWaitBlock };
 				DimensionSlice *slice =
 					ts_dimension_slice_scan_by_id_and_lock(cc->fd.dimension_slice_id,
 														   &tuplock,
@@ -5385,4 +5439,18 @@ ts_chunk_modify_blocker(PG_FUNCTION_ARGS)
 			 errhint("Make sure the merge operation completes before modifying the chunk.")));
 
 	PG_RETURN_NULL();
+}
+
+void
+ts_chunk_set_pending_merge_rel(int32 chunk_id, Oid new_relid)
+{
+	FormData_chunk form;
+	ItemPointerData tid;
+	bool PG_USED_FOR_ASSERTS_ONLY found;
+
+	found = lock_chunk_tuple(chunk_id, &tid, &form);
+	Assert(found);
+
+	form.pending_merge_oid = new_relid;
+	chunk_update_catalog_tuple(&tid, &form);
 }

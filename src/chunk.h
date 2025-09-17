@@ -156,7 +156,7 @@ extern ChunkVec *ts_chunk_vec_add_from_tuple(ChunkVec **chunks, TupleInfo *ti);
 #define DEFAULT_CHUNK_VEC_SIZE 10
 
 extern void ts_chunk_formdata_fill(FormData_chunk *fd, const TupleInfo *ti);
-extern Chunk *ts_chunk_find_for_point(const Hypertable *ht, const Point *p);
+extern Chunk *ts_chunk_find_for_point(const Hypertable *ht, const Point *p, bool lock_slices);
 extern Chunk *ts_chunk_create_for_point(const Hypertable *ht, const Point *p, const char *schema,
 										const char *prefix);
 List *ts_chunk_id_find_in_subspace(Hypertable *ht, List *dimension_vecs);
@@ -172,6 +172,9 @@ extern TSDLLEXPORT void ts_chunk_insert_lock(const Chunk *chunk, LOCKMODE lock);
 
 extern TSDLLEXPORT Oid ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht,
 											 const char *tablespacename, Oid amoid);
+extern TSDLLEXPORT Chunk *
+ts_chunk_get_by_id_with_slice_lock(int32 id, const ScanTupLock *slice_lock, bool fail_if_not_found);
+
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_id(int32 id, bool fail_if_not_found);
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found);
 extern TSDLLEXPORT void ts_chunk_free(Chunk *chunk);
@@ -237,7 +240,8 @@ extern TSDLLEXPORT int64 ts_chunk_primary_dimension_start(const Chunk *chunk);
 
 extern TSDLLEXPORT int64 ts_chunk_primary_dimension_end(const Chunk *chunk);
 extern Chunk *ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti,
-												 const ChunkStub *stub);
+												 const ChunkStub *stub,
+												 const ScanTupLock *slice_lock);
 
 extern ScanIterator ts_chunk_scan_iterator_create(MemoryContext result_mcxt);
 extern void ts_chunk_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id);
@@ -309,3 +313,4 @@ extern TSDLLEXPORT void ts_chunk_detach_by_relid(Oid relid);
 extern TSDLLEXPORT bool ts_chunk_clear_status(Chunk *chunk, int32 status);
 extern bool ts_osm_chunk_range_is_invalid(int64 range_start, int64 range_end);
 extern int32 ts_chunk_get_osm_slice_id(int32 chunk_id, int32 time_dim_id);
+extern TSDLLEXPORT void ts_chunk_set_pending_merge_rel(int32 chunk_id, Oid new_relid);

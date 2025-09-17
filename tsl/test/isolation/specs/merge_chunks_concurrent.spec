@@ -60,7 +60,7 @@ teardown {
 session "s1"
 setup	{
     set local lock_timeout = '5000ms';
-    set local deadlock_timeout = '10ms';
+    set local deadlock_timeout = '10000ms';
 }
 
 # The transaction will not "pick" a snapshot until the first query, so
@@ -72,7 +72,7 @@ step "s1_begin" {
     select count(*) > 0 from pg_class;
 }
 
-step "s1_show_chunks" { select count(*) from show_chunks('readings'); }
+step "s1_show_chunks" { select count(*) from show_chunks('readings'); select * from _timescaledb_catalog.chunk; }
 step "s1_show_data" {
     select * from readings order by time desc, device;
     select count(*) as num_device_all, count(*) filter (where device=1) as num_device_1, count(*) filter (where device=5) as num_device_5 from readings;
@@ -105,7 +105,7 @@ step "s2_set_lock_upgrade_conditional" {
 session "s3"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '100ms';
+    set local deadlock_timeout = '10000ms';
 }
 
 step "s3_begin" {
@@ -124,6 +124,10 @@ step "s3_merge_chunks" {
 step "s3_modify" {
     delete from readings where device=1;
     insert into readings values ('2024-01-01 01:05', 5, 5.0);
+}
+
+step "s3_insert_chunk_to_be_dropped" {
+    insert into readings values ('2024-01-01 02:10', 5, 5.0);
 }
 
 #step "s3_compress_chunks" {
@@ -150,6 +154,26 @@ step "s4_wp_release" { SELECT debug_waitpoint_release('merge_chunks_before_heap_
 
 step "s4_wp_concurrent_enable" { SELECT debug_waitpoint_enable('merge_chunks_after_concurrent_wait'); }
 step "s4_wp_concurrent_release" { SELECT debug_waitpoint_release('merge_chunks_after_concurrent_wait'); }
+
+step "s4_wp_c_enable" { SELECT debug_waitpoint_enable('merge_chunks_before_first_commit'); }
+step "s4_wp_c_release" { SELECT debug_waitpoint_release('merge_chunks_before_first_commit'); }
+
+step "s4_wp_e_enable" { SELECT debug_waitpoint_enable('merge_chunks_before_exit'); }
+step "s4_wp_e_release" { SELECT debug_waitpoint_release('merge_chunks_before_exit'); }
+
+session "s5"
+setup	{
+    set local lock_timeout = '500ms';
+    set local deadlock_timeout = '10000ms';
+}
+
+step "s5_insert_chunk_remaining_after_merge" {
+    insert into readings values ('2024-01-01 01:01', 6, 6.0);
+}
+
+step "s5_show_temp_rels" {
+    select oid from pg_class where relname like 'pg_temp%';
+}
 
 # Run 4 backends:
 #
@@ -205,4 +229,8 @@ permutation "s4_wp_enable" "s2_merge_chunks" "s3_merge_chunks" "s4_wp_release" "
 #permutation "s4_wp_enable" "s2_merge_chunks" "s3_drop_chunks" "s4_wp_release" "s1_show_data" "s1_show_chunks"
 
 # Reader should not be blocked by concurrent merge
-permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s3_modify" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+permutation "s4_wp_concurrent_enable" "s4_wp_c_enable" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "s4_wp_c_release" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+
+#permutation "s4_wp_e_enable" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "s4_wp_e_release" "s1_show_data" "s1_show_chunks"
+
+#permutation "s4_wp_concurrent_enable" "s2_merge_chunks_concurrently" "s5_insert_chunk_remaining_after_merge" "s1_show_chunks" "s1_show_data" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
