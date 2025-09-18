@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include <storage/lockdefs.h>
 #include <utils/rls.h>
 
 #include "chunk_insert_state.h"
@@ -78,6 +79,8 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 	{
 		bool chunk_created = false;
 		bool needs_partial = false;
+		LOCKMODE lockmode =
+			ctr->create_compressed_chunk ? ShareUpdateExclusiveLock : RowExclusiveLock;
 
 		/*
 		 * Normally, for every row of the chunk except the first one, we expect
@@ -87,7 +90,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 		 * locking the hypertable. This serves as a fast path for the usual case
 		 * where the chunk already exists.
 		 */
-		chunk = ts_hypertable_find_chunk_for_point(ctr->hypertable, point, true);
+		chunk = ts_hypertable_find_chunk_for_point(ctr->hypertable, point, lockmode);
 
 		/*
 		 * Frozen chunks require at least PG14.
@@ -97,6 +100,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot INSERT into frozen chunk \"%s\"",
 							get_rel_name(chunk->table_id))));
+
 		if (chunk && IS_OSM_CHUNK(chunk))
 		{
 			const Dimension *time_dim = hyperspace_get_open_dimension(ctr->hypertable->space, 0);
@@ -104,7 +108,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("Cannot insert into tiered chunk range of %s.%s - attempt to create "
+					 errmsg("cannot insert into tiered chunk range of %s.%s - attempt to create "
 							"new chunk "
 							"with range  [%s %s] failed",
 							NameStr(ctr->hypertable->fd.schema_name),
@@ -119,7 +123,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 
 		if (!chunk)
 		{
-			chunk = ts_hypertable_create_chunk_for_point(ctr->hypertable, point);
+			chunk = ts_hypertable_create_chunk_for_point(ctr->hypertable, point, lockmode);
 			chunk_created = true;
 		}
 
@@ -132,6 +136,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 			 * chunk to synchronize with other concurrent insert operations trying to
 			 * create the same compressed chunk.
 			 */
+			/* TODO: this lock and chunk lookup should not be needed anymore */
 			LockRelationOid(chunk->table_id, ShareUpdateExclusiveLock);
 			chunk = ts_chunk_get_by_id(chunk->fd.id, CACHE_FLAG_NONE);
 			/* recheck whether compressed chunk exists after acquiring the lock */

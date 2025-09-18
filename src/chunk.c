@@ -8,6 +8,7 @@
 #include <access/htup.h>
 #include <access/htup_details.h>
 #include <access/reloptions.h>
+#include <access/table.h>
 #include <access/tupdesc.h>
 #include <access/xact.h>
 #include <catalog/indexing.h>
@@ -32,6 +33,7 @@
 #include <nodes/lockoptions.h>
 #include <nodes/makefuncs.h>
 #include <storage/lmgr.h>
+#include <storage/lockdefs.h>
 #include <tcop/tcopprot.h>
 #include <utils/acl.h>
 #include <utils/array.h>
@@ -122,8 +124,10 @@ typedef struct ChunkStubScanCtx
 {
 	ChunkStub *stub;
 	Chunk *chunk;
+	LOCKMODE chunk_lockmode;
 	const ScanTupLock *slice_lock;
 	bool is_dropped;
+	bool is_locked;
 } ChunkStubScanCtx;
 
 static bool
@@ -141,7 +145,6 @@ static int chunk_scan_ctx_foreach_chunk_stub(ChunkScanCtx *ctx, on_chunk_stub_fu
 											 uint64 limit);
 static Datum show_chunks_return_srf(FunctionCallInfo fcinfo);
 static int chunk_cmp(const void *ch1, const void *ch2);
-static int chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices);
 static void init_scan_by_qualified_table_name(ScanIterator *iterator, const char *schema_name,
 											  const char *table_name);
 static Chunk *get_chunks_in_time_range(Hypertable *ht, int64 older_than, int64 newer_than,
@@ -1355,13 +1358,13 @@ ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const 
  * for share. NULL if not found.
  */
 Chunk *
-ts_chunk_find_for_point(const Hypertable *ht, const Point *p, bool lock_slices)
+ts_chunk_find_for_point(const Hypertable *ht, const Point *p, LOCKMODE lockmode)
 {
-	int chunk_id = chunk_point_find_chunk_id(ht, p, lock_slices);
+	int32 chunk_id = ts_chunk_point_find_chunk_id(ht, p, false);
+
 	if (chunk_id == INVALID_CHUNK_ID)
-	{
 		return NULL;
-	}
+
 	ScanTupLock slice_lock = {
 		.lockmode = LockTupleKeyShare,
 		.waitpolicy = LockWaitBlock,
@@ -1370,16 +1373,20 @@ ts_chunk_find_for_point(const Hypertable *ht, const Point *p, bool lock_slices)
 
 	/* The chunk might be dropped, so we don't fail if we haven't found it. */
 	return ts_chunk_get_by_id_with_slice_lock(chunk_id,
-											  lock_slices ? &slice_lock : NULL,
+											  lockmode,
+											  lockmode == NoLock ? NULL : &slice_lock,
 											  /* fail_if_not_found = */ false);
 }
 
 /*
  * Create a chunk through insertion of a tuple at a given point.
+ *
+ * If some other process managed to create the chunk before us, the existing
+ * chunk is locked with "chunk_lockmode".
  */
 Chunk *
 ts_chunk_create_for_point(const Hypertable *ht, const Point *p, const char *schema,
-						  const char *prefix)
+						  const char *prefix, LOCKMODE chunk_lockmode)
 {
 	/*
 	 * We're going to have to resurrect or create the chunk.
@@ -1397,11 +1404,12 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, const char *sche
 	 * lock. The returned chunk will have all slices locked so that they
 	 * aren't removed.
 	 */
-	int chunk_id = chunk_point_find_chunk_id(ht, p, true);
+	int chunk_id = ts_chunk_point_find_chunk_id(ht, p, false);
 	if (chunk_id != INVALID_CHUNK_ID)
 	{
 		/* The chunk might be dropped, so we don't fail if we haven't found it. */
-		Chunk *chunk = ts_chunk_get_by_id(chunk_id, /* fail_if_not_found = */ false);
+		Chunk *chunk =
+			ts_chunk_get_by_id_locked(chunk_id, chunk_lockmode, /* fail_if_not_found = */ false);
 		if (chunk != NULL)
 		{
 			/*
@@ -1634,12 +1642,42 @@ chunk_tuple_dropped_filter(const TupleInfo *ti, void *arg)
 {
 	ChunkStubScanCtx *stubctx = arg;
 	bool isnull;
-	Datum dropped = slot_getattr(ti->slot, Anum_chunk_dropped, &isnull);
+	Datum dropped;
 
+	dropped = slot_getattr(ti->slot, Anum_chunk_dropped, &isnull);
 	Assert(!isnull);
+
 	stubctx->is_dropped = DatumGetBool(dropped);
 
-	return stubctx->is_dropped ? SCAN_EXCLUDE : SCAN_INCLUDE;
+	if (stubctx->is_dropped)
+		return SCAN_EXCLUDE;
+
+	stubctx->is_locked = false;
+
+	if (stubctx->chunk_lockmode != NoLock)
+	{
+		Datum schema_name;
+		Datum table_name;
+		const RangeVar *rv;
+
+		schema_name = slot_getattr(ti->slot, Anum_chunk_schema_name, &isnull);
+		Assert(!isnull);
+		table_name = slot_getattr(ti->slot, Anum_chunk_table_name, &isnull);
+		Assert(!isnull);
+
+		rv = makeRangeVar(NameStr(*DatumGetName(schema_name)),
+						  NameStr(*DatumGetName(table_name)),
+						  -1);
+		Relation rel = table_openrv_extended(rv, stubctx->chunk_lockmode, true);
+
+		if (!rel)
+			return SCAN_EXCLUDE;
+
+		stubctx->is_locked = true;
+		table_close(rel, NoLock);
+	}
+
+	return SCAN_INCLUDE;
 }
 
 static ScanTupleResult
@@ -1650,6 +1688,10 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 
 	chunk =
 		ts_chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub, stubctx->slice_lock);
+
+	if (!chunk)
+		return SCAN_DONE;
+
 	Assert(!chunk->fd.dropped);
 
 	/* Fill in table relids. Note that we cannot do this in
@@ -1969,10 +2011,10 @@ chunk_resurrect(const Hypertable *ht, int chunk_id)
  * context. The returned chunk needs to be copied into another memory context in
  * case it needs to live beyond the lifetime of the other data.
  */
-static int
-chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices)
+int32
+ts_chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices)
 {
-	int matching_chunk_id = 0;
+	int32 matching_chunk_id = 0;
 
 	/* The scan context will keep the state accumulated during the scan */
 	ChunkScanCtx ctx;
@@ -2471,11 +2513,12 @@ ts_chunk_get_window(int32 dimension_id, int64 point, int count, MemoryContext mc
 
 static Chunk *
 chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mctx,
-				const ScanTupLock *slice_lock, bool fail_if_not_found,
+				LOCKMODE chunk_lockmode, const ScanTupLock *slice_lock, bool fail_if_not_found,
 				const DisplayKeyData displaykey[])
 {
 	ChunkStubScanCtx stubctx = {
 		.slice_lock = slice_lock,
+		.chunk_lockmode = chunk_lockmode,
 	};
 	Chunk *chunk;
 	int num_found;
@@ -2517,7 +2560,10 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 			}
 			break;
 		case 1:
-			ASSERT_IS_VALID_CHUNK(chunk);
+			if (chunk)
+			{
+				ASSERT_IS_VALID_CHUNK(chunk);
+			}
 			break;
 		default:
 			elog(ERROR, "expected a single chunk, found %d", num_found);
@@ -2528,7 +2574,8 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 
 Chunk *
 ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *table_name,
-										 MemoryContext mctx, bool fail_if_not_found)
+										 LOCKMODE chunk_lockmode, MemoryContext mctx,
+										 bool fail_if_not_found)
 {
 	NameData schema, table;
 	ScanKeyData scankey[2];
@@ -2560,6 +2607,28 @@ ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *ta
 	namestrcpy(&table, table_name);
 
 	/*
+	 * Check that the table actually exists and get a lock, unless no lock
+	 * requested.
+	 */
+	if (chunk_lockmode != NoLock)
+	{
+		RangeVar *rv = makeRangeVar(NameStr(schema), NameStr(table), -1);
+		Relation rel = table_openrv_extended(rv, chunk_lockmode, true);
+
+		if (!rel)
+		{
+			if (fail_if_not_found)
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("chunk not found"),
+						 errdetail("schema_name: %s, table_name: %s", schema_name, table_name)));
+			return NULL;
+		}
+
+		table_close(rel, NoLock);
+	}
+
+	/*
 	 * Perform an index scan on chunk name.
 	 */
 	ScanKeyInit(&scankey[0],
@@ -2577,13 +2646,14 @@ ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *ta
 						   scankey,
 						   2,
 						   mctx,
+						   AccessShareLock,
 						   &slice_lock,
 						   fail_if_not_found,
 						   displaykey);
 }
 
 Chunk *
-ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found)
+ts_chunk_get_by_relid_locked(Oid relid, LOCKMODE chunk_lockmode, bool fail_if_not_found)
 {
 	char *schema;
 	char *table;
@@ -2598,7 +2668,13 @@ ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found)
 
 	schema = get_namespace_name(get_rel_namespace(relid));
 	table = get_rel_name(relid);
-	return chunk_get_by_name(schema, table, fail_if_not_found);
+	return chunk_get_by_name(schema, table, chunk_lockmode, fail_if_not_found);
+}
+
+Chunk *
+ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found)
+{
+	return ts_chunk_get_by_relid_locked(relid, AccessShareLock, fail_if_not_found);
 }
 
 void
@@ -2628,7 +2704,8 @@ DatumGetInt32AsString(Datum datum)
 }
 
 Chunk *
-ts_chunk_get_by_id_with_slice_lock(int32 id, const ScanTupLock *slice_lock, bool fail_if_not_found)
+ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE lockmode, const ScanTupLock *slice_lock,
+								   bool fail_if_not_found)
 {
 	ScanKeyData scankey[1];
 	static const DisplayKeyData displaykey[1] = {
@@ -2644,20 +2721,28 @@ ts_chunk_get_by_id_with_slice_lock(int32 id, const ScanTupLock *slice_lock, bool
 						   scankey,
 						   1,
 						   CurrentMemoryContext,
+						   lockmode,
 						   slice_lock,
 						   fail_if_not_found,
 						   displaykey);
 }
 
 Chunk *
-ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
+ts_chunk_get_by_id_locked(int32 id, LOCKMODE lockmode, bool fail_if_not_found)
 {
-	ScanTupLock tuplock = {
+	ScanTupLock slice_lock = {
 		.lockmode = LockTupleKeyShare,
 		.waitpolicy = LockWaitBlock,
 		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 	};
-	return ts_chunk_get_by_id_with_slice_lock(id, &tuplock, fail_if_not_found);
+
+	return ts_chunk_get_by_id_with_slice_lock(id, lockmode, &slice_lock, fail_if_not_found);
+}
+
+Chunk *
+ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
+{
+	return ts_chunk_get_by_id_locked(id, AccessShareLock, fail_if_not_found);
 }
 
 /*
@@ -4184,6 +4269,7 @@ ts_chunk_drop_single_chunk(PG_FUNCTION_ARGS)
 
 	const Chunk *ch = ts_chunk_get_by_name_with_memory_context(chunk_schema_name,
 															   chunk_table_name,
+															   AccessExclusiveLock,
 															   CurrentMemoryContext,
 															   true);
 	Assert(ch != NULL);
