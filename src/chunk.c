@@ -2674,7 +2674,7 @@ ts_chunk_get_by_relid_locked(Oid relid, LOCKMODE chunk_lockmode, bool fail_if_no
 Chunk *
 ts_chunk_get_by_relid(Oid relid, bool fail_if_not_found)
 {
-	return ts_chunk_get_by_relid_locked(relid, AccessShareLock, fail_if_not_found);
+	return ts_chunk_get_by_relid_locked(relid, NoLock, fail_if_not_found);
 }
 
 void
