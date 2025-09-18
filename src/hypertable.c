@@ -993,8 +993,8 @@ hypertable_chunk_store_free(void *entry)
  * Add the chunk to the cache that allows fast lookup of chunks
  * for a given hyperspace Point.
  */
-static Chunk *
-hypertable_chunk_store_add(const Hypertable *h, const Chunk *input_chunk)
+Chunk *
+ts_hypertable_chunk_store_add(const Hypertable *h, const Chunk *input_chunk)
 {
 	MemoryContext old_mcxt;
 
@@ -1024,7 +1024,7 @@ ts_hypertable_create_chunk_for_point(const Hypertable *h, const Point *point)
 											 NameStr(h->fd.associated_table_prefix));
 
 	/* Also add the chunk to the hypertable's chunk store */
-	Chunk *cached_chunk = hypertable_chunk_store_add(h, chunk);
+	Chunk *cached_chunk = ts_hypertable_chunk_store_add(h, chunk);
 	return cached_chunk;
 }
 
@@ -1051,7 +1051,7 @@ ts_hypertable_find_chunk_for_point(const Hypertable *h, const Point *point, bool
 	}
 
 	/* Also add the chunk to the hypertable's chunk store */
-	Chunk *cached_chunk = hypertable_chunk_store_add(h, chunk);
+	Chunk *cached_chunk = ts_hypertable_chunk_store_add(h, chunk);
 	return cached_chunk;
 }
 

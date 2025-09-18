@@ -1357,7 +1357,6 @@ ts_chunk_find_or_create_without_cuts(const Hypertable *ht, Hypercube *hc, const 
 Chunk *
 ts_chunk_find_for_point(const Hypertable *ht, const Point *p, bool lock_slices)
 {
-	elog(NOTICE, "finding chunk for point lock slices %d", lock_slices);
 	int chunk_id = chunk_point_find_chunk_id(ht, p, lock_slices);
 	if (chunk_id == INVALID_CHUNK_ID)
 	{
@@ -1622,11 +1621,9 @@ ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti, const ChunkS
 	}
 	else
 	{
-		elog(NOTICE, "slice iterator create slice_lock %d", slice_lock != NULL);
 		ScanIterator it = ts_dimension_slice_scan_iterator_create(slice_lock, ti->mctx);
 		chunk->cube = ts_hypercube_from_constraints(chunk->constraints, &it);
 		ts_scan_iterator_close(&it);
-		elog(NOTICE, "iterator close");
 	}
 
 	return chunk;
@@ -1651,12 +1648,10 @@ chunk_tuple_found(TupleInfo *ti, void *arg)
 	ChunkStubScanCtx *stubctx = arg;
 	Chunk *chunk;
 
-	elog(NOTICE, "build from stub");
 	chunk =
 		ts_chunk_build_from_tuple_and_stub(&stubctx->chunk, ti, stubctx->stub, stubctx->slice_lock);
 	Assert(!chunk->fd.dropped);
 
-	elog(NOTICE, "fill in hyper relid");
 	/* Fill in table relids. Note that we cannot do this in
 	 * ts_chunk_build_from_tuple_and_stub() since chunk_resurrect() also uses
 	 * that function and, in that case, the chunk object is needed to create
@@ -1994,7 +1989,6 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices
 									 lock_slices);
 	}
 
-	elog(NOTICE, "Found slice list");
 	/* Find constraints matching dimension slices. */
 	ScanIterator iterator = ts_chunk_constraint_scan_iterator_create(CurrentMemoryContext);
 
@@ -2051,7 +2045,6 @@ chunk_point_find_chunk_id(const Hypertable *ht, const Point *p, bool lock_slices
 
 	ts_scan_iterator_close(&iterator);
 
-	elog(NOTICE, "done slice list");
 	chunk_scan_ctx_destroy(&ctx);
 
 	return matching_chunk_id;
@@ -2498,7 +2491,6 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 									AccessShareLock,
 									mctx);
 
-	elog(NOTICE, "scan internal done");
 	Assert(num_found == 0 || (num_found == 1 && !stubctx.is_dropped));
 	chunk = stubctx.chunk;
 
@@ -2648,7 +2640,6 @@ ts_chunk_get_by_id_with_slice_lock(int32 id, const ScanTupLock *slice_lock, bool
 	 */
 	ScanKeyInit(&scankey[0], Anum_chunk_idx_id, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(id));
 
-	elog(NOTICE, "find chunk lock_slice=%d", slice_lock != NULL);
 	return chunk_scan_find(CHUNK_ID_INDEX,
 						   scankey,
 						   1,

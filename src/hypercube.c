@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include "scanner.h"
 #include <utils/jsonb.h>
 #include <utils/numeric.h>
 
@@ -250,6 +251,26 @@ ts_hypercube_find_existing_slices(const Hypercube *cube, const ScanTupLock *tupl
 	}
 
 	return num_found;
+}
+
+static bool
+hypercube_lock(const Hypercube *cube, const ScanTupLock *slice_lock)
+{
+	int num_locked = ts_hypercube_find_existing_slices(cube, slice_lock);
+
+	return cube->num_slices == num_locked;
+}
+
+bool
+ts_hypercube_lock_for_read(const Hypercube *cube)
+{
+	ScanTupLock slice_lock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
+
+	return hypercube_lock(cube, &slice_lock);
 }
 
 /*
