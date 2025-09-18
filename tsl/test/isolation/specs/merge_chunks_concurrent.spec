@@ -72,7 +72,7 @@ step "s1_begin" {
     select count(*) > 0 from pg_class;
 }
 
-step "s1_show_chunks" { select count(*) from show_chunks('readings'); select * from _timescaledb_catalog.chunk; }
+step "s1_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s1_show_data" {
     select * from readings order by time desc, device;
     select count(*) as num_device_all, count(*) filter (where device=1) as num_device_1, count(*) filter (where device=5) as num_device_5 from readings;
