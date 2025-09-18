@@ -4,8 +4,6 @@
  * LICENSE-TIMESCALE for a copy of the license.
  */
 #include <postgres.h>
-#include "dimension_slice.h"
-#include "scanner.h"
 #include <access/multixact.h>
 #include <catalog/catalog.h>
 #include <catalog/dependency.h>
@@ -121,8 +119,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 		}
 	}
 
-	elog(NOTICE, "reindex");
-
 	Ensure(result_minfo != NULL, "no chunk to merge into found");
 	struct VacuumCutoffs *cutoffs = &result_minfo->cutoffs;
 	bool reindex = result_minfo->ind_oids_new == NIL;
@@ -194,8 +190,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 	 */
 	ObjectAddresses *objects = new_object_addresses();
 
-	elog(NOTICE, "deleting chunks");
-
 	DEBUG_WAITPOINT("merge_chunks_before_drop");
 
 	for (int i = 0; i < nrelids; i++)
@@ -226,8 +220,6 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 
 	performMultipleDeletions(objects, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
 	free_object_addresses(objects);
-
-	elog(NOTICE, "merge swap completed");
 }
 
 static int
@@ -703,8 +695,6 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 	if (result_rel == NULL)
 		return InvalidOid;
 
-	elog(NOTICE, "creating new heap for %s", RelationGetRelationName(result_rel));
-
 	Oid tablespace = result_rel->rd_rel->reltablespace;
 	struct VacuumCutoffs *merged_cutoffs = &result_minfo->cutoffs;
 
@@ -715,14 +705,12 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 								  result_minfo->relpersistence,
 								  ExclusiveLock);
 
-	elog(NOTICE, "new relid %d", new_relid);
 	Relation new_rel = table_open(new_relid, AccessExclusiveLock);
 	double total_num_tuples = 0.0;
 	FormData_compression_chunk_size merged_ccs;
 
 	memset(&merged_ccs, 0, sizeof(FormData_compression_chunk_size));
 
-	elog(NOTICE, "copying data");
 	pg17_workaround_init(new_rel, relinfos, nrelids);
 
 	/* Step 3: write the data from all the rels into a new merged heap */
@@ -731,8 +719,6 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 		RelationMergeInfo *relinfo = get_relmergeinfo(relinfos, nrelids, i);
 		struct VacuumCutoffs *cutoffs_i = &relinfo->cutoffs;
 		double num_tuples = 0.0;
-
-		elog(NOTICE, "copy data for %s", RelationGetRelationName(relinfo->rel));
 
 		if (relinfo->rel)
 		{
@@ -764,7 +750,6 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex)
 
 	pg17_workaround_cleanup(new_rel);
 
-	elog(NOTICE, "Update stats");
 	/* Update table stats */
 	Relation relRelation = table_open(RelationRelationId, RowExclusiveLock);
 	update_relstats(relRelation, new_rel, total_num_tuples);
@@ -834,18 +819,20 @@ static void
 acquire_locks_for_merge(const Relation hyper_rel, RelationMergeInfo *rmi, RelationMergeInfo *crmi,
 						LOCKMODE lockmode, bool keep_open)
 {
-	const Chunk *chunk = rmi->chunk;
+	/*
+		const Chunk *chunk = rmi->chunk;
 
-	for (int i = 0; i < chunk->cube->num_slices; i++)
-	{
-		const DimensionSlice *slice = chunk->cube->slices[i];
-		ScanTupLock slice_lock = {
-			.waitpolicy = LockWaitBlock,
-			.lockmode = LockTupleExclusive,
-		};
-		ts_dimension_slice_scan_for_existing(slice, &slice_lock);
-	}
+		for (int i = 0; i < chunk->cube->num_slices; i++)
+		{
+			const DimensionSlice *slice = chunk->cube->slices[i];
+			ScanTupLock slice_lock = {
+				.waitpolicy = LockWaitBlock,
+				.lockmode = LockTupleExclusive,
+			};
+			ts_dimension_slice_scan_for_existing(slice, &slice_lock);
+		}
 
+	*/
 	rmi->rel = try_table_open(rmi->relid, lockmode);
 
 	if (OidIsValid(crmi->relid))
@@ -1394,9 +1381,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	LockRelId *hyper_lockrelid;
 	LOCKTAG *hyper_locktag;
 
-	elog(NOTICE,
-		 "Got ShareUpdateExclusiveLock on hypertable %s",
-		 RelationGetRelationName(hyper_rel));
 	/* Save the list of locks in private context */
 	MemoryContext oldcontext = MemoryContextSwitchTo(merge_cxt);
 
@@ -1428,8 +1412,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			LockRelationIdForSession(lockrelid, ExclusiveLock);
 		}
 
-		elog(NOTICE, "got session locks");
-
 		for (int i = 0; i < nrelids; i++)
 		{
 			RelationMergeInfo *relinfo = &relinfos[i];
@@ -1444,25 +1426,19 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			 */
 			if (i != mergeindex)
 			{
-				elog(NOTICE, "setting pending merge rel on %d", chunk->table_id);
 				ts_chunk_set_pending_merge_rel(chunk->fd.id, chunk->table_id);
-				elog(NOTICE, "finished setting pending merge rel on %d", chunk->table_id);
 			}
 
 			table_close(relinfo->rel, NoLock);
 			relinfo->rel = NULL;
 
-			elog(NOTICE, "closed regular rel");
-
 			if (crelinfo->rel)
 			{
-				elog(NOTICE, "closing crel");
 				table_close(crelinfo->rel, NoLock);
 				crelinfo->rel = NULL;
 			}
 		}
 
-		elog(NOTICE, "waiting before first commit");
 		DEBUG_WAITPOINT("merge_chunks_before_first_commit");
 
 		/*
@@ -1476,7 +1452,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			 * Commit and retain transaction semantics. The commit_and_chain
 			 * call will automatically start a new transaction.
 			 */
-			elog(NOTICE, "commit and chain 1");
 			SPI_commit_and_chain();
 		}
 		else
@@ -1491,7 +1466,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 		// WaitForLockersMultiple(locktags, AccessExclusiveLock, true);
 
-		elog(NOTICE, "Getting new locks again");
 		acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, ExclusiveLock, true);
 	}
 	else
@@ -1501,18 +1475,13 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		CommandCounterIncrement();
 	}
 
-	elog(NOTICE, "merging. pushed_snap=%d", pushed_snap);
-
 	/*
 	 * Now merge all the data into a new temporary heap relation. Do it
 	 * separately for the non-compressed and compressed relations.
 	 */
 	Oid new_relid = merge_relinfos(relinfos, nrelids, mergeindex);
 
-	elog(NOTICE, "merging cheaps");
 	Oid new_crelid = merge_relinfos(crelinfos, nrelids, mergeindex);
-
-	elog(NOTICE, "Finished merge new rel %u %s", new_relid, get_rel_name(new_relid));
 
 	/*
 	 * From here on we only need the relinfos arrays. In concurrent mode, all
@@ -1523,9 +1492,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	if (concurrently)
 	{
-		elog(NOTICE, "Waiting before second commit");
 		DEBUG_WAITPOINT("merge_chunks_before_second_commit");
-		elog(NOTICE, "committing again");
 
 		if (pushed_snap)
 			PopActiveSnapshot();
@@ -1541,7 +1508,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			 * Commit and retain transaction semantics. The commit_and_chain
 			 * call will automatically start a new transaction.
 			 */
-			elog(NOTICE, "commit and chain");
 			SPI_commit_and_chain();
 		}
 		else
@@ -1555,12 +1521,9 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 		// WaitForLockersMultiple(locktags, AccessExclusiveLock, true);
 
-		elog(NOTICE, "Waiting on debug point");
 		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
 
-		elog(NOTICE, "acquire locks");
 		acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, AccessExclusiveLock, false);
-		elog(NOTICE, "Lock heaps");
 		lock_new_heaps(new_relid, new_crelid, AccessExclusiveLock);
 	}
 	else
@@ -1570,7 +1533,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		CommandCounterIncrement();
 	}
 
-	elog(NOTICE, "Finish merge");
 	DEBUG_WAITPOINT("merge_chunks_before_heap_swap");
 
 	merge_chunks_finish(new_relid, relinfos, nrelids, lock_upgrade);
@@ -1585,21 +1547,14 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		RelationMergeInfo *result_minfo = &relinfos[mergeindex];
 		Assert(result_minfo->chunk);
 
-		elog(NOTICE, "updating chunk constraints");
-
 		DEBUG_WAITPOINT("merge_chunks_before_constraints");
 		chunk_update_constraints(result_minfo->chunk, merged_cube);
-		elog(NOTICE, "freeing merged cube");
 		ts_hypercube_free(merged_cube);
 	}
-
-	elog(NOTICE, "update dimensional concurrently %d", concurrently);
 
 	if (concurrently)
 	{
 		ListCell *lc;
-
-		elog(NOTICE, "release session locks");
 
 		foreach (lc, rellocks)
 		{
@@ -1614,7 +1569,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	if (pushed_snap)
 		PopActiveSnapshot();
 
-	elog(NOTICE, "freeing memory");
 	/*
 	pfree(relids);
 	pfree(nulls);

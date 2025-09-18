@@ -127,7 +127,7 @@ step "s3_modify" {
 }
 
 step "s3_insert_chunk_to_be_dropped" {
-    insert into readings values ('2024-01-01 02:10', 5, 5.0);
+    insert into readings values ('2024-01-01 02:10', 5, 5.0), ('2024-01-01 02:12', 6, 6.0);
 }
 
 #step "s3_compress_chunks" {
