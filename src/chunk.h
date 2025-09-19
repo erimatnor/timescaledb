@@ -165,21 +165,18 @@ List *ts_chunk_id_find_in_subspace(Hypertable *ht, List *dimension_vecs);
 extern TSDLLEXPORT Chunk *ts_chunk_create_base(int32 id, int16 num_constraints, const char relkind);
 extern TSDLLEXPORT ChunkStub *ts_chunk_stub_create(int32 id, int16 num_constraints);
 extern TSDLLEXPORT Chunk *ts_chunk_copy(const Chunk *chunk);
-extern TSDLLEXPORT Chunk *ts_chunk_get_by_name_with_memory_context(const char *schema_name,
-																   const char *table_name,
-																   LOCKMODE chunk_lockmode,
-																   MemoryContext mctx,
-																   bool fail_if_not_found);
+extern TSDLLEXPORT Chunk *
+ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *table_name,
+										 LOCKMODE chunk_lockmode, const ScanTupLock *slice_lock,
+										 MemoryContext mctx, bool fail_if_not_found);
 extern TSDLLEXPORT void ts_chunk_insert_lock(const Chunk *chunk, LOCKMODE lock);
 
 extern TSDLLEXPORT Oid ts_chunk_create_table(const Chunk *chunk, const Hypertable *ht,
 											 const char *tablespacename, Oid amoid);
-extern TSDLLEXPORT Chunk *ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE lockmode,
+extern TSDLLEXPORT Chunk *ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE chunk_lockmode,
 															 const ScanTupLock *slice_lock,
 															 bool fail_if_not_found);
 
-extern TSDLLEXPORT Chunk *ts_chunk_get_by_id_locked(int32 id, LOCKMODE lockmode,
-													bool fail_if_not_found);
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_id(int32 id, bool fail_if_not_found);
 extern TSDLLEXPORT Chunk *ts_chunk_get_by_relid_locked(Oid relid, LOCKMODE lockmode,
 													   bool fail_if_not_found);
@@ -258,10 +255,11 @@ extern TSDLLEXPORT void ts_chunk_merge_on_dimension(const Hypertable *ht, Chunk 
 													const Chunk *merge_chunk, int32 dimension_id);
 extern TSDLLEXPORT void ts_chunk_detach_by_relid(Oid relid);
 
-#define chunk_get_by_name(schema_name, table_name, chunk_lockmode, fail_if_not_found)              \
+#define chunk_get_by_name(schema_name, table_name, chunk_lockmode, slice_lock, fail_if_not_found)  \
 	ts_chunk_get_by_name_with_memory_context(schema_name,                                          \
 											 table_name,                                           \
 											 chunk_lockmode,                                       \
+											 slice_lock,                                           \
 											 CurrentMemoryContext,                                 \
 											 fail_if_not_found)
 

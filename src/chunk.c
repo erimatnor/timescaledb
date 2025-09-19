@@ -9,6 +9,7 @@
 #include <access/htup_details.h>
 #include <access/reloptions.h>
 #include <access/table.h>
+#include <access/tableam.h>
 #include <access/tupdesc.h>
 #include <access/xact.h>
 #include <catalog/indexing.h>
@@ -1407,9 +1408,17 @@ ts_chunk_create_for_point(const Hypertable *ht, const Point *p, const char *sche
 	int chunk_id = ts_chunk_point_find_chunk_id(ht, p, false);
 	if (chunk_id != INVALID_CHUNK_ID)
 	{
+		ScanTupLock slice_lock = {
+			.lockmode = LockTupleKeyShare,
+			.waitpolicy = LockWaitBlock,
+			.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+		};
+
 		/* The chunk might be dropped, so we don't fail if we haven't found it. */
-		Chunk *chunk =
-			ts_chunk_get_by_id_locked(chunk_id, chunk_lockmode, /* fail_if_not_found = */ false);
+		Chunk *chunk = ts_chunk_get_by_id_with_slice_lock(chunk_id,
+														  chunk_lockmode,
+														  &slice_lock,
+														  /* fail_if_not_found = */ false);
 		if (chunk != NULL)
 		{
 			/*
@@ -2574,19 +2583,14 @@ chunk_scan_find(int indexid, ScanKeyData scankey[], int nkeys, MemoryContext mct
 
 Chunk *
 ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *table_name,
-										 LOCKMODE chunk_lockmode, MemoryContext mctx,
-										 bool fail_if_not_found)
+										 LOCKMODE chunk_lockmode, const ScanTupLock *slice_lock,
+										 MemoryContext mctx, bool fail_if_not_found)
 {
 	NameData schema, table;
 	ScanKeyData scankey[2];
 	static const DisplayKeyData displaykey[2] = {
 		[0] = { .name = "schema_name", .as_string = DatumGetNameString },
 		[1] = { .name = "table_name", .as_string = DatumGetNameString },
-	};
-	ScanTupLock slice_lock = {
-		.lockmode = LockTupleKeyShare,
-		.waitpolicy = LockWaitBlock,
-		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 	};
 
 	/* Early check for rogue input */
@@ -2646,8 +2650,8 @@ ts_chunk_get_by_name_with_memory_context(const char *schema_name, const char *ta
 						   scankey,
 						   2,
 						   mctx,
-						   AccessShareLock,
-						   &slice_lock,
+						   chunk_lockmode,
+						   slice_lock,
 						   fail_if_not_found,
 						   displaykey);
 }
@@ -2657,6 +2661,11 @@ ts_chunk_get_by_relid_locked(Oid relid, LOCKMODE chunk_lockmode, bool fail_if_no
 {
 	char *schema;
 	char *table;
+	ScanTupLock slice_lock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
 
 	if (!OidIsValid(relid))
 	{
@@ -2668,7 +2677,7 @@ ts_chunk_get_by_relid_locked(Oid relid, LOCKMODE chunk_lockmode, bool fail_if_no
 
 	schema = get_namespace_name(get_rel_namespace(relid));
 	table = get_rel_name(relid);
-	return chunk_get_by_name(schema, table, chunk_lockmode, fail_if_not_found);
+	return chunk_get_by_name(schema, table, chunk_lockmode, &slice_lock, fail_if_not_found);
 }
 
 Chunk *
@@ -2704,7 +2713,7 @@ DatumGetInt32AsString(Datum datum)
 }
 
 Chunk *
-ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE lockmode, const ScanTupLock *slice_lock,
+ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE chunk_lockmode, const ScanTupLock *slice_lock,
 								   bool fail_if_not_found)
 {
 	ScanKeyData scankey[1];
@@ -2721,14 +2730,14 @@ ts_chunk_get_by_id_with_slice_lock(int32 id, LOCKMODE lockmode, const ScanTupLoc
 						   scankey,
 						   1,
 						   CurrentMemoryContext,
-						   lockmode,
+						   chunk_lockmode,
 						   slice_lock,
 						   fail_if_not_found,
 						   displaykey);
 }
 
 Chunk *
-ts_chunk_get_by_id_locked(int32 id, LOCKMODE lockmode, bool fail_if_not_found)
+ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
 {
 	ScanTupLock slice_lock = {
 		.lockmode = LockTupleKeyShare,
@@ -2736,13 +2745,7 @@ ts_chunk_get_by_id_locked(int32 id, LOCKMODE lockmode, bool fail_if_not_found)
 		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
 	};
 
-	return ts_chunk_get_by_id_with_slice_lock(id, lockmode, &slice_lock, fail_if_not_found);
-}
-
-Chunk *
-ts_chunk_get_by_id(int32 id, bool fail_if_not_found)
-{
-	return ts_chunk_get_by_id_locked(id, AccessShareLock, fail_if_not_found);
+	return ts_chunk_get_by_id_with_slice_lock(id, NoLock, &slice_lock, fail_if_not_found);
 }
 
 /*
@@ -4266,10 +4269,15 @@ ts_chunk_drop_single_chunk(PG_FUNCTION_ARGS)
 	Oid chunk_relid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
 	char *chunk_table_name = get_rel_name(chunk_relid);
 	char *chunk_schema_name = get_namespace_name(get_rel_namespace(chunk_relid));
-
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleKeyShare,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
 	const Chunk *ch = ts_chunk_get_by_name_with_memory_context(chunk_schema_name,
 															   chunk_table_name,
-															   AccessExclusiveLock,
+															   NoLock,
+															   &tuplock,
 															   CurrentMemoryContext,
 															   true);
 	Assert(ch != NULL);
