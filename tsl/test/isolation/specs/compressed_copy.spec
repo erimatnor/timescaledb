@@ -31,7 +31,7 @@ step "s1_commit" {
 
 session "s2"
 setup {
-  SET timescaledb.enable_compressed_copy = true;
+  SET timescaledb.enable_direct_compress_copy = true;
 }
 
 step "s2_begin" {
@@ -46,5 +46,4 @@ step "s2_commit" {
   COMMIT;
 }
 
-permutation "s1_begin" "s2_begin" "s1_copy" "s2_copy" "s2_commit" "s1_commit"
-
+permutation "s1_begin" "s2_begin" "s1_copy" "s2_copy"  "s1_commit" "s2_commit"
