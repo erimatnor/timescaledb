@@ -4,6 +4,8 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include "chunk.h"
+#include <access/tableam.h>
 #include <storage/lockdefs.h>
 #include <utils/rls.h>
 
@@ -79,8 +81,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 	{
 		bool chunk_created = false;
 		bool needs_partial = false;
-		LOCKMODE lockmode =
-			ctr->create_compressed_chunk ? ShareUpdateExclusiveLock : RowExclusiveLock;
+		LOCKMODE lockmode = RowExclusiveLock;
 
 		/*
 		 * Normally, for every row of the chunk except the first one, we expect
@@ -130,18 +131,49 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 
 		Ensure(chunk, "no chunk found or created");
 
+#if USE_ASSERT_CHECKING
+		/* Ensure we always hold a lock on the chunk table at this point */
+		Relation chunk_rel = RelationIdGetRelation(chunk->table_id);
+		Assert(CheckRelationLockedByMe(chunk_rel, lockmode, true));
+		RelationClose(chunk_rel);
+#endif
 		if (ctr->create_compressed_chunk && !chunk->fd.compressed_chunk_id)
 		{
 			/*
-			 * When we try to create a compressed chunk, we need to grab a lock on the
-			 * chunk to synchronize with other concurrent insert operations trying to
-			 * create the same compressed chunk.
+			 * When creating a compressed chunk, the operation must be
+			 * synchronized with other operations. A RowExclusiveLock is
+			 * already held on the chunk table itself so it will conflict with
+			 * explicit compress calls like compress_chunk() or
+			 * convert_to_columnstore() that take at least
+			 * ExclusiveLock. However, it is also necessary to synchronize
+			 * with other concurrent inserts doing the same thing.
+			 *
+			 * We don't want to do a lock upgrade on the chunk table since
+			 * that could deadlock and it would also block concurrent inserts
+			 * on that table.
+			 *
+			 * Instead we synchronize around a tuple lock on the chunk
+			 * metadata row.
 			 */
-			/* TODO: this lock and chunk lookup should not be needed anymore */
-			LockRelationOid(chunk->table_id, ShareUpdateExclusiveLock);
-			chunk = ts_chunk_get_by_id(chunk->fd.id, CACHE_FLAG_NONE);
+			int32 compressed_chunk_id = -1;
+			TM_Result lockres =
+				ts_chunk_lock_for_creating_compressed_chunk(chunk->fd.id, &compressed_chunk_id);
+
+			switch (lockres)
+			{
+				case TM_Updated:
+					/* Somone might have beaten us to it. Reread the chunk. */
+					chunk = ts_chunk_get_by_id(chunk->fd.id, CACHE_FLAG_NONE);
+					compressed_chunk_id = chunk->fd.compressed_chunk_id;
+					break;
+				case TM_Ok:
+					break;
+				default:
+					elog(ERROR, "could not find compressed chunk status");
+			}
+
 			/* recheck whether compressed chunk exists after acquiring the lock */
-			if (!chunk->fd.compressed_chunk_id)
+			if (compressed_chunk_id == -1)
 			{
 				Hypertable *compressed_ht =
 					ts_hypertable_get_by_id(ctr->hypertable->fd.compressed_hypertable_id);

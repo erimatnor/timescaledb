@@ -247,6 +247,8 @@ extern Chunk *ts_chunk_build_from_tuple_and_stub(Chunk **chunkptr, TupleInfo *ti
 												 const ChunkStub *stub,
 												 const ScanTupLock *slice_lock);
 
+extern TM_Result ts_chunk_lock_for_creating_compressed_chunk(int32 chunk_id,
+															 int32 *compressed_chunk_id);
 extern ScanIterator ts_chunk_scan_iterator_create(MemoryContext result_mcxt);
 extern void ts_chunk_scan_iterator_set_chunk_id(ScanIterator *it, int32 chunk_id);
 extern bool ts_chunk_lock_if_exists(Oid chunk_oid, LOCKMODE chunk_lockmode);

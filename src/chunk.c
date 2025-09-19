@@ -1927,6 +1927,44 @@ chunk_scan_context_add_chunk(ChunkScanCtx *scanctx, ChunkStub *stub)
 	return CHUNK_PROCESSED;
 }
 
+TM_Result
+ts_chunk_lock_for_creating_compressed_chunk(int32 chunk_id, int32 *compressed_chunk_id)
+{
+	ScanIterator iterator;
+	bool found = false;
+	TM_Result lockresult;
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleExclusive,
+		.waitpolicy = LockWaitBlock,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
+
+	iterator = ts_scan_iterator_create(CHUNK, AccessShareLock, CurrentMemoryContext);
+	ts_chunk_scan_iterator_set_chunk_id(&iterator, chunk_id);
+	iterator.ctx.tuplock = &tuplock;
+
+	ts_scanner_foreach(&iterator)
+	{
+		TupleInfo *ti = ts_scan_iterator_tuple_info(&iterator);
+		lockresult = ti->lockresult;
+
+		if (lockresult == TM_Ok && compressed_chunk_id)
+		{
+			bool isnull;
+			Datum value = slot_getattr(ti->slot, Anum_chunk_compressed_chunk_id, &isnull);
+			*compressed_chunk_id = isnull ? -1 : DatumGetInt32(value);
+		}
+		found = true;
+	}
+
+	ts_scan_iterator_close(&iterator);
+
+	if (!found)
+		elog(ERROR, "chunk with ID %d does not exist", chunk_id);
+
+	return lockresult;
+}
+
 /*
  * Resurrect a chunk from a tombstone.
  *
