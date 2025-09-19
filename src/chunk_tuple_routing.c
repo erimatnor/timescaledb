@@ -90,6 +90,7 @@ ts_chunk_tuple_routing_find_chunk(ChunkTupleRouting *ctr, Point *point)
 		 * locking the hypertable. This serves as a fast path for the usual case
 		 * where the chunk already exists.
 		 */
+		DEBUG_WAITPOINT("chunk_insert_before_lock");
 		chunk = ts_hypertable_find_chunk_for_point(ctr->hypertable, point, lockmode);
 
 		/*
