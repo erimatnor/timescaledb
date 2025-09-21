@@ -1663,6 +1663,11 @@ chunk_tuple_dropped_filter(const TupleInfo *ti, void *arg)
 
 	stubctx->is_locked = false;
 
+	/*
+	 * The chunk table could also have been dropped concurrently. Try to
+	 * aquire the requested lock in order to guarantee that the chunk table
+	 * still exists.
+	 */
 	if (stubctx->chunk_lockmode != NoLock)
 	{
 		Datum schema_name;

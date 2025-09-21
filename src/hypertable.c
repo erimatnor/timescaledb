@@ -1060,9 +1060,9 @@ ts_hypertable_find_chunk_for_point(const Hypertable *h, const Point *point, LOCK
 		if (chunk)
 			chunk = ts_hypertable_chunk_store_add(h, chunk);
 	}
-	else if (lockmode != NoLock)
+	else if (!ts_chunk_lock_if_exists(chunk->table_id, lockmode))
 	{
-		LockRelationOid(chunk->table_id, lockmode);
+		return NULL;
 	}
 
 #if USE_ASSERT_CHECKING
