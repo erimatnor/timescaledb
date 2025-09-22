@@ -6,24 +6,29 @@ setup
 {
     create table readings (time timestamptz, device int, temp float);
     select create_hypertable('readings', 'time', chunk_time_interval => interval '1 hour');
-           insert into readings values ('2024-01-01 01:00', 1, 1.0), ('2024-01-01 01:01', 2, 2.0), ('2024-01-01 02:00', 3, 3.0), ('2024-01-01 02:00', 4, 4.0);
+           insert into readings values ('2024-01-01 01:00', 1, 1.0), ('2024-01-01 01:01', 2, 2.0), ('2024-01-01 02:00', 3, 3.0), ('2024-01-01 02:00', 4, 4.0), ('2024-01-01 03:30', 5, 5.0);
     alter table readings set (timescaledb.compress_orderby='time', timescaledb.compress_segmentby='device');
 
-    create or replace procedure merge_all_chunks(hypertable regclass, concurrent boolean = false) as $$
+    create or replace procedure merge_two_chunks(hypertable regclass, concurrent boolean = false) as $$
     declare
         chunks_arr regclass[];
     begin
-        select array_agg(cl.oid) into chunks_arr
+        with chunks as (
+            select cl.oid as oid         
                from pg_class cl
                join pg_inherits inh
                on (cl.oid = inh.inhrelid)
-               where inh.inhparent = hypertable;
+               where inh.inhparent = hypertable
+               limit 2
+        )
+        select array_agg(ch.oid) into chunks_arr
+            from chunks ch;
 
-               if concurrent then
-                   call merge_chunks_concurrently(variadic chunks_arr);
-               else
-                   call merge_chunks(variadic chunks_arr);
-               end if;
+        if concurrent then
+            call merge_chunks_concurrently(variadic chunks_arr);
+        else
+            call merge_chunks(variadic chunks_arr);
+        end if;
     end;
     $$ LANGUAGE plpgsql;
 
@@ -77,6 +82,9 @@ step "s1_show_data" {
     select * from readings order by time desc, device;
     select count(*) as num_device_all, count(*) filter (where device=1) as num_device_1, count(*) filter (where device=5) as num_device_5 from readings;
 }
+step "s1_show_merge" {
+    select table_name, pending_merge_oid from _timescaledb_catalog.chunk;
+}
 step "s1_row_exclusive_lock" { call lock_one_chunk('readings'); }
 step "s1_commit" { commit; }
 
@@ -89,10 +97,10 @@ setup	{
 
 step "s2_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s2_merge_chunks" {
-    call merge_all_chunks('readings');
+    call merge_two_chunks('readings');
 }
 step "s2_merge_chunks_concurrently" {
-    call merge_all_chunks('readings', concurrent => true);
+    call merge_two_chunks('readings', concurrent => true);
 }
 
 step "s2_set_lock_upgrade" {
@@ -118,16 +126,36 @@ step "s3_show_data" {
 }
 step "s3_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s3_merge_chunks" {
-    call merge_all_chunks('readings');
+    call merge_two_chunks('readings');
 }
 
 step "s3_modify" {
     delete from readings where device=1;
-    insert into readings values ('2024-01-01 01:05', 5, 5.0);
+    insert into readings values ('2024-01-01 01:05', 6, 6.0);
 }
 
+
+# TODO test 4 cases for inserts.
+#
+# 1. Insert into merged chunk to be dropped
+# 2. Insert into merged chunk that remains
+# 3. Insert into non-merge chunk
+# 4. Insert into chunk that does not exist and is created
+#
+# Repeat above for update/delete/copy
+
 step "s3_insert_chunk_to_be_dropped" {
-    insert into readings values ('2024-01-01 02:10', 5, 5.0), ('2024-01-01 02:12', 6, 6.0);
+    insert into readings values ('2024-01-01 02:10', 6, 6.0), ('2024-01-01 02:12', 7, 7.0);
+}
+
+
+step "s3_insert_chunk_that_remains" {
+    insert into readings values ('2024-01-01 01:10', 8, 8.0);
+}
+
+
+step "s3_insert_chunk_not_merged" {
+    insert into readings values ('2024-01-01 03:20', 9, 9.0);
 }
 
 #step "s3_compress_chunks" {
@@ -172,6 +200,24 @@ step "s5_insert_chunk_remaining_after_merge" {
 }
 
 step "s5_show_temp_rels" {
+    select oid from pg_class where relname like 'pg_temp%';
+}
+
+session "s6"
+setup	{
+    set local lock_timeout = '500ms';
+    set local deadlock_timeout = '10000ms';
+}
+
+step "s6_insert_chunk_remaining_after_merge" {
+    insert into readings values ('2024-01-01 01:01', 6, 6.0);
+}
+
+step "s6_insert_chunk_not_merged" {
+    insert into readings values ('2024-01-01 03:20', 9, 9.0);
+}
+
+step "s6_show_temp_rels" {
     select oid from pg_class where relname like 'pg_temp%';
 }
 
@@ -229,7 +275,7 @@ permutation "s4_wp_enable" "s2_merge_chunks" "s3_merge_chunks" "s4_wp_release" "
 #permutation "s4_wp_enable" "s2_merge_chunks" "s3_drop_chunks" "s4_wp_release" "s1_show_data" "s1_show_chunks"
 
 # Reader should not be blocked by concurrent merge
-permutation "s4_wp_concurrent_enable" "s4_wp_c_enable" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "s4_wp_c_release" "s4_wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+permutation "s4_wp_enable" "s4_wp_c_enable" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s6_insert_chunk_not_merged" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "s4_wp_c_release" "s1_show_merge" "s1_show_data" "s4_wp_release" "s1_show_data" "s1_show_chunks" "s1_show_merge" 
 
 #permutation "s4_wp_e_enable" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "s4_wp_e_release" "s1_show_data" "s1_show_chunks"
 
