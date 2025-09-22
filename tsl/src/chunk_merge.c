@@ -194,19 +194,20 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 
 	for (int i = 0; i < nrelids; i++)
 	{
-		Oid relid = relinfos[i].relid;
+		RelationMergeInfo *relinfo = &relinfos[i];
+		Oid relid = relinfo->relid;
 		ObjectAddress object = {
 			.classId = RelationRelationId,
 			.objectId = relid,
 		};
 
-		if (!OidIsValid(relid) || relinfos[i].isresult)
+		if (!OidIsValid(relid) || relinfo->isresult)
 			continue;
 
 		/* Cannot drop if relation is still open */
-		Assert(relinfos[i].rel == NULL);
+		Assert(relinfo->rel == NULL);
 
-		if (relinfos[i].chunk)
+		if (relinfo->chunk)
 		{
 			const Oid namespaceid = get_rel_namespace(relid);
 			const char *schemaname = get_namespace_name(namespaceid);
@@ -216,6 +217,9 @@ merge_chunks_finish(Oid new_relid, RelationMergeInfo *relinfos, int nrelids,
 		}
 
 		add_exact_object_address(&object, objects);
+
+		/* Clear the temporary heap mapping */
+		ts_chunk_set_pending_merge_rel(relinfos->chunk->fd.id, InvalidOid);
 	}
 
 	performMultipleDeletions(objects, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
@@ -1397,6 +1401,20 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	bool pushed_snap = false;
 
+	/*
+	 * Now merge all the data into a new temporary heap relation. Do it
+	 * separately for the non-compressed and compressed relations.
+	 */
+	Oid new_relid = merge_relinfos(relinfos, nrelids, mergeindex);
+	Oid new_crelid = merge_relinfos(crelinfos, nrelids, mergeindex);
+
+	/*
+	 * From here on we only need the relinfos arrays. In concurrent mode, all
+	 * other memory will be released.
+	 */
+	// pfree(relids);
+	// pfree(nulls);
+
 	if (concurrently)
 	{
 		LockRelationIdForSession(hyper_lockrelid, ShareUpdateExclusiveLock);
@@ -1424,17 +1442,23 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			 * FIXME: Currently setting it to itself because we haven't
 			 * created the temp heap at this point.
 			 */
-			if (i != mergeindex)
+			// if (i != mergeindex)
 			{
-				ts_chunk_set_pending_merge_rel(chunk->fd.id, chunk->table_id);
+				ts_chunk_set_pending_merge_rel(chunk->fd.id, new_relid);
+
+				if (OidIsValid(crelinfo->relid))
+				{
+					const Chunk *cchunk = crelinfo->chunk;
+					ts_chunk_set_pending_merge_rel(cchunk->fd.id, new_crelid);
+				}
 			}
 
-			table_close(relinfo->rel, NoLock);
+			// table_close(relinfo->rel, NoLock);
 			relinfo->rel = NULL;
 
 			if (crelinfo->rel)
 			{
-				table_close(crelinfo->rel, NoLock);
+				// table_close(crelinfo->rel, NoLock);
 				crelinfo->rel = NULL;
 			}
 		}
@@ -1466,69 +1490,12 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 		// WaitForLockersMultiple(locktags, AccessExclusiveLock, true);
 
-		acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, ExclusiveLock, true);
-	}
-	else
-	{
-		table_close(hyper_rel, NoLock);
-		/* Make new table stats visible */
-		CommandCounterIncrement();
-	}
-
-	/*
-	 * Now merge all the data into a new temporary heap relation. Do it
-	 * separately for the non-compressed and compressed relations.
-	 */
-	Oid new_relid = merge_relinfos(relinfos, nrelids, mergeindex);
-
-	Oid new_crelid = merge_relinfos(crelinfos, nrelids, mergeindex);
-
-	/*
-	 * From here on we only need the relinfos arrays. In concurrent mode, all
-	 * other memory will be released.
-	 */
-	// pfree(relids);
-	// pfree(nulls);
-
-	if (concurrently)
-	{
-		DEBUG_WAITPOINT("merge_chunks_before_second_commit");
-
-		if (pushed_snap)
-			PopActiveSnapshot();
-
-		/*
-		 * Check if we are being called from another procedure that has an SPI
-		 * context. In that case, we need to use SPI calls to start a new
-		 * transaction.
-		 */
-		if (SPI_inside_nonatomic_context())
-		{
-			/*
-			 * Commit and retain transaction semantics. The commit_and_chain
-			 * call will automatically start a new transaction.
-			 */
-			SPI_commit_and_chain();
-		}
-		else
-		{
-			CommitTransactionCommand();
-			StartTransactionCommand();
-		}
-
-		PushActiveSnapshot(GetTransactionSnapshot());
-		pushed_snap = true;
-
-		// WaitForLockersMultiple(locktags, AccessExclusiveLock, true);
-
-		DEBUG_WAITPOINT("merge_chunks_after_concurrent_wait");
-
 		acquire_locks(hypertable_relid, relinfos, crelinfos, nrelids, AccessExclusiveLock, false);
 		lock_new_heaps(new_relid, new_crelid, AccessExclusiveLock);
 	}
 	else
 	{
-		// table_close(hyper_rel, NoLock);
+		table_close(hyper_rel, NoLock);
 		/* Make new table stats visible */
 		CommandCounterIncrement();
 	}
