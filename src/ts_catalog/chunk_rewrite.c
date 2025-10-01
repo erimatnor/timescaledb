@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include "scanner.h"
 #include <access/attnum.h>
 #include <access/htup.h>
 #include <access/htup_details.h>
@@ -11,8 +12,11 @@
 #include <access/tableam.h>
 #include <catalog/dependency.h>
 #include <catalog/objectaddress.h>
+#include <catalog/pg_class_d.h>
+#include <executor/tuptable.h>
 #include <nodes/parsenodes.h>
 #include <storage/itemptr.h>
+#include <storage/lmgr.h>
 #include <storage/lockdefs.h>
 
 #include "chunk_rewrite.h"
@@ -130,14 +134,21 @@ ts_chunk_rewrite_delete_by_tid(const ItemPointer tid)
 	table_close(catrel, NoLock);
 }
 
-bool
-ts_chunk_rewrite_delete(Oid chunk_relid)
+ChunkRewriteDeleteResult
+ts_chunk_rewrite_delete(Oid chunk_relid, bool conditional)
 {
 	ItemPointerData tid;
 	FormData_chunk_rewrite form;
+	ChunkRewriteDeleteResult result;
 
 	if (!ts_chunk_rewrite_get_with_lock(chunk_relid, &form, &tid))
-		return false;
+		return ChunkRewriteEntryDoesNotExist;
+
+	if (conditional)
+	{
+		if (!ConditionalLockRelationOid(form.new_relid, AccessExclusiveLock))
+			return ChunkRewriteOngoing;
+	}
 
 	/*
 	 * Check if the new heap still exists by trying to get a lock.
@@ -151,9 +162,78 @@ ts_chunk_rewrite_delete(Oid chunk_relid)
 		table_close(newrel, NoLock);
 		ObjectAddressSet(tableaddr, RelationRelationId, form.new_relid);
 		performDeletion(&tableaddr, DROP_RESTRICT, PERFORM_DELETION_INTERNAL);
+		result = ChunkRewriteEntryDeletedAndTableDropped;
+	}
+	else
+	{
+		result = ChunkRewriteEntryDeleted;
 	}
 
 	ts_chunk_rewrite_delete_by_tid(&tid);
 
-	return true;
+	return result;
+}
+
+TS_FUNCTION_INFO_V1(ts_chunk_rewrite_cleanup);
+
+Datum
+ts_chunk_rewrite_cleanup(PG_FUNCTION_ARGS)
+{
+	ScanIterator it;
+	ObjectAddresses *objaddrs = new_object_addresses();
+	unsigned int cleanup_count = 0;
+	unsigned int skipped_count = 0;
+	CatalogSecurityContext sec_ctx;
+
+	it = ts_scan_iterator_create(CHUNK_REWRITE, RowExclusiveLock, CurrentMemoryContext);
+
+	ts_scanner_foreach(&it)
+	{
+		TupleInfo *ti = ts_scan_iterator_tuple_info(&it);
+		bool isnull = false;
+
+		Datum chunk_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_chunk_relid, &isnull);
+		Assert(!isnull);
+		// Datum new_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_new_relid, &isnull);
+		// Assert(!isnull);
+
+		Oid new_relid = DatumGetObjectId(chunk_relid_dat);
+
+		/*
+		 * A concurrent merge might be in progress, so try to lock the "new"
+		 * relation and only delete it if the lock can be acquired
+		 * immediately. If a lock cannot be acquired, a merge is probably
+		 * ongoing and it might still complete successfully.
+		 */
+		if (ConditionalLockRelationOid(new_relid, AccessExclusiveLock))
+		{
+			ObjectAddress new_objaddr = {
+				.objectId = DatumGetObjectId(new_relid),
+				.classId = RelationRelationId,
+			};
+
+			add_exact_object_address(&new_objaddr, objaddrs);
+
+			ItemPointer tid = ts_scanner_get_tuple_tid(ti);
+
+			ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
+			ts_catalog_delete_tid_only(it.ctx.tablerel, tid);
+			ts_catalog_restore_user(&sec_ctx);
+			cleanup_count++;
+		}
+		else
+		{
+			skipped_count++;
+		}
+	}
+
+	performMultipleDeletions(objaddrs, DROP_RESTRICT, 0);
+	ts_scan_iterator_close(&it);
+
+	elog(NOTICE,
+		 "cleaned up %u orphaned rewrite relations, skipped %u",
+		 cleanup_count,
+		 skipped_count);
+
+	PG_RETURN_VOID();
 }

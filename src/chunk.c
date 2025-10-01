@@ -3128,7 +3128,7 @@ chunk_tuple_delete(TupleInfo *ti, Oid relid, DropBehavior behavior, bool preserv
 	 */
 	if (OidIsValid(relid))
 	{
-		ts_chunk_rewrite_delete(relid);
+		ts_chunk_rewrite_delete(relid, false);
 	}
 
 	if (form.compressed_chunk_id != INVALID_CHUNK_ID)

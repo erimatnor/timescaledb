@@ -24,6 +24,7 @@
 #include <storage/lmgr.h>
 #include <storage/lockdefs.h>
 #include <utils/acl.h>
+#include <utils/elog.h>
 #include <utils/memutils.h>
 #include <utils/palloc.h>
 #include <utils/rel.h>
@@ -666,8 +667,28 @@ copy_table_data(Relation fromrel, Relation torel, struct VacuumCutoffs *cutoffs,
 	return num_tuples;
 }
 
+typedef struct SessionLockInfo
+{
+	LockRelId locktag;
+	LOCKMODE lockmode;
+} SessionLockInfo;
+
+static List *
+append_rellock(List *rellocks, Relation rel, LOCKMODE lockmode, MemoryContext mcxt)
+{
+	MemoryContext oldcontext = MemoryContextSwitchTo(mcxt);
+	SessionLockInfo *lockinfo = palloc_object(SessionLockInfo);
+	lockinfo->locktag = rel->rd_lockInfo.lockRelId;
+	lockinfo->lockmode = lockmode;
+	rellocks = lappend(rellocks, lockinfo);
+	MemoryContextSwitchTo(oldcontext);
+
+	return rellocks;
+}
+
 static Oid
-merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, RelationMergeStats *stats)
+merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMODE old_heap_lockmode,
+			   List **rellocks, RelationMergeStats *stats, MemoryContext merge_mcxt)
 {
 	RelationMergeInfo *result_minfo = &relinfos[mergeindex];
 	Relation result_rel = result_minfo->rel;
@@ -683,10 +704,11 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, Relatio
 								  tablespace,
 								  result_rel->rd_rel->relam,
 								  result_minfo->relpersistence,
-								  ExclusiveLock);
+								  old_heap_lockmode);
 
 	Relation new_rel = table_open(new_relid, AccessExclusiveLock);
 
+	*rellocks = append_rellock(*rellocks, new_rel, AccessExclusiveLock, merge_mcxt);
 	MemSet(stats, 0, sizeof(RelationMergeStats));
 	stats->relid = result_minfo->relid;
 	stats->chunk_id = result_minfo->chunk->fd.id;
@@ -854,18 +876,6 @@ lock_new_rels(Oid new_relid, Oid new_crelid, LOCKMODE lockmode)
 
 		table_close(new_crel, NoLock);
 	}
-}
-
-static List *
-append_rellock(List *rellocks, Relation rel, MemoryContext mcxt)
-{
-	MemoryContext oldcontext = MemoryContextSwitchTo(mcxt);
-	LockRelId *lockrelid = palloc_object(LockRelId);
-	*lockrelid = rel->rd_lockInfo.lockRelId;
-	rellocks = lappend(rellocks, lockrelid);
-	MemoryContextSwitchTo(oldcontext);
-
-	return rellocks;
 }
 
 /*
@@ -1047,6 +1057,21 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 							NameStr(chunk->fd.table_name)),
 					 errhint("Untier the chunk before merging.")));
 
+		ChunkRewriteDeleteResult rewrite_result = ts_chunk_rewrite_delete(relid, true);
+
+		switch (rewrite_result)
+		{
+			case ChunkRewriteOngoing:
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_IN_USE),
+						 errmsg("chunk is being merged by another process")));
+				break;
+			case ChunkRewriteEntryDeleted:
+			case ChunkRewriteEntryDeletedAndTableDropped:
+			case ChunkRewriteEntryDoesNotExist:
+				break;
+		}
+
 		/* Chunk already locked so we can get the relation directly from the cache */
 		rel = table_open(relid, NoLock);
 
@@ -1061,7 +1086,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			LockRelationOid(rel->rd_rel->reltoastrelid, lockmode);
 
 		/* Add heap relation to the list of locked relations */
-		rellocks = append_rellock(rellocks, rel, merge_cxt);
+		rellocks = append_rellock(rellocks, rel, lockmode, merge_cxt);
 
 		/*
 		 * Check for active uses of the relation in the current transaction,
@@ -1096,7 +1121,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		{
 			Oid crelid = ts_chunk_get_relid(chunk->fd.compressed_chunk_id, false);
 			Relation crel = table_open(crelid, lockmode);
-			rellocks = append_rellock(rellocks, crel, merge_cxt);
+			rellocks = append_rellock(rellocks, crel, lockmode, merge_cxt);
 			table_close(crel, NoLock);
 
 			if (mergeindex == -1)
@@ -1240,8 +1265,15 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	 */
 	RelationMergeStats merge_stats;
 	RelationMergeStats cmerge_stats;
-	Oid new_relid = merge_relinfos(relinfos, nrelids, mergeindex, &merge_stats);
-	Oid new_crelid = merge_relinfos(crelinfos, nrelids, mergeindex, &cmerge_stats);
+	Oid new_relid =
+		merge_relinfos(relinfos, nrelids, mergeindex, lockmode, &rellocks, &merge_stats, merge_cxt);
+	Oid new_crelid = merge_relinfos(crelinfos,
+									nrelids,
+									mergeindex,
+									lockmode,
+									&rellocks,
+									&cmerge_stats,
+									merge_cxt);
 
 	/*
 	 * From here on we only need the relinfos arrays.
@@ -1264,9 +1296,9 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 */
 		foreach (lc, rellocks)
 		{
-			LockRelId *lockrelid = (LockRelId *) lfirst(lc);
+			SessionLockInfo *lockinfo = (SessionLockInfo *) lfirst(lc);
 
-			LockRelationIdForSession(lockrelid, lockmode);
+			LockRelationIdForSession(&lockinfo->locktag, lockinfo->lockmode);
 		}
 
 		/*
@@ -1361,9 +1393,9 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 		foreach (lc, rellocks)
 		{
-			LockRelId *lockrelid = (LockRelId *) lfirst(lc);
+			SessionLockInfo *lockinfo = (SessionLockInfo *) lfirst(lc);
 
-			UnlockRelationIdForSession(lockrelid, ExclusiveLock);
+			UnlockRelationIdForSession(&lockinfo->locktag, lockinfo->lockmode);
 		}
 
 		PopActiveSnapshot();

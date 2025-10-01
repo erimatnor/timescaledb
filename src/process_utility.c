@@ -5,7 +5,6 @@
  */
 
 #include <postgres.h>
-#include "ts_catalog/chunk_rewrite.h"
 #include <access/htup_details.h>
 #include <access/xact.h>
 #include <catalog/index.h>
@@ -82,6 +81,7 @@
 #include "ts_catalog/array_utils.h"
 #include "ts_catalog/catalog.h"
 #include "ts_catalog/chunk_column_stats.h"
+#include "ts_catalog/chunk_rewrite.h"
 #include "ts_catalog/compression_settings.h"
 #include "ts_catalog/continuous_agg.h"
 #include "ts_catalog/continuous_aggs_watermark.h"
@@ -1437,7 +1437,7 @@ process_drop_table_chunk(Hypertable *ht, Oid chunk_relid, void *arg)
 	};
 
 	ts_compression_settings_delete(chunk_relid);
-	ts_chunk_rewrite_delete(chunk_relid);
+	ts_chunk_rewrite_delete(chunk_relid, false);
 	performDeletion(&objaddr, stmt->behavior, 0);
 }
 
@@ -5413,7 +5413,7 @@ process_drop_table(EventTriggerDropObject *obj)
 	 * since the eventtrigger gives us the relid of dropped objects.
 	 */
 	ts_compression_settings_delete_any(table->relid);
-	ts_chunk_rewrite_delete(table->relid);
+	ts_chunk_rewrite_delete(table->relid, false);
 }
 
 static void

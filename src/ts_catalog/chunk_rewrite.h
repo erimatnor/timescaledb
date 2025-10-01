@@ -13,4 +13,14 @@ extern TSDLLEXPORT void ts_chunk_rewrite_add(Oid chunk_relid, Oid new_relid);
 extern TSDLLEXPORT bool ts_chunk_rewrite_get_with_lock(Oid chunk_relid, Form_chunk_rewrite form,
 													   ItemPointer tid);
 extern TSDLLEXPORT void ts_chunk_rewrite_delete_by_tid(const ItemPointer tid);
-extern bool ts_chunk_rewrite_delete(Oid chunk_relid);
+
+typedef enum ChunkRewriteDeleteResult
+{
+	ChunkRewriteOngoing,
+	ChunkRewriteEntryDeleted,
+	ChunkRewriteEntryDeletedAndTableDropped,
+	ChunkRewriteEntryDoesNotExist,
+} ChunkRewriteDeleteResult;
+
+extern TSDLLEXPORT ChunkRewriteDeleteResult ts_chunk_rewrite_delete(Oid chunk_relid,
+																	bool conditional);
