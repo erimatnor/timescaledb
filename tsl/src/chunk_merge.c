@@ -18,6 +18,7 @@
 #include <executor/spi.h>
 #include <nodes/makefuncs.h>
 #include <nodes/parsenodes.h>
+#include <port.h>
 #include <storage/block.h>
 #include <storage/bufmgr.h>
 #include <storage/itemptr.h>
@@ -25,13 +26,16 @@
 #include <storage/lockdefs.h>
 #include <utils/acl.h>
 #include <utils/elog.h>
+#include <utils/guc.h>
 #include <utils/memutils.h>
 #include <utils/palloc.h>
 #include <utils/rel.h>
+#include <utils/relcache.h>
 #include <utils/snapmgr.h>
 #include <utils/syscache.h>
 
 #include "chunk.h"
+#include "chunk_index.h"
 #include "debug_point.h"
 #include "hypercube.h"
 #include "import/heapswap.h"
@@ -660,10 +664,6 @@ copy_table_data(Relation fromrel, Relation torel, struct VacuumCutoffs *cutoffs,
 	if (MultiXactIdPrecedes(merged_cutoffs->MultiXactCutoff, cutoffs->MultiXactCutoff))
 		merged_cutoffs->MultiXactCutoff = cutoffs->MultiXactCutoff;
 
-	/* Close the relations before the heap swap, but keep the locks until
-	 * end of transaction. */
-	table_close(fromrel, NoLock);
-
 	return num_tuples;
 }
 
@@ -688,7 +688,8 @@ append_rellock(List *rellocks, Relation rel, LOCKMODE lockmode, MemoryContext mc
 
 static Oid
 merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMODE old_heap_lockmode,
-			   List **rellocks, RelationMergeStats *stats, MemoryContext merge_mcxt)
+			   List **rellocks, RelationMergeStats *stats, MemoryContext merge_mcxt,
+			   bool concurrently)
 {
 	RelationMergeInfo *result_minfo = &relinfos[mergeindex];
 	Relation result_rel = result_minfo->rel;
@@ -726,7 +727,16 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 		{
 			num_tuples = copy_table_data(relinfo->rel, new_rel, cutoffs_i, merged_cutoffs);
 			stats->reltuples += num_tuples;
-			relinfo->rel = NULL;
+
+			if (concurrently)
+			{
+				/*
+				 * Mark this chunk as being rewritten by adding an entry in the
+				 * chunk_rewrite catalog. This will also allow cleanup up new heaps in
+				 * case the second transaction fails.
+				 */
+				ts_chunk_rewrite_add(relinfo->relid, new_relid);
+			}
 		}
 
 		/*
@@ -750,8 +760,45 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 		stats->ccs.numrows_frozen_immediately += relinfo->ccs.numrows_frozen_immediately;
 	}
 
+	/*
+	 * Rebuild indexes on new heap (if in concurrent mode). In non-concurrent
+	 * mode, indexes are rebuilt as part of the heap swap (this is how PG
+	 * normally does it).
+	 */
+	if (concurrently)
+	{
+		//		result_minfo->ind_oids_old = RelationGetIndexList(result_rel);
+		/* Create versions of the tables indexes for the new table */
+		result_minfo->ind_oids_new = ts_chunk_index_duplicate(result_rel->rd_id,
+															  new_rel->rd_id,
+															  &result_minfo->ind_oids_old,
+															  InvalidOid);
+
+		//		result_minfo->ind_oids_new =
+		//			ts_build_new_indexes(new_rel, result_rel, result_minfo->ind_oids_old);
+	}
+
 	stats->num_pages = RelationGetNumberOfBlocks(new_rel);
 	pg17_workaround_cleanup(new_rel);
+
+	/* Now close all relations */
+	for (int i = 0; i < nrelids; i++)
+	{
+		RelationMergeInfo *relinfo = get_relmergeinfo(relinfos, nrelids, i);
+
+		/*
+		 * Close the relations before the heap swap, but keep the locks until
+		 * end of transaction. Note that some relations might be NULL because
+		 * not all chunks are compressed. We still maintain a NULL entry in
+		 * the the array for the compressed chunk.
+		 */
+		if (relinfo->rel)
+		{
+			table_close(relinfo->rel, NoLock);
+			relinfo->rel = NULL;
+		}
+	}
+
 	table_close(new_rel, NoLock);
 
 	return new_relid;
@@ -1085,7 +1132,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		if (rel->rd_rel->reltoastrelid)
 			LockRelationOid(rel->rd_rel->reltoastrelid, lockmode);
 
-		/* Add heap relation to the list of locked relations */
+		/* Add heap relation to the list of locked relations. We need this to
+		 * later grab session locks. */
 		rellocks = append_rellock(rellocks, rel, lockmode, merge_cxt);
 
 		/*
@@ -1243,12 +1291,12 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			MemoryContextSwitchTo(old_mcxt);
 
 			crelinfo->relid = crelinfo->chunk->table_id;
-			crelinfo->rel =
-				table_open(crelinfo->relid, concurrently ? ExclusiveLock : AccessExclusiveLock);
+			crelinfo->rel = table_open(crelinfo->relid, lockmode);
 			crelinfo->isresult = relinfos[i].isresult;
 			crelinfo->iscompressed_rel = true;
 			crelinfo->relpersistence = crelinfo->rel->rd_rel->relpersistence;
 			compute_rel_vacuum_cutoffs(crelinfos[i].rel, &crelinfos[i].cutoffs);
+			rellocks = append_rellock(rellocks, crelinfo->rel, lockmode, merge_cxt);
 		}
 
 		/* Need to update the index of the result (merged) relation after
@@ -1265,15 +1313,22 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	 */
 	RelationMergeStats merge_stats;
 	RelationMergeStats cmerge_stats;
-	Oid new_relid =
-		merge_relinfos(relinfos, nrelids, mergeindex, lockmode, &rellocks, &merge_stats, merge_cxt);
+	Oid new_relid = merge_relinfos(relinfos,
+								   nrelids,
+								   mergeindex,
+								   lockmode,
+								   &rellocks,
+								   &merge_stats,
+								   merge_cxt,
+								   concurrently);
 	Oid new_crelid = merge_relinfos(crelinfos,
 									nrelids,
 									mergeindex,
 									lockmode,
 									&rellocks,
 									&cmerge_stats,
-									merge_cxt);
+									merge_cxt,
+									concurrently);
 
 	/*
 	 * From here on we only need the relinfos arrays.
@@ -1299,24 +1354,6 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			SessionLockInfo *lockinfo = (SessionLockInfo *) lfirst(lc);
 
 			LockRelationIdForSession(&lockinfo->locktag, lockinfo->lockmode);
-		}
-
-		/*
-		 * Mark this chunk as being rewritten by adding an entry in the
-		 * chunk_rewrite catalog.
-		 */
-		for (int i = 0; i < nrelids; i++)
-		{
-			const RelationMergeInfo *relinfo = &relinfos[i];
-			const RelationMergeInfo *crelinfo = &crelinfos[i];
-
-			ts_chunk_rewrite_add(relinfo->relid, new_relid);
-
-			if (OidIsValid(crelinfo->relid))
-			{
-				Assert(OidIsValid(new_crelid));
-				ts_chunk_rewrite_add(crelinfo->relid, new_crelid);
-			}
 		}
 
 		DEBUG_WAITPOINT("merge_chunks_before_first_commit");
@@ -1402,6 +1439,13 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	}
 
 	MemoryContextDelete(merge_cxt);
+
+#ifdef TS_DEBUG
+	const char *fail_merge = GetConfigOption("timescaledb.chunk_merge_fail", true, false);
+
+	if (fail_merge && pg_strcasecmp(fail_merge, "true") == 0)
+		elog(ERROR, "chunk merge failed intentionally");
+#endif
 
 	DEBUG_WAITPOINT("merge_chunks_before_exit");
 

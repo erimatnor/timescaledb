@@ -353,6 +353,7 @@ set timescaledb.enable_merge_multidim_chunks = true;
 -- Merge all chunks until only 1 remains.  Also check that metadata is
 -- merged.
 ---
+begin;
 select * from compression_size_fraction;
 select count(*), sum(device), round(sum(temp)::numeric, 4) from mergeme;
 call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
@@ -370,8 +371,38 @@ call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_
 select * from compression_size_fraction;
 select count(*), sum(device), round(sum(temp)::numeric, 4) from mergeme;
 select * from partitions;
-call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
+call merge_chunks(ARRAY['_timescaledb_internal._hyper_1_3_chunk', '_timescaledb_internal._hyper_1_1_chunk','_timescaledb_internal._hyper_1_2_chunk']);
 select * from compression_size_fraction;
 select count(*), sum(device), round(sum(temp)::numeric, 4) from mergeme;
 select * from partitions;
 select * from chunk_info;
+rollback;
+
+----------------------------
+-- Test concurrent merges --
+----------------------------
+
+create view chunks_being_merged as
+select
+    *,
+    pg_table_size(new_relid) as chunk_size_bytes,
+    (select array_agg(indexrelid::regclass) from pg_index where indrelid=new_relid) as chunk_indexes
+from _timescaledb_catalog.chunk_rewrite;
+
+-- Concurrent merge cannot run in a transaction block
+\set ON_ERROR_STOP 0
+begin;
+call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
+rollback;
+
+set timescaledb.chunk_merge_fail = true;
+call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
+\set ON_ERROR_STOP 1
+
+select * from chunks_being_merged;
+create table cleaned_rewrite_chunks as select * from chunks_being_merged;
+call _timescaledb_functions.chunk_rewrite_cleanup();
+select *, pg_table_size(new_relid) from _timescaledb_catalog.chunk_rewrite;
+select * from cleaned_rewrite_chunks;
+
+drop view chunks_being_merged;

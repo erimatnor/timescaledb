@@ -192,12 +192,12 @@ ts_chunk_rewrite_cleanup(PG_FUNCTION_ARGS)
 		TupleInfo *ti = ts_scan_iterator_tuple_info(&it);
 		bool isnull = false;
 
-		Datum chunk_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_chunk_relid, &isnull);
-		Assert(!isnull);
-		// Datum new_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_new_relid, &isnull);
+		// Datum chunk_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_chunk_relid, &isnull);
 		// Assert(!isnull);
+		Datum new_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_new_relid, &isnull);
+		Assert(!isnull);
 
-		Oid new_relid = DatumGetObjectId(chunk_relid_dat);
+		Oid new_relid = DatumGetObjectId(new_relid_dat);
 
 		/*
 		 * A concurrent merge might be in progress, so try to lock the "new"

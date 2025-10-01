@@ -41,6 +41,7 @@ setup
            join pg_inherits inh
            on (cl.oid = inh.inhrelid)
            where inh.inhparent = hypertable
+           order by cl.oid
            limit 1;
         execute format('drop table %s cascade', chunk);
      end;
