@@ -1,11 +1,9 @@
 unused step name: s3_insert_chunk_not_merged
 unused step name: s3_insert_chunk_that_remains
 unused step name: s3_modify
-unused step name: s5_insert_chunk_remaining_after_merge
+unused step name: s5_insert_chunk_not_merged
 unused step name: s6_insert_chunk_remaining_after_merge
 unused step name: s6_show_temp_rels
-unused step name: wp_concurrent_on
-unused step name: wp_concurrent_release
 unused step name: wp_e_on
 unused step name: wp_e_release
 Parsed test spec with 8 sessions
@@ -14,7 +12,7 @@ starting permutation: s2_show_chunks s3_show_data s1_begin s3_begin s5_modify s2
 step s2_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    3
+    4
 (1 row)
 
 step s3_show_data: 
@@ -23,16 +21,17 @@ step s3_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 num_device_all|num_device_1|num_device_5
 --------------+------------+------------
-             5|           1|           1
+             6|           1|           1
 (1 row)
 
 step s1_begin: 
@@ -63,13 +62,13 @@ step s2_merge_chunks:
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 step s3_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 step s1_show_data: 
@@ -77,12 +76,13 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s3_show_data: 
     select * from readings order by time desc, device;
@@ -90,16 +90,17 @@ step s3_show_data:
 
 time                        |device|msg      
 ----------------------------+------+---------
+Mon Jan 01 04:40:00 2024 PST|     6|six      
 Mon Jan 01 03:30:00 2024 PST|     5|five     
 Mon Jan 01 02:00:00 2024 PST|     3|three    
 Mon Jan 01 02:00:00 2024 PST|     4|four     
 Mon Jan 01 01:05:00 2024 PST|     5|s5 modify
 Mon Jan 01 01:01:00 2024 PST|     2|two      
-(5 rows)
+(6 rows)
 
 num_device_all|num_device_1|num_device_5
 --------------+------------+------------
-             5|           0|           2
+             6|           0|           2
 (1 row)
 
 step s1_commit: commit;
@@ -108,12 +109,13 @@ step s1_show_data:
 
 time                        |device|msg      
 ----------------------------+------+---------
+Mon Jan 01 04:40:00 2024 PST|     6|six      
 Mon Jan 01 03:30:00 2024 PST|     5|five     
 Mon Jan 01 02:00:00 2024 PST|     3|three    
 Mon Jan 01 02:00:00 2024 PST|     4|four     
 Mon Jan 01 01:05:00 2024 PST|     5|s5 modify
 Mon Jan 01 01:01:00 2024 PST|     2|two      
-(5 rows)
+(6 rows)
 
 step s3_commit: commit;
 
@@ -121,7 +123,7 @@ starting permutation: s2_show_chunks s1_begin s1_show_data s2_merge_chunks s1_sh
 step s2_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    3
+    4
 (1 row)
 
 step s1_begin: 
@@ -138,12 +140,13 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s2_merge_chunks: 
     call merge_two_chunks('readings');
@@ -153,12 +156,13 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_commit: commit;
 step s2_merge_chunks: <... completed>
@@ -167,17 +171,18 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 
@@ -191,7 +196,7 @@ debug_waitpoint_enable
 step s2_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    3
+    4
 (1 row)
 
 step s1_begin: 
@@ -208,12 +213,13 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s2_merge_chunks: 
     call merge_two_chunks('readings');
@@ -223,38 +229,41 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_row_exclusive_lock: call lock_one_chunk('readings');
+ERROR:  procedure lock_one_chunk(unknown) does not exist
 step wp_swap_off: SELECT debug_waitpoint_release('merge_chunks_before_heap_swap');
 debug_waitpoint_release
 -----------------------
                        
 (1 row)
 
-step s1_commit: commit;
 step s2_merge_chunks: <... completed>
+step s1_commit: commit;
 step s1_show_data: 
     select * from readings order by time desc, device;
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 
@@ -268,7 +277,7 @@ debug_waitpoint_enable
 step s2_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    3
+    4
 (1 row)
 
 step s1_begin: 
@@ -296,12 +305,13 @@ step s2_merge_chunks: <... completed>
 step s1_show_data: <... completed>
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_commit: commit;
 step s1_show_data: 
@@ -309,17 +319,18 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 
@@ -350,17 +361,18 @@ step s1_show_data:
 
 time                        |device|msg  
 ----------------------------+------+-----
+Mon Jan 01 04:40:00 2024 PST|     6|six  
 Mon Jan 01 03:30:00 2024 PST|     5|five 
 Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four 
 Mon Jan 01 01:01:00 2024 PST|     2|two  
 Mon Jan 01 01:00:00 2024 PST|     1|one  
-(5 rows)
+(6 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    2
+    3
 (1 row)
 
 
@@ -390,24 +402,25 @@ step s1_show_data:
 
 time                        |device|msg 
 ----------------------------+------+----
+Mon Jan 01 04:40:00 2024 PST|     6|six 
 Mon Jan 01 03:30:00 2024 PST|     5|five
-(1 row)
+(2 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
-    1
+    2
 (1 row)
 
 
-starting permutation: wp_swap_on wp_c_on s2_merge_chunks_concurrently s3_insert_chunk_to_be_dropped s4_insert_result_chunk s6_insert_chunk_not_merged s7_insert_new_chunk s1_show_chunks s1_show_data s5_show_temp_rels wp_c_release s1_show_merge wp_swap_off s1_show_data s1_show_chunks s1_show_merge
+starting permutation: wp_swap_on wp_before_first_commit_on s2_merge_chunks_concurrently s3_insert_chunk_to_be_dropped s4_insert_result_chunk s6_insert_chunk_not_merged s7_insert_new_chunk s1_show_chunks s1_show_data s5_show_temp_rels wp_before_first_commit_off s1_show_merge wp_swap_off s1_show_data s1_show_chunks s1_show_merge
 step wp_swap_on: SELECT debug_waitpoint_enable('merge_chunks_before_heap_swap');
 debug_waitpoint_enable
 ----------------------
                       
 (1 row)
 
-step wp_c_on: SELECT debug_waitpoint_enable('merge_chunks_before_first_commit');
+step wp_before_first_commit_on: SELECT debug_waitpoint_enable('merge_chunks_before_first_commit');
 debug_waitpoint_enable
 ----------------------
                       
@@ -439,6 +452,7 @@ step s1_show_data:
 
 time                        |device|msg                
 ----------------------------+------+-------------------
+Mon Jan 01 04:40:00 2024 PST|     6|six                
 Mon Jan 01 04:04:00 2024 PST|    11|s7 new chunk       
 Mon Jan 01 03:30:00 2024 PST|     5|five               
 Mon Jan 01 03:20:00 2024 PST|     9|s6 chunk not merged
@@ -446,7 +460,7 @@ Mon Jan 01 02:00:00 2024 PST|     3|three
 Mon Jan 01 02:00:00 2024 PST|     4|four               
 Mon Jan 01 01:01:00 2024 PST|     2|two                
 Mon Jan 01 01:00:00 2024 PST|     1|one                
-(7 rows)
+(8 rows)
 
 step s5_show_temp_rels: 
     select oid from pg_class where relname like 'pg_temp%';
@@ -455,7 +469,7 @@ oid
 ---
 (0 rows)
 
-step wp_c_release: SELECT debug_waitpoint_release('merge_chunks_before_first_commit');
+step wp_before_first_commit_off: SELECT debug_waitpoint_release('merge_chunks_before_first_commit');
 debug_waitpoint_release
 -----------------------
                        
@@ -483,6 +497,7 @@ step s1_show_data:
 
 time                        |device|msg                
 ----------------------------+------+-------------------
+Mon Jan 01 04:40:00 2024 PST|     6|six                
 Mon Jan 01 04:04:00 2024 PST|    11|s7 new chunk       
 Mon Jan 01 03:30:00 2024 PST|     5|five               
 Mon Jan 01 03:20:00 2024 PST|     9|s6 chunk not merged
@@ -493,7 +508,7 @@ Mon Jan 01 02:00:00 2024 PST|     4|four
 Mon Jan 01 01:10:00 2024 PST|     8|s4 result chunk    
 Mon Jan 01 01:01:00 2024 PST|     2|two                
 Mon Jan 01 01:00:00 2024 PST|     1|one                
-(10 rows)
+(11 rows)
 
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
@@ -507,5 +522,68 @@ step s1_show_merge:
 count
 -----
     0
+(1 row)
+
+
+starting permutation: s1_show_chunks wp_after_first_commit_on s2_merge_chunks_concurrently s3_merge_chunks_concurrently wp_after_first_commit_off s1_show_chunks
+step s1_show_chunks: select count(*) from show_chunks('readings');
+count
+-----
+    4
+(1 row)
+
+step wp_after_first_commit_on: SELECT debug_waitpoint_enable('merge_chunks_after_first_commit');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s2_merge_chunks_concurrently: 
+    call merge_two_chunks('readings', concurrent => true);
+ <waiting ...>
+step s3_merge_chunks_concurrently: 
+    call merge_two_chunks('readings', concurrent => true);
+ <waiting ...>
+step wp_after_first_commit_off: SELECT debug_waitpoint_release('merge_chunks_after_first_commit');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s2_merge_chunks_concurrently: <... completed>
+step s3_merge_chunks_concurrently: <... completed>
+ERROR:  chunk does not exist
+step s1_show_chunks: select count(*) from show_chunks('readings');
+count
+-----
+    3
+(1 row)
+
+
+starting permutation: s1_show_chunks s2_lock_chunk s5_merge_1_2_concurrently s5_merge_3_4_concurrently s2_commit s1_show_chunks
+step s1_show_chunks: select count(*) from show_chunks('readings');
+count
+-----
+    4
+(1 row)
+
+step s2_lock_chunk: 
+    begin;
+    call lock_chunk('readings', 0);
+
+step s5_merge_1_2_concurrently: 
+    call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
+ <waiting ...>
+step s5_merge_3_4_concurrently: 
+    call merge_chunks(getchunk('readings', 2), getchunk('readings', 3), concurrently => true);
+
+step s2_commit: 
+    commit;
+
+step s5_merge_1_2_concurrently: <... completed>
+step s1_show_chunks: select count(*) from show_chunks('readings');
+count
+-----
+    2
 (1 row)
 

@@ -1378,6 +1378,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 			StartTransactionCommand();
 		}
 
+		DEBUG_WAITPOINT("merge_chunks_after_first_commit");
+
 		/*
 		 * In new transaction, get a new snapshot and take AccessExclusivelock
 		 * on all merge relations.

@@ -6,7 +6,7 @@ setup
 {
     create table readings (time timestamptz, device int, msg text);
     select create_hypertable('readings', 'time', chunk_time_interval => interval '1 hour');
-           insert into readings values ('2024-01-01 01:00', 1, 'one'), ('2024-01-01 01:01', 2, 'two'), ('2024-01-01 02:00', 3, 'three'), ('2024-01-01 02:00', 4, 'four'), ('2024-01-01 03:30', 5, 'five');
+           insert into readings values ('2024-01-01 01:00', 1, 'one'), ('2024-01-01 01:01', 2, 'two'), ('2024-01-01 02:00', 3, 'three'), ('2024-01-01 02:00', 4, 'four'), ('2024-01-01 03:30', 5, 'five'), ('2024-01-01 04:40', 6, 'six');
     alter table readings set (timescaledb.compress_orderby='time', timescaledb.compress_segmentby='device');
 
     create or replace procedure merge_two_chunks(hypertable regclass, concurrent boolean = false) as $$
@@ -14,7 +14,7 @@ setup
         chunks_arr regclass[];
     begin
         with chunks as (
-            select cl.oid as oid         
+            select cl.oid as oid
                from pg_class cl
                join pg_inherits inh
                on (cl.oid = inh.inhrelid)
@@ -47,12 +47,21 @@ setup
      end;
     $$ LANGUAGE plpgsql;
 
-    create or replace procedure lock_one_chunk(hypertable regclass) as $$
+    create or replace procedure lock_chunk(hypertable regclass, off int = 1) as $$
     declare
         chunk regclass;
     begin
-        select ch into chunk from show_chunks(hypertable) ch offset 1 limit 1;
+        execute format('select ch from show_chunks(%L) ch offset %s limit 1', hypertable, off) into chunk;
         execute format('lock %s in row exclusive mode', chunk);
+    end;
+    $$ LANGUAGE plpgsql;
+
+    create or replace function getchunk(hypertable regclass, off int = 0) returns regclass as $$
+    declare
+        chunk regclass;
+    begin
+        execute format('select ch from show_chunks(%L) ch offset %s limit 1', hypertable, off) into chunk;
+        return chunk;
     end;
     $$ LANGUAGE plpgsql;
 }
@@ -66,10 +75,11 @@ session "wp"
 step "wp_swap_on" { SELECT debug_waitpoint_enable('merge_chunks_before_heap_swap'); }
 step "wp_swap_off" { SELECT debug_waitpoint_release('merge_chunks_before_heap_swap'); }
 
-step "wp_concurrent_on" { SELECT debug_waitpoint_enable('merge_chunks_after_concurrent_wait'); }
-step "wp_concurrent_release" { SELECT debug_waitpoint_release('merge_chunks_after_concurrent_wait'); }
-step "wp_c_on" { SELECT debug_waitpoint_enable('merge_chunks_before_first_commit'); }
-step "wp_c_release" { SELECT debug_waitpoint_release('merge_chunks_before_first_commit'); }
+step "wp_before_first_commit_on" { SELECT debug_waitpoint_enable('merge_chunks_before_first_commit'); }
+step "wp_before_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks_before_first_commit'); }
+
+step "wp_after_first_commit_on" { SELECT debug_waitpoint_enable('merge_chunks_after_first_commit'); }
+step "wp_after_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks_after_first_commit'); }
 
 step "wp_e_on" { SELECT debug_waitpoint_enable('merge_chunks_before_exit'); }
 step "wp_e_release" { SELECT debug_waitpoint_release('merge_chunks_before_exit'); }
@@ -113,6 +123,15 @@ step "s2_merge_chunks_concurrently" {
     call merge_two_chunks('readings', concurrent => true);
 }
 
+step "s2_lock_chunk" {
+    begin;
+    call lock_chunk('readings', 0);
+}
+
+step "s2_commit" {
+    commit;
+}
+
 session "s3"
 setup	{
     set local lock_timeout = '500ms';
@@ -130,6 +149,9 @@ step "s3_show_data" {
 step "s3_show_chunks" { select count(*) from show_chunks('readings'); }
 step "s3_merge_chunks" {
     call merge_two_chunks('readings');
+}
+step "s3_merge_chunks_concurrently" {
+    call merge_two_chunks('readings', concurrent => true);
 }
 
 step "s3_modify" {
@@ -182,10 +204,6 @@ setup	{
     set local deadlock_timeout = '10000ms';
 }
 
-step "s5_insert_chunk_remaining_after_merge" {
-    insert into readings values ('2024-01-01 01:01', 6, 's5 chunk remaining');
-}
-
 step "s5_show_temp_rels" {
     select oid from pg_class where relname like 'pg_temp%';
 }
@@ -193,6 +211,14 @@ step "s5_show_temp_rels" {
 step "s5_modify" {
     delete from readings where device=1;
     insert into readings values ('2024-01-01 01:05', 5, 's5 modify');
+}
+
+step "s5_insert_chunk_not_merged" {
+    insert into readings values ('2024-01-01 03:20', 9, 's6 chunk not merged');
+}
+
+step "s5_merge_1_2_concurrently" {
+    call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
 }
 
 session "s6"
@@ -211,6 +237,11 @@ step "s6_insert_chunk_not_merged" {
 
 step "s6_show_temp_rels" {
     select oid from pg_class where relname like 'pg_temp%';
+}
+
+
+step "s5_merge_3_4_concurrently" {
+    call merge_chunks(getchunk('readings', 2), getchunk('readings', 3), concurrently => true);
 }
 
 session "s7"
@@ -258,9 +289,22 @@ permutation "wp_swap_on" "s2_merge_chunks" "s3_merge_chunks" "wp_swap_off" "s1_s
 # Test concurrent DROP TABLE on chunk (currently deadlocks because of locks on parent table)
 permutation "wp_swap_on" "s2_merge_chunks" "s3_drop_chunks" "wp_swap_off" "s1_show_data" "s1_show_chunks"
 
-# Reader should not be blocked by concurrent merge
-permutation "wp_swap_on" "wp_c_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "wp_c_release" "s1_show_merge" "wp_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge" 
+# Concurrent reads and various inserters during a concurrent merge of
+# two chunks. The sessions include:
+#
+# 1. Merger
+# 2. Reader
+# 3. Inserter into merged chunk 1 (blocked)
+# 4. Inserter into merged chunk 2 (blocked)
+# 5. Inserter into chunk 2, which is not being merged (not blocked)
+# 6. Inserter into new chunk (which didn't exist) (not blocked)
+permutation "wp_swap_on" "wp_before_first_commit_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "wp_before_first_commit_off" "s1_show_merge" "wp_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge"
 
-#permutation "wp_e_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "wp_e_release" "s1_show_data" "s1_show_chunks"
+# Two concurrent merges of same chunks. One will fail since the the
+# first merge drops one of the chunks.
+permutation "s1_show_chunks" "wp_after_first_commit_on" "s2_merge_chunks_concurrently" "s3_merge_chunks_concurrently" "wp_after_first_commit_off" "s1_show_chunks"
 
-#permutation "wp_concurrent_on" "s2_merge_chunks_concurrently" "s5_insert_chunk_remaining_after_merge" "s1_show_chunks" "s1_show_data" "wp_concurrent_release" "s1_show_data" "s1_show_chunks"
+# Two conccurrent merges of different chunks. Should not block each
+# other. Use a lock on one chunk to ensure the first merge doesn't
+# complete before the other runs.
+permutation "s1_show_chunks" "s2_lock_chunk" "s5_merge_1_2_concurrently" "s5_merge_3_4_concurrently" "s2_commit" "s1_show_chunks"
