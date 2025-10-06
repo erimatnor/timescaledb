@@ -204,8 +204,8 @@ setup	{
     set local deadlock_timeout = '10000ms';
 }
 
-step "s5_show_temp_rels" {
-    select oid from pg_class where relname like 'pg_temp%';
+step "s5_show_merge_rels" {
+    select * from _timescaledb_catalog.chunk_rewrite;
 }
 
 step "s5_modify" {
@@ -219,6 +219,11 @@ step "s5_insert_chunk_not_merged" {
 
 step "s5_merge_1_2_concurrently" {
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
+}
+
+step "s5_merge_cleanup" {
+    call _timescaledb_functions.chunk_rewrite_cleanup();
+    select * from _timescaledb_catalog.chunk_rewrite;
 }
 
 session "s6"
@@ -235,12 +240,11 @@ step "s6_insert_chunk_not_merged" {
     insert into readings values ('2024-01-01 03:20', 9, 's6 chunk not merged');
 }
 
-step "s6_show_temp_rels" {
-    select oid from pg_class where relname like 'pg_temp%';
+step "s6_show_merge_rels" {
+    select * from _timescaledb_catalog.chunk_rewrite;
 }
 
-
-step "s5_merge_3_4_concurrently" {
+step "s6_merge_3_4_concurrently" {
     call merge_chunks(getchunk('readings', 2), getchunk('readings', 3), concurrently => true);
 }
 
@@ -248,11 +252,16 @@ session "s7"
 setup	{
     set local lock_timeout = '500ms';
     set local deadlock_timeout = '10000ms';
+    set timescaledb.chunk_merge_fail = true;
 }
 
 step "s7_insert_new_chunk" {
     insert into readings values ('2024-01-01 04:04', 11, 's7 new chunk');
 }
+
+step "s7_fail_merge" {
+    call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
+  }
 
 # Run 4 backends:
 #
@@ -298,7 +307,7 @@ permutation "wp_swap_on" "s2_merge_chunks" "s3_drop_chunks" "wp_swap_off" "s1_sh
 # 4. Inserter into merged chunk 2 (blocked)
 # 5. Inserter into chunk 2, which is not being merged (not blocked)
 # 6. Inserter into new chunk (which didn't exist) (not blocked)
-permutation "wp_swap_on" "wp_before_first_commit_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_temp_rels" "wp_before_first_commit_off" "s1_show_merge" "wp_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge"
+permutation "wp_swap_on" "wp_before_first_commit_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_merge_rels" "wp_before_first_commit_off" "s1_show_merge" "wp_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge"
 
 # Two concurrent merges of same chunks. One will fail since the the
 # first merge drops one of the chunks.
@@ -307,4 +316,9 @@ permutation "s1_show_chunks" "wp_after_first_commit_on" "s2_merge_chunks_concurr
 # Two conccurrent merges of different chunks. Should not block each
 # other. Use a lock on one chunk to ensure the first merge doesn't
 # complete before the other runs.
-permutation "s1_show_chunks" "s2_lock_chunk" "s5_merge_1_2_concurrently" "s5_merge_3_4_concurrently" "s2_commit" "s1_show_chunks"
+permutation "s1_show_chunks" "s2_lock_chunk" "s5_merge_1_2_concurrently" "s6_merge_3_4_concurrently" "s2_commit" "s1_show_chunks"
+
+# Test that failed merge is cleaned up. Also test that cleanup function does not clean up stuff currently running
+permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "s5_merge_1_2_concurrently" "s1_show_chunks" "s5_show_merge_rels"
+
+permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "wp_after_first_commit_on" "s6_merge_3_4_concurrently" "s5_merge_cleanup" "wp_after_first_commit_off" "s5_show_merge_rels"
