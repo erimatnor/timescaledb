@@ -804,9 +804,14 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 	return new_relid;
 }
 
+/*
+ * Relock a relation being concurrently merged.
+ *
+ * The locking happens in the second transaction before swapping
+ * the merged heaps.
+ */
 static void
-acquire_locks_for_merge(const Relation hyper_rel, RelationMergeInfo *rmi, LOCKMODE lockmode,
-						bool keep_open)
+relock_rel(const Relation hyper_rel, RelationMergeInfo *rmi, LOCKMODE lockmode)
 {
 	rmi->rel = try_table_open(rmi->relid, lockmode);
 
@@ -843,33 +848,35 @@ acquire_locks_for_merge(const Relation hyper_rel, RelationMergeInfo *rmi, LOCKMO
 
 	/* Now that we know the relations still exist, they can be
 	 * closed. We just need the locks. */
-
-	if (!keep_open)
-	{
-		table_close(rmi->rel, NoLock);
-		rmi->rel = NULL;
-	}
+	table_close(rmi->rel, NoLock);
+	rmi->rel = NULL;
 }
 
 static void
 lock_merged_rels(Oid hyper_relid, RelationMergeInfo *relinfos, RelationMergeInfo *crelinfos,
-				 int nrelids, LOCKMODE lockmode, bool keep_open)
+				 int nrelids, LOCKMODE lockmode)
 {
 	Relation hyper_rel = try_relation_open(hyper_relid, ShareUpdateExclusiveLock);
 
 	for (int i = 0; i < nrelids; i++)
 	{
-		acquire_locks_for_merge(hyper_rel, &relinfos[i], lockmode, keep_open);
+		relock_rel(hyper_rel, &relinfos[i], lockmode);
 
 		if (OidIsValid(crelinfos[i].relid))
-			acquire_locks_for_merge(hyper_rel, &crelinfos[i], lockmode, keep_open);
+			relock_rel(hyper_rel, &crelinfos[i], lockmode);
 	}
 
 	table_close(hyper_rel, NoLock);
 }
 
+/*
+ * Relock the new relation heaps.
+ *
+ * This lock is taken in the second transaction before these heaps
+ * are swapped with the old heaps.
+ */
 static void
-lock_new_rels(Oid new_relid, Oid new_crelid, LOCKMODE lockmode)
+relock_new_rels(Oid new_relid, Oid new_crelid, LOCKMODE lockmode)
 {
 	/*
 	 * Re-lock the new heaps, including any toast tables.
@@ -1385,13 +1392,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 		 * on all merge relations.
 		 */
 		PushActiveSnapshot(GetTransactionSnapshot());
-		lock_merged_rels(hypertable_relid,
-						 relinfos,
-						 crelinfos,
-						 nrelids,
-						 AccessExclusiveLock,
-						 false);
-		lock_new_rels(new_relid, new_crelid, AccessExclusiveLock);
+		lock_merged_rels(hypertable_relid, relinfos, crelinfos, nrelids, AccessExclusiveLock);
+		relock_new_rels(new_relid, new_crelid, AccessExclusiveLock);
 	}
 	else
 	{
