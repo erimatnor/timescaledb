@@ -48,3 +48,11 @@ BEGIN
 		END IF;
     END LOOP;
 END $$;
+
+-- Add support for concurrent merge_chunks()
+DROP PROCEDURE IF EXISTS @extschema@.merge_chunks(REGCLASS, REGCLASS);
+
+CREATE OR REPLACE PROCEDURE @extschema@.merge_chunks(
+   chunk1 REGCLASS, chunk2 REGCLASS, concurrently BOOLEAN = false
+) LANGUAGE C AS '@MODULE_PATHNAME@', 'ts_update_placeholder';
+
