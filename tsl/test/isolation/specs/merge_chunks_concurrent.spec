@@ -72,17 +72,14 @@ teardown {
 
 # Waitpoints
 session "wp"
-step "wp_swap_on" { SELECT debug_waitpoint_enable('merge_chunks_before_heap_swap'); }
-step "wp_swap_off" { SELECT debug_waitpoint_release('merge_chunks_before_heap_swap'); }
+step "wp_before_heap_swap_on" { SELECT debug_waitpoint_enable('merge_chunks_before_heap_swap'); }
+step "wp_before_heap_swap_off" { SELECT debug_waitpoint_release('merge_chunks_before_heap_swap'); }
 
 step "wp_before_first_commit_on" { SELECT debug_waitpoint_enable('merge_chunks_before_first_commit'); }
 step "wp_before_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks_before_first_commit'); }
 
 step "wp_after_first_commit_on" { SELECT debug_waitpoint_enable('merge_chunks_after_first_commit'); }
 step "wp_after_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks_after_first_commit'); }
-
-step "wp_e_on" { SELECT debug_waitpoint_enable('merge_chunks_before_exit'); }
-step "wp_e_release" { SELECT debug_waitpoint_release('merge_chunks_before_exit'); }
 
 session "s1"
 setup	{
@@ -154,11 +151,9 @@ step "s3_merge_chunks_concurrently" {
     call merge_two_chunks('readings', concurrent => true);
 }
 
-step "s3_modify" {
-    delete from readings where device=1;
-    insert into readings values ('2024-01-01 01:05', 6, 's3 modify');
-}
-
+#step "s3_compress_chunk" {
+#    call convert_to_columnstore(getchunk('readings' , 0));
+#}
 
 # TODO test 4 cases for inserts.
 #
@@ -173,19 +168,10 @@ step "s3_insert_chunk_to_be_dropped" {
     insert into readings values ('2024-01-01 02:10', 6, 's3 dropped chunk'), ('2024-01-01 02:12', 7, 's3 dropped chunk');
 }
 
-
-step "s3_insert_chunk_that_remains" {
-    insert into readings values ('2024-01-01 01:10', 8, 's3 remaining chunk');
-}
-
-
-step "s3_insert_chunk_not_merged" {
-    insert into readings values ('2024-01-01 03:20', 9, 's3 chunk not merged');
-}
-
 step "s3_drop_chunks" {
     call drop_one_chunk('readings');
 }
+
 step "s3_commit" { commit; }
 
 session "s4"
@@ -213,15 +199,12 @@ step "s5_modify" {
     insert into readings values ('2024-01-01 01:05', 5, 's5 modify');
 }
 
-step "s5_insert_chunk_not_merged" {
-    insert into readings values ('2024-01-01 03:20', 9, 's6 chunk not merged');
-}
-
 step "s5_merge_1_2_concurrently" {
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
 }
 
 step "s5_merge_cleanup" {
+    set client_min_messages = DEBUG1;
     call _timescaledb_functions.chunk_rewrite_cleanup();
     select * from _timescaledb_catalog.chunk_rewrite;
 }
@@ -232,16 +215,8 @@ setup	{
     set local deadlock_timeout = '10000ms';
 }
 
-step "s6_insert_chunk_remaining_after_merge" {
-    insert into readings values ('2024-01-01 01:01', 6, 's6_chunk_remaining');
-}
-
 step "s6_insert_chunk_not_merged" {
     insert into readings values ('2024-01-01 03:20', 9, 's6 chunk not merged');
-}
-
-step "s6_show_merge_rels" {
-    select * from _timescaledb_catalog.chunk_rewrite;
 }
 
 step "s6_merge_3_4_concurrently" {
@@ -261,7 +236,7 @@ step "s7_insert_new_chunk" {
 
 step "s7_fail_merge" {
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
-  }
+}
 
 # Run 4 backends:
 #
@@ -280,23 +255,25 @@ permutation "s2_show_chunks" "s1_begin" "s1_show_data" "s2_merge_chunks" "s1_sho
 
 # Merge blocks until the reader/writer is finished.
 
-permutation "wp_swap_on" "s2_show_chunks" "s1_begin" "s1_show_data" "s2_merge_chunks" "s1_show_data" "s1_row_exclusive_lock" "wp_swap_off" "s1_commit" "s1_show_data" "s1_show_chunks"
+permutation "wp_before_heap_swap_on" "s2_show_chunks" "s1_begin" "s1_show_data" "s2_merge_chunks" "s1_show_data" "s1_row_exclusive_lock" "wp_before_heap_swap_off" "s1_commit" "s1_show_data" "s1_show_chunks"
 
 # Same as above, but the merger takes locks before the reader/writer
 # so the reader/writer has to wait.
-permutation "wp_swap_on" "s2_show_chunks" "s1_begin" "s2_merge_chunks" "s1_show_data"  "wp_swap_off" "s1_commit" "s1_show_data" "s1_show_chunks"
+permutation "wp_before_heap_swap_on" "s2_show_chunks" "s1_begin" "s2_merge_chunks" "s1_show_data"  "wp_before_heap_swap_off" "s1_commit" "s1_show_data" "s1_show_chunks"
 
 # Test concurrent merges
-permutation "wp_swap_on" "s2_merge_chunks" "s3_merge_chunks" "wp_swap_off" "s1_show_data" "s1_show_chunks"
+permutation "wp_before_heap_swap_on" "s2_merge_chunks" "s3_merge_chunks" "wp_before_heap_swap_off" "s1_show_data" "s1_show_chunks"
 
 # Test concurrent compress_chunk(). This will deadlock because
-# compress_chunks takes chunk locks in a different order. The test is
-# disabled because with a deadlock the output can be non-deterministic.
+# compress_chunk() takes chunk locks in a different order; it takes a
+# lock on a chunk slice first, before taking the lock on the chunk itself.
+# It probably should take a lock on the chunk table first.
+# The test is disabled because with a deadlock the output can be non-deterministic.
 
-#permutation "wp_swap_on" "s2_merge_chunks" "s3_compress_chunks" "wp_swap_off" "s1_show_data" "s1_show_chunks"
+#permutation "wp_before_heap_swap_on" "s2_merge_chunks" "s3_compress_chunk" "wp_before_heap_swap_off" "s1_show_data" "s1_show_chunks"
 
 # Test concurrent DROP TABLE on chunk (currently deadlocks because of locks on parent table)
-permutation "wp_swap_on" "s2_merge_chunks" "s3_drop_chunks" "wp_swap_off" "s1_show_data" "s1_show_chunks"
+permutation "wp_before_heap_swap_on" "s2_merge_chunks" "s3_drop_chunks" "wp_before_heap_swap_off" "s1_show_data" "s1_show_chunks"
 
 # Concurrent reads and various inserters during a concurrent merge of
 # two chunks. The sessions include:
@@ -307,7 +284,7 @@ permutation "wp_swap_on" "s2_merge_chunks" "s3_drop_chunks" "wp_swap_off" "s1_sh
 # 4. Inserter into merged chunk 2 (blocked)
 # 5. Inserter into chunk 2, which is not being merged (not blocked)
 # 6. Inserter into new chunk (which didn't exist) (not blocked)
-permutation "wp_swap_on" "wp_before_first_commit_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_merge_rels" "wp_before_first_commit_off" "s1_show_merge" "wp_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge"
+permutation "wp_before_heap_swap_on" "wp_before_first_commit_on" "s2_merge_chunks_concurrently" "s3_insert_chunk_to_be_dropped" "s4_insert_result_chunk" "s6_insert_chunk_not_merged" "s7_insert_new_chunk" "s1_show_chunks" "s1_show_data" "s5_show_merge_rels" "wp_before_first_commit_off" "s1_show_merge" "wp_before_heap_swap_off" "s1_show_data" "s1_show_chunks" "s1_show_merge"
 
 # Two concurrent merges of same chunks. One will fail since the the
 # first merge drops one of the chunks.

@@ -14,6 +14,7 @@
 #include <catalog/objectaddress.h>
 #include <catalog/pg_class_d.h>
 #include <executor/tuptable.h>
+#include <nodes/lockoptions.h>
 #include <nodes/parsenodes.h>
 #include <storage/itemptr.h>
 #include <storage/lmgr.h>
@@ -22,6 +23,7 @@
 #include "chunk_rewrite.h"
 #include "scan_iterator.h"
 #include "ts_catalog/catalog.h"
+#include <utils/lsyscache.h>
 
 static HeapTuple
 chunk_rewrite_make_tuple(Oid chunk_relid, Oid new_relid, TupleDesc desc)
@@ -184,51 +186,68 @@ ts_chunk_rewrite_cleanup(PG_FUNCTION_ARGS)
 	unsigned int cleanup_count = 0;
 	unsigned int skipped_count = 0;
 	CatalogSecurityContext sec_ctx;
+	ScanTupLock tuplock = {
+		.lockmode = LockTupleExclusive,
+		.waitpolicy = LockWaitSkip,
+		.lockflags = TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+	};
 
-	it = ts_scan_iterator_create(CHUNK_REWRITE, RowExclusiveLock, CurrentMemoryContext);
+	it = ts_scan_iterator_create(CHUNK_REWRITE, RowShareLock, CurrentMemoryContext);
+	it.ctx.tuplock = &tuplock;
 
 	ts_scanner_foreach(&it)
 	{
 		TupleInfo *ti = ts_scan_iterator_tuple_info(&it);
 		bool isnull = false;
+		bool entry_cleaned = false;
 
-		// Datum chunk_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_chunk_relid, &isnull);
-		// Assert(!isnull);
+		Datum chunk_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_chunk_relid, &isnull);
+		Assert(!isnull);
 		Datum new_relid_dat = slot_getattr(ti->slot, Anum_chunk_rewrite_new_relid, &isnull);
 		Assert(!isnull);
 
-		Oid new_relid = DatumGetObjectId(new_relid_dat);
-
-		/*
-		 * A concurrent merge might be in progress, so try to lock the "new"
-		 * relation and only delete it if the lock can be acquired
-		 * immediately. If a lock cannot be acquired, a merge is probably
-		 * ongoing and it might still complete successfully.
-		 */
-		if (ConditionalLockRelationOid(new_relid, AccessExclusiveLock))
+		if (ti->lockresult == TM_Ok)
 		{
-			ObjectAddress new_objaddr = {
-				.objectId = DatumGetObjectId(new_relid),
-				.classId = RelationRelationId,
-			};
+			Oid new_relid = DatumGetObjectId(new_relid_dat);
 
-			add_exact_object_address(&new_objaddr, objaddrs);
+			/*
+			 * A concurrent merge might be in progress, so try to lock the "new"
+			 * relation and only delete it if the lock can be acquired
+			 * immediately. If a lock cannot be acquired, a merge is probably
+			 * ongoing and it might still complete successfully.
+			 */
+			if (ConditionalLockRelationOid(new_relid, AccessExclusiveLock))
+			{
+				ObjectAddress new_objaddr = {
+					.objectId = DatumGetObjectId(new_relid),
+					.classId = RelationRelationId,
+				};
 
-			ItemPointer tid = ts_scanner_get_tuple_tid(ti);
+				add_exact_object_address(&new_objaddr, objaddrs);
 
-			ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
-			ts_catalog_delete_tid_only(it.ctx.tablerel, tid);
-			ts_catalog_restore_user(&sec_ctx);
+				ItemPointer tid = ts_scanner_get_tuple_tid(ti);
+
+				ts_catalog_database_info_become_owner(ts_catalog_database_info_get(), &sec_ctx);
+				ts_catalog_delete_tid_only(it.ctx.tablerel, tid);
+				ts_catalog_restore_user(&sec_ctx);
+				entry_cleaned = true;
+			}
+		}
+
+		if (entry_cleaned)
+		{
 			cleanup_count++;
 		}
 		else
 		{
+			Oid chunk_relid = DatumGetObjectId(chunk_relid_dat);
+			elog(DEBUG1, "chunk merge in progress for \"%s\", skipping", get_rel_name(chunk_relid));
 			skipped_count++;
 		}
 	}
 
-	performMultipleDeletions(objaddrs, DROP_RESTRICT, 0);
 	ts_scan_iterator_close(&it);
+	performMultipleDeletions(objaddrs, DROP_RESTRICT, 0);
 
 	elog(NOTICE,
 		 "cleaned up %u orphaned rewrite relations, skipped %u",
