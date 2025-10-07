@@ -4,7 +4,6 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
-#include "scanner.h"
 #include <access/attnum.h>
 #include <access/htup.h>
 #include <access/htup_details.h>
@@ -19,11 +18,25 @@
 #include <storage/itemptr.h>
 #include <storage/lmgr.h>
 #include <storage/lockdefs.h>
+#include <utils/lsyscache.h>
 
 #include "chunk_rewrite.h"
 #include "scan_iterator.h"
 #include "ts_catalog/catalog.h"
-#include <utils/lsyscache.h>
+
+/*
+ * chunk_rewrite:
+ *
+ * This catalog table tracks pending rewrite operations for chunks. It is used when merging chunks
+ * in concurrent mode to track temporarily written relations/heaps that might orphaned in case
+ * of a failed rewrite. For example, a multi-transactional chunk merge could fail in the second
+ * transaction and leave behind orphaned rewritten heaps it created in the first transaction.
+ *
+ * Each entry in the catalog is a mapping from a current relation to its new heap. For merges, this
+ * is a many-to-one relation for each merge.
+ *
+ * Future operations, like concurrent split, might also use this catalog table.
+ */
 
 static HeapTuple
 chunk_rewrite_make_tuple(Oid chunk_relid, Oid new_relid, TupleDesc desc)
@@ -39,6 +52,9 @@ chunk_rewrite_make_tuple(Oid chunk_relid, Oid new_relid, TupleDesc desc)
 	return heap_form_tuple(desc, values, nulls);
 }
 
+/*
+ * Add an entry to the chunk_rewrite table.
+ */
 void
 ts_chunk_rewrite_add(Oid chunk_relid, Oid new_relid)
 {
@@ -57,6 +73,9 @@ ts_chunk_rewrite_add(Oid chunk_relid, Oid new_relid)
 	table_close(catrel, NoLock);
 }
 
+/*
+ * Look up an entry based on the original chunk_id. The entry is locked FOR UPDATE.
+ */
 bool
 ts_chunk_rewrite_get_with_lock(Oid chunk_relid, Form_chunk_rewrite form, ItemPointer tid)
 {
@@ -121,6 +140,9 @@ ts_chunk_rewrite_get_with_lock(Oid chunk_relid, Form_chunk_rewrite form, ItemPoi
 	return found;
 }
 
+/*
+ * Delete an entry from the chunk_rewrite table based on TID.
+ */
 void
 ts_chunk_rewrite_delete_by_tid(const ItemPointer tid)
 {
@@ -136,6 +158,16 @@ ts_chunk_rewrite_delete_by_tid(const ItemPointer tid)
 	table_close(catrel, NoLock);
 }
 
+/*
+ * Delete an entry from the chunk_rewrite table and drop the orphaned heap (if it exists).
+ *
+ * The delete result indicates whether both the entry and the orphaned heap was dropped,
+ * or if only the entry was deleted (in case the heap was already dropped), or a failure occurred.
+ *
+ * If the "conditional" parameter is specified, the entry will only be deleted if the referenced
+ * heap relation can be immediately locked without waiting. This is useful in order to skip entries
+ * that are locked by ongoing merges.
+ */
 ChunkRewriteDeleteResult
 ts_chunk_rewrite_delete(Oid chunk_relid, bool conditional)
 {
@@ -178,6 +210,13 @@ ts_chunk_rewrite_delete(Oid chunk_relid, bool conditional)
 
 TS_FUNCTION_INFO_V1(ts_chunk_rewrite_cleanup);
 
+/*
+ * Clean up failed chunk rewrites.
+ *
+ * This function cleans up all non-ongoing chunk rewrites listed in the chunk_rewrite catalog,
+ * including any "orphaned" heaps referenced in the table.
+ *
+ */
 Datum
 ts_chunk_rewrite_cleanup(PG_FUNCTION_ARGS)
 {
