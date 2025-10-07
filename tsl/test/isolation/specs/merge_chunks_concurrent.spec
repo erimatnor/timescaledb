@@ -47,12 +47,12 @@ setup
      end;
     $$ LANGUAGE plpgsql;
 
-    create or replace procedure lock_chunk(hypertable regclass, off int = 1) as $$
+    create or replace procedure lock_chunk(hypertable regclass, off int = 1, lock_mode text = 'row exclusive') as $$
     declare
         chunk regclass;
     begin
         execute format('select ch from show_chunks(%L) ch offset %s limit 1', hypertable, off) into chunk;
-        execute format('lock %s in row exclusive mode', chunk);
+        execute format('lock %s in %s mode', chunk, lock_mode);
     end;
     $$ LANGUAGE plpgsql;
 
@@ -64,6 +64,9 @@ setup
         return chunk;
     end;
     $$ LANGUAGE plpgsql;
+
+
+    reset client_min_messages;
 }
 
 teardown {
@@ -123,6 +126,11 @@ step "s2_merge_chunks_concurrently" {
 step "s2_lock_chunk" {
     begin;
     call lock_chunk('readings', 0);
+}
+
+step "s2_lock_chunk_access_exclusive" {
+    begin;
+    call lock_chunk('readings', 0, 'access exclusive');
 }
 
 step "s2_commit" {
@@ -191,7 +199,7 @@ setup	{
 }
 
 step "s5_show_merge_rels" {
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 }
 
 step "s5_modify" {
@@ -206,7 +214,8 @@ step "s5_merge_1_2_concurrently" {
 step "s5_merge_cleanup" {
     set client_min_messages = DEBUG1;
     call _timescaledb_functions.chunk_rewrite_cleanup();
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
+    reset client_min_messages;
 }
 
 session "s6"
@@ -299,3 +308,6 @@ permutation "s1_show_chunks" "s2_lock_chunk" "s5_merge_1_2_concurrently" "s6_mer
 permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "s5_merge_1_2_concurrently" "s1_show_chunks" "s5_show_merge_rels"
 
 permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "wp_after_first_commit_on" "s6_merge_3_4_concurrently" "s5_merge_cleanup" "wp_after_first_commit_off" "s5_show_merge_rels"
+
+# Verify that no one can get a higher lock than merge in-between merge transactions
+permutation "wp_after_first_commit_on" "s5_merge_1_2_concurrently" "s2_lock_chunk_access_exclusive" "wp_after_first_commit_off" "s2_commit"

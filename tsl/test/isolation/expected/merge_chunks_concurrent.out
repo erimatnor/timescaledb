@@ -455,11 +455,12 @@ Mon Jan 01 01:00:00 2024 PST|     1|one
 (8 rows)
 
 step s5_show_merge_rels: 
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 
-chunk_relid|new_relid
------------+---------
-(0 rows)
+count
+-----
+    0
+(1 row)
 
 step wp_before_first_commit_off: SELECT debug_waitpoint_release('merge_chunks_before_first_commit');
 debug_waitpoint_release
@@ -592,13 +593,12 @@ step s7_fail_merge:
 
 ERROR:  chunk merge failed intentionally
 step s5_show_merge_rels: 
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 
-chunk_relid                             |new_relid                          
-----------------------------------------+-----------------------------------
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17610
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17610
-(2 rows)
+count
+-----
+    2
+(1 row)
 
 step s5_merge_1_2_concurrently: 
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
@@ -610,11 +610,12 @@ count
 (1 row)
 
 step s5_show_merge_rels: 
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 
-chunk_relid|new_relid
------------+---------
-(0 rows)
+count
+-----
+    0
+(1 row)
 
 
 starting permutation: s1_show_chunks s7_fail_merge s5_show_merge_rels wp_after_first_commit_on s6_merge_3_4_concurrently s5_merge_cleanup wp_after_first_commit_off s5_show_merge_rels
@@ -629,13 +630,12 @@ step s7_fail_merge:
 
 ERROR:  chunk merge failed intentionally
 step s5_show_merge_rels: 
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 
-chunk_relid                             |new_relid                          
-----------------------------------------+-----------------------------------
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17663
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17663
-(2 rows)
+count
+-----
+    2
+(1 row)
 
 step wp_after_first_commit_on: SELECT debug_waitpoint_enable('merge_chunks_after_first_commit');
 debug_waitpoint_enable
@@ -650,15 +650,15 @@ s5: DEBUG:  chunk merge in progress for "_hyper_X_X_chunk", skipping
 step s5_merge_cleanup: 
     set client_min_messages = DEBUG1;
     call _timescaledb_functions.chunk_rewrite_cleanup();
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
+    reset client_min_messages;
 
 s5: DEBUG:  chunk merge in progress for "_hyper_X_X_chunk", skipping
 s5: NOTICE:  cleaned up 2 orphaned rewrite relations, skipped 2
-chunk_relid                             |new_relid                          
-----------------------------------------+-----------------------------------
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17677
-_timescaledb_internal._hyper_X_X_chunk|_timescaledb_internal.pg_temp_17677
-(2 rows)
+count
+-----
+    2
+(1 row)
 
 step wp_after_first_commit_off: SELECT debug_waitpoint_release('merge_chunks_after_first_commit');
 debug_waitpoint_release
@@ -667,13 +667,37 @@ debug_waitpoint_release
 (1 row)
 
 step s6_merge_3_4_concurrently: <... completed>
-s5: LOG:  statement: 
-    select * from _timescaledb_catalog.chunk_rewrite;
-
 step s5_show_merge_rels: 
-    select * from _timescaledb_catalog.chunk_rewrite;
+    select count(*) from _timescaledb_catalog.chunk_rewrite;
 
-chunk_relid|new_relid
------------+---------
-(0 rows)
+count
+-----
+    0
+(1 row)
+
+
+starting permutation: wp_after_first_commit_on s5_merge_1_2_concurrently s2_lock_chunk_access_exclusive wp_after_first_commit_off s2_commit
+step wp_after_first_commit_on: SELECT debug_waitpoint_enable('merge_chunks_after_first_commit');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
+step s5_merge_1_2_concurrently: 
+    call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
+ <waiting ...>
+step s2_lock_chunk_access_exclusive: 
+    begin;
+    call lock_chunk('readings', 0, 'access exclusive');
+ <waiting ...>
+step wp_after_first_commit_off: SELECT debug_waitpoint_release('merge_chunks_after_first_commit');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
+step s5_merge_1_2_concurrently: <... completed>
+step s2_lock_chunk_access_exclusive: <... completed>
+step s2_commit: 
+    commit;
 
