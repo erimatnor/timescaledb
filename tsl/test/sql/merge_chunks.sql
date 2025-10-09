@@ -397,7 +397,6 @@ call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '
 rollback;
 
 select debug_waitpoint_enable('merge_chunks_fail');
---set timescaledb.merge_chunks_fail = true;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 \set ON_ERROR_STOP 1
 

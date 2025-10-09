@@ -840,17 +840,16 @@ begin;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 ERROR:  merge_chunks cannot run inside a transaction block
 rollback;
-select debug_waitpoint_enable('chunk_merge_fail');
+select debug_waitpoint_enable('merge_chunks_fail');
  debug_waitpoint_enable 
 ------------------------
  
 (1 row)
 
---set timescaledb.chunk_merge_fail = true;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
-ERROR:  error injected at debug point 'chunk_merge_fail'
+ERROR:  error injected at debug point 'merge_chunks_fail'
 \set ON_ERROR_STOP 1
-select debug_waitpoint_release('chunk_merge_fail');
+select debug_waitpoint_release('merge_chunks_fail');
  debug_waitpoint_release 
 -------------------------
  
