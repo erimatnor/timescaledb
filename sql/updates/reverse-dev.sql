@@ -13,7 +13,6 @@ $$;
 DROP VIEW IF EXISTS timescaledb_information.job_stats;
 
 -- Revert support for concurrent merge chunks()
-
 DROP PROCEDURE IF EXISTS _timescaledb_functions.chunk_rewrite_cleanup();
 DROP PROCEDURE IF EXISTS @extschema@.merge_chunks_concurrently();
 DROP PROCEDURE IF EXISTS @extschema@.merge_chunks(REGCLASS, REGCLASS, BOOLEAN);
