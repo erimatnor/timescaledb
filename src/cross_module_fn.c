@@ -17,10 +17,7 @@
 
 #define CROSSMODULE_WRAPPER(func)                                                                  \
 	TS_FUNCTION_INFO_V1(ts_##func);                                                                \
-	Datum ts_##func(PG_FUNCTION_ARGS)                                           \
-	{                                                                                              \
-		PG_RETURN_DATUM(ts_cm_functions->func(fcinfo));                                            \
-	}
+	Datum ts_##func(PG_FUNCTION_ARGS) { PG_RETURN_DATUM(ts_cm_functions->func(fcinfo)); }
 
 /* bgw policy functions */
 CROSSMODULE_WRAPPER(policy_compression_add);
@@ -165,10 +162,11 @@ columnstore_setup_default(Hypertable *ht, WithClauseResult *with_clause_options)
 static Datum
 error_no_default_fn_pg_community(PG_FUNCTION_ARGS)
 {
-	/* fcinfo->flinfo not always set so don't print original function name */
 	ereport(ERROR,
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("function is not supported under the current \"%s\" license", ts_guc_license),
+			 errmsg("function \"%s\" is not supported under the current \"%s\" license",
+					fcinfo->flinfo ? get_func_name(fcinfo->flinfo->fn_oid) : "unknown",
+					ts_guc_license),
 			 errhint("Upgrade your license to 'timescale' to use this free community feature.")));
 
 	pg_unreachable();
