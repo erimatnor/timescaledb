@@ -384,10 +384,11 @@ rollback;
 
 create view chunks_being_merged as
 select
-    *,
-    pg_table_size(new_relid) as chunk_size_bytes,
-    (select array_agg(indexrelid::regclass) from pg_index where indrelid=new_relid) as chunk_indexes
-from _timescaledb_catalog.chunk_rewrite;
+    chunk_relid,
+    n as new_chunk_id,
+    pg_table_size(new_relid) as merged_chunk_size_bytes,
+    (select count(indexrelid::regclass) from pg_index where indrelid=new_relid) as num_new_indexes
+from (select *, dense_rank() over (order by new_relid) as n from _timescaledb_catalog.chunk_rewrite);
 
 -- Concurrent merge cannot run in a transaction block
 \set ON_ERROR_STOP 0
@@ -395,14 +396,22 @@ begin;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 rollback;
 
-set timescaledb.chunk_merge_fail = true;
+select debug_waitpoint_enable('chunk_merge_fail');
+--set timescaledb.chunk_merge_fail = true;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 \set ON_ERROR_STOP 1
 
+select debug_waitpoint_release('chunk_merge_fail');
 select * from chunks_being_merged;
-create table cleaned_rewrite_chunks as select * from chunks_being_merged;
+create table pre_cleaned_chunks as select * from _timescaledb_catalog.chunk_rewrite;
 call _timescaledb_functions.chunk_rewrite_cleanup();
-select *, pg_table_size(new_relid) from _timescaledb_catalog.chunk_rewrite;
-select * from cleaned_rewrite_chunks;
+select * from chunks_being_merged;
 
+-- None of the pre-cleaned chunks should remain after cleanup. Check by joining
+-- the pre-cleaned relids with pg_class. The count should be zero if the
+-- relations no longer exist in pg_class.
+select count(*) from pre_cleaned_chunks;
+select count(*) from pre_cleaned_chunks cc join pg_class c on (c.oid = cc.new_relid);
+
+drop table pre_cleaned_chunks;
 drop view chunks_being_merged;

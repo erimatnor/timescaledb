@@ -1444,13 +1444,7 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 
 	MemoryContextDelete(merge_cxt);
 
-#ifdef TS_DEBUG
-	const char *fail_merge = GetConfigOption("timescaledb.chunk_merge_fail", true, false);
-
-	if (fail_merge && pg_strcasecmp(fail_merge, "true") == 0)
-		elog(ERROR, "chunk merge failed intentionally");
-#endif
-
+	DEBUG_ERROR_INJECTION("chunk_merge_fail");
 	DEBUG_WAITPOINT("merge_chunks_before_exit");
 
 	PG_RETURN_VOID();
