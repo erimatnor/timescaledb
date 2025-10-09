@@ -84,10 +84,13 @@ step "wp_before_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks
 step "wp_after_first_commit_on" { SELECT debug_waitpoint_enable('merge_chunks_after_first_commit'); }
 step "wp_after_first_commit_off" { SELECT debug_waitpoint_release('merge_chunks_after_first_commit'); }
 
+step "wp_fail_merge_on" { SELECT debug_waitpoint_enable('merge_chunks_fail'); }
+step "wp_fail_merge_off" { SELECT debug_waitpoint_release('merge_chunks_fail'); }
+
 session "s1"
 setup	{
     set local lock_timeout = '5000ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 # The transaction will not "pick" a snapshot until the first query, so
@@ -112,7 +115,7 @@ step "s1_commit" { commit; }
 session "s2"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 step "s2_show_chunks" { select count(*) from show_chunks('readings'); }
@@ -140,7 +143,7 @@ step "s2_commit" {
 session "s3"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 step "s3_begin" {
@@ -185,7 +188,7 @@ step "s3_commit" { commit; }
 session "s4"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 step "s4_insert_result_chunk" {
@@ -195,7 +198,7 @@ step "s4_insert_result_chunk" {
 session "s5"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 step "s5_show_merge_rels" {
@@ -221,7 +224,7 @@ step "s5_merge_cleanup" {
 session "s6"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
+    set local deadlock_timeout = '100ms';
 }
 
 step "s6_insert_chunk_not_merged" {
@@ -235,8 +238,7 @@ step "s6_merge_3_4_concurrently" {
 session "s7"
 setup	{
     set local lock_timeout = '500ms';
-    set local deadlock_timeout = '10000ms';
-    set timescaledb.chunk_merge_fail = true;
+    set local deadlock_timeout = '100ms';
 }
 
 step "s7_insert_new_chunk" {
@@ -305,9 +307,9 @@ permutation "s1_show_chunks" "wp_after_first_commit_on" "s2_merge_chunks_concurr
 permutation "s1_show_chunks" "s2_lock_chunk" "s5_merge_1_2_concurrently" "s6_merge_3_4_concurrently" "s2_commit" "s1_show_chunks"
 
 # Test that failed merge is cleaned up. Also test that cleanup function does not clean up stuff currently running
-permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "s5_merge_1_2_concurrently" "s1_show_chunks" "s5_show_merge_rels"
+permutation "wp_fail_merge_on" "s1_show_chunks" "s7_fail_merge" "wp_fail_merge_off" "s5_show_merge_rels" "s5_merge_1_2_concurrently" "s1_show_chunks" "s5_show_merge_rels"
 
-permutation "s1_show_chunks" "s7_fail_merge" "s5_show_merge_rels" "wp_after_first_commit_on" "s6_merge_3_4_concurrently" "s5_merge_cleanup" "wp_after_first_commit_off" "s5_show_merge_rels"
+permutation "wp_fail_merge_on" "s1_show_chunks" "s7_fail_merge" "wp_fail_merge_off" "s5_show_merge_rels" "wp_after_first_commit_on" "s6_merge_3_4_concurrently" "s5_merge_cleanup" "wp_after_first_commit_off" "s5_show_merge_rels"
 
 # Verify that no one can get a higher lock than merge in-between merge transactions
 permutation "wp_after_first_commit_on" "s5_merge_1_2_concurrently" "s2_lock_chunk_access_exclusive" "wp_after_first_commit_off" "s2_commit"

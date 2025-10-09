@@ -581,7 +581,13 @@ count
 (1 row)
 
 
-starting permutation: s1_show_chunks s7_fail_merge s5_show_merge_rels s5_merge_1_2_concurrently s1_show_chunks s5_show_merge_rels
+starting permutation: wp_fail_merge_on s1_show_chunks s7_fail_merge wp_fail_merge_off s5_show_merge_rels s5_merge_1_2_concurrently s1_show_chunks s5_show_merge_rels
+step wp_fail_merge_on: SELECT debug_waitpoint_enable('merge_chunks_fail');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
@@ -591,7 +597,13 @@ count
 step s7_fail_merge: 
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
 
-ERROR:  chunk merge failed intentionally
+ERROR:  error injected at debug point 'merge_chunks_fail'
+step wp_fail_merge_off: SELECT debug_waitpoint_release('merge_chunks_fail');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
 step s5_show_merge_rels: 
     select count(*) from _timescaledb_catalog.chunk_rewrite;
 
@@ -618,7 +630,13 @@ count
 (1 row)
 
 
-starting permutation: s1_show_chunks s7_fail_merge s5_show_merge_rels wp_after_first_commit_on s6_merge_3_4_concurrently s5_merge_cleanup wp_after_first_commit_off s5_show_merge_rels
+starting permutation: wp_fail_merge_on s1_show_chunks s7_fail_merge wp_fail_merge_off s5_show_merge_rels wp_after_first_commit_on s6_merge_3_4_concurrently s5_merge_cleanup wp_after_first_commit_off s5_show_merge_rels
+step wp_fail_merge_on: SELECT debug_waitpoint_enable('merge_chunks_fail');
+debug_waitpoint_enable
+----------------------
+                      
+(1 row)
+
 step s1_show_chunks: select count(*) from show_chunks('readings');
 count
 -----
@@ -628,7 +646,13 @@ count
 step s7_fail_merge: 
     call merge_chunks(getchunk('readings', 0), getchunk('readings', 1), concurrently => true);
 
-ERROR:  chunk merge failed intentionally
+ERROR:  error injected at debug point 'merge_chunks_fail'
+step wp_fail_merge_off: SELECT debug_waitpoint_release('merge_chunks_fail');
+debug_waitpoint_release
+-----------------------
+                       
+(1 row)
+
 step s5_show_merge_rels: 
     select count(*) from _timescaledb_catalog.chunk_rewrite;
 

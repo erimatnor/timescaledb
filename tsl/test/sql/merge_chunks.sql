@@ -396,12 +396,12 @@ begin;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 rollback;
 
-select debug_waitpoint_enable('chunk_merge_fail');
---set timescaledb.chunk_merge_fail = true;
+select debug_waitpoint_enable('merge_chunks_fail');
+--set timescaledb.merge_chunks_fail = true;
 call merge_chunks_concurrently(ARRAY['_timescaledb_internal._hyper_1_1_chunk', '_timescaledb_internal._hyper_1_4_chunk','_timescaledb_internal._hyper_1_5_chunk', '_timescaledb_internal._hyper_1_12_chunk']);
 \set ON_ERROR_STOP 1
 
-select debug_waitpoint_release('chunk_merge_fail');
+select debug_waitpoint_release('merge_chunks_fail');
 select * from chunks_being_merged;
 create table pre_cleaned_chunks as select * from _timescaledb_catalog.chunk_rewrite;
 call _timescaledb_functions.chunk_rewrite_cleanup();
