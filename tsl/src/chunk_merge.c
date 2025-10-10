@@ -695,11 +695,12 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 	Relation result_rel = result_minfo->rel;
 
 	MemSet(stats, 0, sizeof(RelationMergeStats));
-	stats->relid = result_minfo->relid;
-	stats->chunk_id = result_minfo->chunk->fd.id;
 
 	if (result_rel == NULL)
 		return InvalidOid;
+
+	stats->relid = result_minfo->relid;
+	stats->chunk_id = result_minfo->chunk->fd.id;
 
 	Oid tablespace = result_rel->rd_rel->reltablespace;
 	struct VacuumCutoffs *merged_cutoffs = &result_minfo->cutoffs;
