@@ -87,7 +87,7 @@ update_stats_after_merge(const RelationMergeStats *stats)
 		 * first compressed one, if one exists.
 		 */
 		FormData_compression_chunk_size form;
-		mempcpy(&form, &stats->ccs, sizeof(form));
+		memcpy(&form, &stats->ccs, sizeof(form));
 		ts_compression_chunk_size_update(stats->chunk_id, &form);
 	}
 }
@@ -694,6 +694,10 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 	RelationMergeInfo *result_minfo = &relinfos[mergeindex];
 	Relation result_rel = result_minfo->rel;
 
+	MemSet(stats, 0, sizeof(RelationMergeStats));
+	stats->relid = result_minfo->relid;
+	stats->chunk_id = result_minfo->chunk->fd.id;
+
 	if (result_rel == NULL)
 		return InvalidOid;
 
@@ -710,9 +714,6 @@ merge_relinfos(RelationMergeInfo *relinfos, int nrelids, int mergeindex, LOCKMOD
 	Relation new_rel = table_open(new_relid, AccessExclusiveLock);
 
 	*rellocks = append_rellock(*rellocks, new_rel, AccessExclusiveLock, merge_mcxt);
-	MemSet(stats, 0, sizeof(RelationMergeStats));
-	stats->relid = result_minfo->relid;
-	stats->chunk_id = result_minfo->chunk->fd.id;
 
 	pg17_workaround_init(new_rel, relinfos, nrelids);
 
@@ -824,8 +825,7 @@ relock_rel(const Relation hyper_rel, RelationMergeInfo *rmi, LOCKMODE lockmode)
 
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("hypertable \"%s\" was removed concurrently",
-						RelationGetRelationName(hyper_rel))));
+				 errmsg("hypertable was removed concurrently")));
 	}
 
 	if (NULL == rmi->rel)
@@ -1318,8 +1318,8 @@ chunk_merge_chunks(PG_FUNCTION_ARGS)
 	 * Now merge all the data into a new temporary heap relation. Do it
 	 * separately for the non-compressed and compressed relations.
 	 */
-	RelationMergeStats merge_stats;
-	RelationMergeStats cmerge_stats;
+	RelationMergeStats merge_stats, cmerge_stats;
+
 	Oid new_relid = merge_relinfos(relinfos,
 								   nrelids,
 								   mergeindex,
