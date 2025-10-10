@@ -386,7 +386,6 @@ create view chunks_being_merged as
 select
     chunk_relid,
     n as new_chunk_id,
-    pg_table_size(new_relid) as merged_chunk_size_bytes,
     (select count(indexrelid::regclass) from pg_index where indrelid=new_relid) as num_new_indexes
 from (select *, dense_rank() over (order by new_relid) as n from _timescaledb_catalog.chunk_rewrite) cr;
 
