@@ -1,5 +1,5 @@
 -- Add support for concurrent merge_chunks()
-CREATE TABLE IF NOT EXISTS _timescaledb_catalog.chunk_rewrite (
+CREATE TABLE _timescaledb_catalog.chunk_rewrite (
   chunk_relid REGCLASS NOT NULL,
   new_relid REGCLASS NOT NULL,
   CONSTRAINT chunk_rewrite_key UNIQUE (chunk_relid)
