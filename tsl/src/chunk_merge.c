@@ -817,18 +817,6 @@ relock_rel(const Relation hyper_rel, RelationMergeInfo *rmi, LOCKMODE lockmode)
 {
 	rmi->rel = try_table_open(rmi->relid, lockmode);
 
-	if (NULL == hyper_rel)
-	{
-		if (NULL != rmi->rel)
-			elog(WARNING,
-				 "dangling chunk \"%s\" remains, can't fix",
-				 RelationGetRelationName(rmi->rel));
-
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("hypertable was removed concurrently")));
-	}
-
 	if (NULL == rmi->rel)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -858,6 +846,20 @@ lock_merged_rels(Oid hyper_relid, RelationMergeInfo *relinfos, RelationMergeInfo
 				 int nrelids, LOCKMODE lockmode)
 {
 	Relation hyper_rel = try_relation_open(hyper_relid, ShareUpdateExclusiveLock);
+
+	if (NULL == hyper_rel)
+	{
+		const RelationMergeInfo *rmi = &relinfos[0];
+
+		if (NULL != rmi->rel)
+			elog(WARNING,
+				 "dangling chunk \"%s\" remains, can't fix",
+				 RelationGetRelationName(rmi->rel));
+
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("hypertable was removed concurrently")));
+	}
 
 	for (int i = 0; i < nrelids; i++)
 	{
