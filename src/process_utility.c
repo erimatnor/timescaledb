@@ -3874,7 +3874,6 @@ process_create_table_end(Node *parsetree)
 										  interval_type,	 /* interval type */
 										  InvalidOid,		 /* partitioning func */
 										  0,
-										  true,
 										  InvalidOid);
 
 		ChunkSizingInfo *csi = ts_chunk_sizing_info_get_default_disabled(table_relid);

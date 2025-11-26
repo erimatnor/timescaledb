@@ -48,6 +48,7 @@
 #include <parser/parse_relation.h>
 #include <parser/parse_type.h>
 #include <parser/parsetree.h>
+#include <postgres_ext.h>
 #include <replication/logical.h>
 #include <replication/slot.h>
 #include <storage/lwlocknames.h>
@@ -287,8 +288,7 @@ cagg_create_hypertable(int32 hypertable_id, Oid mat_tbloid, const char *matpartc
 												  INT8OID,
 												  InvalidOid,
 												  0,
-												  true,
-												  INT8OID);
+												  InvalidOid);
 	/*
 	 * Ideally would like to change/expand the API so setting the column name manually is
 	 * unnecessary, but not high priority.

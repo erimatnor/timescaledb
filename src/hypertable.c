@@ -756,7 +756,7 @@ ts_hypertable_drop(Hypertable *hypertable, DropBehavior behavior)
 	 * clean up the catalog entry. */
 	if (OidIsValid(hypertable->main_table_relid))
 	{
-		ObjectAddress hypertable_addr = (ObjectAddress){
+		ObjectAddress hypertable_addr = (ObjectAddress) {
 			.classId = RelationRelationId,
 			.objectId = hypertable->main_table_relid,
 		};
@@ -1562,7 +1562,6 @@ ts_hypertable_create(PG_FUNCTION_ARGS)
 									  interval_type,		  /* interval type */
 									  open_partitioning_func, /* partitioning func */
 									  origin,
-									  origin_isnull,
 									  origin_type);
 
 	DimensionInfo *closed_dim_info = NULL;

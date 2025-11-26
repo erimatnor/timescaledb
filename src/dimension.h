@@ -28,6 +28,8 @@ typedef struct ChunkInterval
 {
 	Oid type;
 	Datum value;
+	Oid origin_type;
+	Datum origin;
 } ChunkInterval;
 
 typedef enum DimensionType
@@ -119,10 +121,6 @@ typedef struct DimensionInfo
 	Oid coltype;
 	DimensionType type;
 	ChunkInterval chunk_interval;
-	int64 interval;
-	Datum interval_origin;
-	bool interval_origin_isnull;
-	Oid interval_origin_type;
 	int32 num_slices;
 	regproc partitioning_func;
 	bool if_not_exists;
@@ -166,8 +164,7 @@ extern int ts_dimension_delete_by_hypertable_id(int32 hypertable_id, bool delete
 extern TSDLLEXPORT DimensionInfo *ts_dimension_info_create_open(Oid table_relid, Name column_name,
 																Datum interval, Oid interval_type,
 																regproc partitioning_func,
-																Datum origin, bool origin_isnull,
-																Oid origin_type);
+																Datum origin, Oid origin_type);
 
 extern TSDLLEXPORT DimensionInfo *ts_dimension_info_create_closed(Oid table_relid, Name column_name,
 																  int32 num_slices,

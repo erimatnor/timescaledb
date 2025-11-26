@@ -246,7 +246,10 @@ dimension_fill_in_from_tuple(Dimension *d, TupleInfo *ti, Oid main_table_relid)
 		{
 			d->fd.interval =
 				*DatumGetIntervalP(values[AttrNumberGetAttrOffset(Anum_dimension_interval)]);
-			d->use_calendar = true;
+			if (ts_guc_enable_calendar_chunking)
+				d->use_calendar = true;
+			else
+				d->use_calendar = false;
 		}
 		else
 		{
@@ -1422,7 +1425,7 @@ open_dim_default_calendar_origin(Oid coltype)
 DimensionInfo *
 ts_dimension_info_create_open(Oid table_relid, Name column_name, Datum interval, Oid interval_type,
 							  regproc partitioning_func, Datum interval_origin,
-							  bool interval_origin_isnull, Oid interval_origin_type)
+							  Oid interval_origin_type)
 {
 	DimensionInfo *info = palloc(sizeof(*info));
 	AttrNumber colnum = get_attnum(table_relid, NameStr(*column_name));
@@ -1433,10 +1436,9 @@ ts_dimension_info_create_open(Oid table_relid, Name column_name, Datum interval,
 		.table_relid = table_relid,
 		.chunk_interval.value = interval,
 		.chunk_interval.type = interval_type,
+		.chunk_interval.origin_type = interval_origin_type,
+		.chunk_interval.origin = interval_origin,
 		.coltype = coltype,
-		.interval_origin = interval_origin_isnull ? 0 : interval_origin,
-		.interval_origin_isnull = interval_origin_isnull,
-		.interval_origin_type = interval_origin_type,
 		.partitioning_func = partitioning_func,
 	};
 	namestrcpy(&info->colname, NameStr(*column_name));
@@ -1487,10 +1489,10 @@ dimension_info_validate_open(DimensionInfo *info)
 	if (!OidIsValid(info->chunk_interval.type))
 		info->chunk_interval = get_default_interval(dimtype, info->adaptive_chunking);
 
-	info->interval = dimension_interval_to_internal(NameStr(info->colname),
-													dimtype,
-													&info->chunk_interval,
-													info->adaptive_chunking);
+	dimension_interval_to_internal(NameStr(info->colname),
+								   dimtype,
+								   &info->chunk_interval,
+								   info->adaptive_chunking);
 }
 
 /* Validate the configuration of a closed ("space") dimension */
@@ -1621,7 +1623,7 @@ ts_dimension_add_from_info(DimensionInfo *info)
 											  info->partitioning_func,
 											  DatumGetInt64(info->chunk_interval.value),
 											  NULL,
-											  DatumGetInt64(info->interval_origin));
+											  DatumGetInt64(info->chunk_interval.origin));
 	else
 		info->dimension_id = dimension_insert(info->ht->fd.id,
 											  &info->colname,
@@ -1630,7 +1632,7 @@ ts_dimension_add_from_info(DimensionInfo *info)
 											  info->partitioning_func,
 											  0,
 											  DatumGetIntervalP(info->chunk_interval.value),
-											  DatumGetTimestampTz(info->interval_origin));
+											  DatumGetTimestampTz(info->chunk_interval.origin));
 
 	return info->dimension_id;
 }
@@ -1691,17 +1693,16 @@ ts_dimension_info_set_defaults(DimensionInfo *info)
 		AttrNumber attnum = get_attnum(info->table_relid, NameStr(info->colname));
 		Oid atttype = get_atttype(info->table_relid, attnum);
 
-		if (info->interval_origin_isnull)
+		if (!OidIsValid(info->chunk_interval.origin_type))
 		{
-			info->interval_origin_type = atttype;
-			info->interval_origin = open_dim_default_calendar_origin(atttype);
-			info->interval_origin_isnull = false;
+			info->chunk_interval.origin_type = atttype;
+			info->chunk_interval.origin = open_dim_default_calendar_origin(atttype);
 			elog(NOTICE, "set interval_datum default");
 		}
 		else
 		{
 			/* TODO: coerce origin_type to column type */
-			Ensure(info->interval_origin_type == atttype,
+			Ensure(info->chunk_interval.origin_type == atttype,
 				   "origin must have the same as type as column \"%s\"",
 				   NameStr(info->colname));
 		}
@@ -1842,9 +1843,9 @@ ts_dimension_add(PG_FUNCTION_ARGS)
 			PG_ARGISNULL(3) ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 3),
 		.partitioning_func = PG_ARGISNULL(4) ? InvalidOid : PG_GETARG_OID(4),
 		.if_not_exists = PG_ARGISNULL(5) ? false : PG_GETARG_BOOL(5),
-		.interval_origin_isnull = origin_isnull,
-		.interval_origin = origin_isnull ? 0 : PG_GETARG_DATUM(6),
-		.interval_origin_type = origin_isnull ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 6),
+		.chunk_interval.origin = origin_isnull ? 0 : PG_GETARG_DATUM(6),
+		.chunk_interval.origin_type =
+			origin_isnull ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 6),
 	};
 
 	TS_PREVENT_FUNC_IF_READ_ONLY();
@@ -1969,10 +1970,9 @@ ts_range_dimension(PG_FUNCTION_ARGS)
 	info->chunk_interval.type =
 		PG_ARGISNULL(1) ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 1);
 	info->partitioning_func = PG_ARGISNULL(2) ? InvalidOid : PG_GETARG_OID(2);
-	info->interval_origin_isnull = PG_ARGISNULL(3);
-	info->interval_origin = info->interval_origin_isnull ? 0 : PG_GETARG_DATUM(3);
-	info->interval_origin_type =
-		info->interval_origin_isnull ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 3);
+	info->chunk_interval.origin = PG_ARGISNULL(3) ? 0 : PG_GETARG_DATUM(3);
+	info->chunk_interval.origin_type =
+		PG_ARGISNULL(3) ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, 3);
 
 	PG_RETURN_POINTER(info);
 }
