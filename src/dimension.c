@@ -834,10 +834,42 @@ dimension_tuple_update(TupleInfo *ti, void *data)
 	return SCAN_DONE;
 }
 
+static Datum
+get_origin_for_type(const ChunkInterval *chunk_interval)
+{
+	if (!OidIsValid(chunk_interval->origin_type))
+		return Int64GetDatum(0);
+
+	switch (chunk_interval->origin_type)
+	{
+		case TIMESTAMPTZOID:
+		{
+			TimestampTz ts = DatumGetTimestampTz(chunk_interval->origin);
+			return Int64GetDatum(ts);
+		}
+		case DATEOID:
+		{
+			DateADT date = DatumGetTimestampTz(chunk_interval->origin);
+			return Int64GetDatum(date);
+		}
+		break;
+		case INT2OID:
+		case INT4OID:
+		case INT8OID:
+			return chunk_interval->origin;
+		default:
+			Assert(false);
+			elog(ERROR, "invalid type for chunk interval origin");
+			break;
+	}
+
+	return Int64GetDatum(0);
+}
+
 static int32
 dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid coltype,
-						  int16 num_slices, regproc partitioning_func, int64 interval_length,
-						  const Interval *interval, int64 interval_origin)
+						  int16 num_slices, regproc partitioning_func,
+						  const ChunkInterval *chunk_interval)
 {
 	TupleDesc desc = RelationGetDescr(rel);
 	Datum values[Natts_dimension];
@@ -867,7 +899,7 @@ dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid c
 	if (num_slices > 0)
 	{
 		/* Closed (hash) dimension */
-		Assert(num_slices > 0 && interval_length <= 0);
+		Assert(num_slices > 0 && !OidIsValid(chunk_interval->type));
 		values[AttrNumberGetAttrOffset(Anum_dimension_num_slices)] = Int16GetDatum(num_slices);
 		values[AttrNumberGetAttrOffset(Anum_dimension_aligned)] = BoolGetDatum(false);
 		nulls[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] = true;
@@ -878,24 +910,23 @@ dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid c
 	{
 		/* Open (time) dimension */
 		Assert(num_slices <= 0);
-		Assert(interval != NULL || interval_length > 0);
+		Assert(OidIsValid(chunk_interval->type));
 
-		if (interval)
+		if (chunk_interval->type == INTERVALOID)
 		{
 			/* Calendar-based interval */
-			values[AttrNumberGetAttrOffset(Anum_dimension_interval)] = IntervalPGetDatum(interval);
+			values[AttrNumberGetAttrOffset(Anum_dimension_interval)] = chunk_interval->value;
 			nulls[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] = true;
 			values[AttrNumberGetAttrOffset(Anum_dimension_interval_origin)] =
-				TimestampTzGetDatum(interval_origin);
+				get_origin_for_type(chunk_interval);
 		}
 		else
 		{
 			/* Integer interval */
-			values[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] =
-				Int64GetDatum(interval_length);
+			values[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] = chunk_interval->value;
 			nulls[AttrNumberGetAttrOffset(Anum_dimension_interval)] = true;
 			values[AttrNumberGetAttrOffset(Anum_dimension_interval_origin)] =
-				Int64GetDatum(interval_origin);
+				get_origin_for_type(chunk_interval);
 		}
 
 		values[AttrNumberGetAttrOffset(Anum_dimension_aligned)] = BoolGetDatum(true);
@@ -921,8 +952,7 @@ dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid c
 
 static int32
 dimension_insert(int32 hypertable_id, Name colname, Oid coltype, int16 num_slices,
-				 regproc partitioning_func, int64 interval_length, const Interval *interval,
-				 int64 interval_origin)
+				 regproc partitioning_func, const ChunkInterval *chunk_interval)
 {
 	Catalog *catalog = ts_catalog_get();
 	Relation rel;
@@ -935,9 +965,7 @@ dimension_insert(int32 hypertable_id, Name colname, Oid coltype, int16 num_slice
 											 coltype,
 											 num_slices,
 											 partitioning_func,
-											 interval_length,
-											 interval,
-											 interval_origin);
+											 chunk_interval);
 	table_close(rel, RowExclusiveLock);
 	return dimension_id;
 }
@@ -1469,6 +1497,7 @@ static void
 dimension_info_validate_open(DimensionInfo *info)
 {
 	Oid dimtype = info->coltype;
+	elog(NOTICE, "validating dim");
 
 	Assert(info->type == DIMENSION_TYPE_OPEN);
 
@@ -1615,24 +1644,12 @@ ts_dimension_add_from_info(DimensionInfo *info)
 
 	Assert(info->ht != NULL);
 
-	if (IS_TIMESTAMP_TYPE(info->chunk_interval.type))
-		info->dimension_id = dimension_insert(info->ht->fd.id,
-											  &info->colname,
-											  info->coltype,
-											  info->num_slices,
-											  info->partitioning_func,
-											  DatumGetInt64(info->chunk_interval.value),
-											  NULL,
-											  DatumGetInt64(info->chunk_interval.origin));
-	else
-		info->dimension_id = dimension_insert(info->ht->fd.id,
-											  &info->colname,
-											  info->coltype,
-											  info->num_slices,
-											  info->partitioning_func,
-											  0,
-											  DatumGetIntervalP(info->chunk_interval.value),
-											  DatumGetTimestampTz(info->chunk_interval.origin));
+	info->dimension_id = dimension_insert(info->ht->fd.id,
+										  &info->colname,
+										  info->coltype,
+										  info->num_slices,
+										  info->partitioning_func,
+										  &info->chunk_interval);
 
 	return info->dimension_id;
 }

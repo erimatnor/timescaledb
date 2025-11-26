@@ -35,7 +35,7 @@ CREATE OR REPLACE FUNCTION @extschema@.create_hypertable(
     chunk_target_size       TEXT = NULL,
     chunk_sizing_func       REGPROC = '_timescaledb_functions.calculate_chunk_interval'::regproc,
     time_partitioning_func  REGPROC = NULL,
-    origin                  ANYELEMENT = NULL::timestamptz
+    origin                  "any" = NULL::timestamptz
 ) RETURNS TABLE(hypertable_id INT, schema_name NAME, table_name NAME, created BOOL) AS '@MODULE_PATHNAME@', 'ts_hypertable_create' LANGUAGE C VOLATILE;
 
 -- A generalized hypertable creation API that can be used to convert a PostgreSQL table
@@ -135,7 +135,7 @@ CREATE OR REPLACE FUNCTION @extschema@.add_dimension(
     chunk_time_interval     ANYELEMENT = NULL::BIGINT,
     partitioning_func       REGPROC = NULL,
     if_not_exists           BOOLEAN = FALSE,
-    origin                  ANYELEMENT = NULL::timestamptz
+    origin                  "any" = NULL::timestamptz
 ) RETURNS TABLE(dimension_id INT, schema_name NAME, table_name NAME, column_name NAME, created BOOL)
 AS '@MODULE_PATHNAME@', 'ts_dimension_add' LANGUAGE C VOLATILE;
 

@@ -1544,8 +1544,6 @@ ts_hypertable_create(PG_FUNCTION_ARGS)
 	Oid origin_type =
 		origin_isnull ? InvalidOid : get_fn_expr_argtype(fcinfo->flinfo, origin_paramnum);
 
-	elog(NOTICE, "origin type is %s", format_type_be(origin_type));
-
 	if (!OidIsValid(table_relid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("relation cannot be NULL")));
