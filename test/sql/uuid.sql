@@ -14,9 +14,11 @@ CREATE TABLE uuid_events(id uuid primary key, device int, temp float);
 SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => true);
 \set ON_ERROR_STOP 1
 
+SET timescaledb.enable_calendar_chunking=true;
+
 SELECT create_hypertable('uuid_events', 'id', chunk_time_interval => interval '1 day');
 
-SELECT time_interval
+SELECT time_interval, integer_interval
 FROM timescaledb_information.dimensions
 WHERE hypertable_name = 'uuid_events';
 

@@ -9,12 +9,15 @@
 #include <catalog/namespace.h>
 #include <catalog/pg_type.h>
 #include <commands/tablecmds.h>
+#include <fmgr.h>
 #include <funcapi.h>
 #include <miscadmin.h>
 #include <nodes/makefuncs.h>
+#include <pgtime.h>
 #include <storage/lmgr.h>
 #include <utils/builtins.h>
 #include <utils/date.h>
+#include <utils/fmgrprotos.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
@@ -308,36 +311,49 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 	int64 range_start = 0, range_end = 0;
 	Oid dimtype = ts_dimension_get_partition_type(dim);
 
-	if (ts_guc_enable_calendar_chunking)
+	if (dim->chunk_interval.type == INTERVALOID)
 	{
-		int tz;
-		struct pg_tm tt, *tm = &tt;
-		pg_tz *attimezone = session_timezone;
-		fsec_t fsec;
+		TimestampTz ts = value - TS_EPOCH_DIFF_MICROSECONDS;
+		TimestampTz origin = 0; /* PostgreSQL Epoch */
 
-		if (timestamp2tm(value, &tz, tm, &fsec, NULL, attimezone) != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-					 errmsg("timestamp out of range")));
+		Datum diff = DirectFunctionCall2(timestamptz_age,
+										 TimestampTzGetDatum(ts),
+										 TimestampTzGetDatum(origin));
 
-		// Hack to produce monthly chunks. Should check with interval to see
-		// it is really month-based.
-		tt.tm_hour = 0;
-		tt.tm_sec = 0;
-		tt.tm_min = 0;
-		tt.tm_mday = 0;
+		Datum num_intervals = DirectFunctionCall2(interval_div, diff, dim->chunk_interval.value);
 
-		tm2timestamp(tm, fsec, &tz, &range_start);
-		tt.tm_mon = tt.tm_mon + dim->fd.interval.month; // TODO mod 12
-		tm2timestamp(tm, fsec, &tz, &range_end);
+		Datum range_start_datum = DirectFunctionCall3(timestamptz_bin,
+													  dim->chunk_interval.value,
+													  TimestampTzGetDatum(ts),
+													  TimestampTzGetDatum(origin));
+		Datum range_end_datum =
+			DirectFunctionCall3(timestamptz_pl_interval_at_zone,
+								range_start_datum,
+								dim->chunk_interval.value,
+								CStringGetTextDatum(pg_get_timezone_name(session_timezone)));
+
+		range_start = ts_time_value_to_internal(range_start_datum, TIMESTAMPTZOID);
+		range_end = ts_time_value_to_internal(range_end_datum, TIMESTAMPTZOID);
+
+		elog(NOTICE,
+			 "range %s  -  %s",
+			 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)),
+			 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
+
+		Assert(value >= range_start && value < range_end);
 
 		return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
 	}
 
+#if 0
 	int64 interval_length = dimension_interval_to_internal(NameStr(dim->fd.column_name),
 														   dim->fd.column_type,
 														   &dim->chunk_interval,
 														   false);
+#else
+	int64 interval_length = dim->fd.interval_length;
+#endif
+
 	if (value < 0)
 	{
 		const int64 dim_min = ts_time_get_min(dimtype);
@@ -1531,10 +1547,16 @@ dimension_info_validate_open(DimensionInfo *info)
 	if (!OidIsValid(info->chunk_interval.type))
 		info->chunk_interval = get_default_interval(dimtype, info->adaptive_chunking);
 
-	dimension_interval_to_internal(NameStr(info->colname),
-								   dimtype,
-								   &info->chunk_interval,
-								   info->adaptive_chunking);
+	int64 integer_interval = dimension_interval_to_internal(NameStr(info->colname),
+															dimtype,
+															&info->chunk_interval,
+															info->adaptive_chunking);
+
+	if (!ts_guc_enable_calendar_chunking && info->chunk_interval.type == INTERVALOID)
+	{
+		info->chunk_interval.type = INT8OID;
+		info->chunk_interval.value = Int64GetDatum(integer_interval);
+	}
 }
 
 /* Validate the configuration of a closed ("space") dimension */
