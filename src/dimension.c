@@ -4,6 +4,7 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
+#include "guc.h"
 #include <access/relscan.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_type.h>
@@ -59,6 +60,10 @@ enum Anum_generic_add_dimension
 };
 
 #define Natts_generic_add_dimension (_Anum_generic_add_dimension_max - 1)
+
+static int64 dimension_interval_to_internal(const char *colname, Oid dimtype,
+											const ChunkInterval *chunk_interval,
+											bool adaptive_chunking);
 
 static int
 cmp_dimension_id(const void *left, const void *right)
@@ -246,19 +251,18 @@ dimension_fill_in_from_tuple(Dimension *d, TupleInfo *ti, Oid main_table_relid)
 		{
 			d->fd.interval =
 				*DatumGetIntervalP(values[AttrNumberGetAttrOffset(Anum_dimension_interval)]);
-			if (ts_guc_enable_calendar_chunking)
-				d->use_calendar = true;
-			else
-				d->use_calendar = false;
+			d->chunk_interval.type = INTERVALOID;
+			d->chunk_interval.value = IntervalPGetDatum(&d->fd.interval);
 		}
 		else
 		{
-			d->use_calendar = false;
-		}
+			Assert(!isnull[AttrNumberGetAttrOffset(Anum_dimension_interval_length)]);
 
-		if (!isnull[AttrNumberGetAttrOffset(Anum_dimension_interval_length)])
 			d->fd.interval_length =
 				DatumGetInt64(values[AttrNumberGetAttrOffset(Anum_dimension_interval_length)]);
+			d->chunk_interval.type = INT8OID;
+			d->chunk_interval.value = Int64GetDatum(d->fd.interval_length);
+		}
 
 		if (!isnull[AttrNumberGetAttrOffset(Anum_dimension_compress_interval_length)])
 			d->fd.compress_interval_length = DatumGetInt64(
@@ -298,13 +302,26 @@ create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
 	return HeapTupleGetDatum(tuple);
 }
 
+#if 0
+static int64
+dimension_get_interval_length(const Dimension *dim)
+{
+	Ensure(IS_OPEN_DIMENSION(dim), "no interval length for closed dimension");
+
+	return dimension_interval_to_internal(NameStr(dim->fd.column_name),
+										  dim->fd.column_type,
+										  (ChunkInterval *) &dim->chunk_interval,
+										  false);
+}
+#endif
+
 static DimensionSlice *
 calculate_open_range_default(const Dimension *dim, int64 value)
 {
 	int64 range_start = 0, range_end = 0;
 	Oid dimtype = ts_dimension_get_partition_type(dim);
 
-	if (dim->use_calendar)
+	if (ts_guc_enable_calendar_chunking)
 	{
 		int tz;
 		struct pg_tm tt, *tm = &tt;
@@ -371,6 +388,10 @@ ts_dimension_calculate_open_range_default(PG_FUNCTION_ARGS)
 		.type = DIMENSION_TYPE_OPEN,
 		.fd.id = 0,
 		.fd.interval_length = PG_GETARG_INT64(1),
+		.chunk_interval = {
+			.type = INT8OID,
+			.value =  PG_GETARG_DATUM(1),
+		},
 		.fd.column_type = TypenameGetTypid(PG_GETARG_CSTRING(2)),
 	};
 	DimensionSlice *slice = calculate_open_range_default(&dim, value);
@@ -1497,7 +1518,6 @@ static void
 dimension_info_validate_open(DimensionInfo *info)
 {
 	Oid dimtype = info->coltype;
-	elog(NOTICE, "validating dim");
 
 	Assert(info->type == DIMENSION_TYPE_OPEN);
 

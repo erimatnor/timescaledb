@@ -46,7 +46,7 @@ typedef struct Dimension
 	DimensionType type;
 	AttrNumber column_attno;
 	Oid main_table_relid;
-	bool use_calendar;
+	ChunkInterval chunk_interval;
 	PartitioningInfo *partitioning;
 } Dimension;
 
