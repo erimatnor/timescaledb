@@ -529,12 +529,12 @@ WITH (
      tsdb.chunk_interval='2 hours'
 );
 -- Verify that the chunk time interval is two hours
-SELECT ((interval_length/1000000)/60)/60 AS hours
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
- hours 
--------
-     2
+ interval  
+-----------
+ @ 2 hours
 
 ROLLBACK;
 -- Test a different interval
@@ -552,13 +552,13 @@ WITH (
      tsdb.partition_column='event_id',
      tsdb.chunk_interval='2 months'
 );
--- Verify that the chunk time interval is two hours
-SELECT (((interval_length/1000000)/60)/60)/24 AS days
+-- Verify that the chunk time interval is two months
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
- days 
-------
-   60
+ interval 
+----------
+ @ 2 mons
 
 ROLLBACK;
 -- Verify same behavior without CREATE TABLE WITH:
@@ -579,12 +579,12 @@ WARNING:  column type "character varying" used for "event_type" does not follow 
  (4,public,events,t)
 
 -- Verify that the chunk time interval is two hours
-SELECT ((interval_length/1000000)/60)/60 AS hours
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
- hours 
--------
-     2
+ interval  
+-----------
+ @ 2 hours
 
 ROLLBACK;
 BEGIN;
@@ -603,12 +603,12 @@ WARNING:  column type "character varying" used for "event_type" does not follow 
 ---------------------
  (5,public,events,t)
 
--- Verify that the chunk time interval is two hours
-SELECT (((interval_length/1000000)/60)/60)/24 AS days
+-- Verify that the chunk time interval is two months
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
- days 
-------
-   60
+ interval 
+----------
+ @ 2 mons
 
 ROLLBACK;

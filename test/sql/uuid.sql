@@ -270,7 +270,7 @@ WITH (
 );
 
 -- Verify that the chunk time interval is two hours
-SELECT ((interval_length/1000000)/60)/60 AS hours
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
 ROLLBACK;
@@ -291,8 +291,8 @@ WITH (
      tsdb.chunk_interval='2 months'
 );
 
--- Verify that the chunk time interval is two hours
-SELECT (((interval_length/1000000)/60)/60)/24 AS days
+-- Verify that the chunk time interval is two months
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
 ROLLBACK;
@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 SELECT create_hypertable('events', 'event_id', chunk_time_interval => interval '2 hours');
 -- Verify that the chunk time interval is two hours
-SELECT ((interval_length/1000000)/60)/60 AS hours
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
 ROLLBACK;
@@ -326,8 +326,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 SELECT create_hypertable('events', 'event_id', chunk_time_interval => interval '2 months');
--- Verify that the chunk time interval is two hours
-SELECT (((interval_length/1000000)/60)/60)/24 AS days
+-- Verify that the chunk time interval is two months
+SELECT d.interval
 FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON (h.id = d.hypertable_id)
 WHERE h.table_name='events';
 

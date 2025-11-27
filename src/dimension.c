@@ -302,19 +302,6 @@ create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
 	return HeapTupleGetDatum(tuple);
 }
 
-#if 0
-static int64
-dimension_get_interval_length(const Dimension *dim)
-{
-	Ensure(IS_OPEN_DIMENSION(dim), "no interval length for closed dimension");
-
-	return dimension_interval_to_internal(NameStr(dim->fd.column_name),
-										  dim->fd.column_type,
-										  (ChunkInterval *) &dim->chunk_interval,
-										  false);
-}
-#endif
-
 static DimensionSlice *
 calculate_open_range_default(const Dimension *dim, int64 value)
 {
@@ -347,29 +334,33 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 		return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
 	}
 
+	int64 interval_length = dimension_interval_to_internal(NameStr(dim->fd.column_name),
+														   dim->fd.column_type,
+														   &dim->chunk_interval,
+														   false);
 	if (value < 0)
 	{
 		const int64 dim_min = ts_time_get_min(dimtype);
 
-		range_end = ((value + 1) / dim->fd.interval_length) * dim->fd.interval_length;
+		range_end = ((value + 1) / interval_length) * interval_length;
 
 		/* prevent integer underflow */
-		if (dim_min - range_end > -dim->fd.interval_length)
+		if (dim_min - range_end > -interval_length)
 			range_start = DIMENSION_SLICE_MINVALUE;
 		else
-			range_start = range_end - dim->fd.interval_length;
+			range_start = range_end - interval_length;
 	}
 	else
 	{
 		const int64 dim_end = ts_time_get_max(dimtype);
 
-		range_start = (value / dim->fd.interval_length) * dim->fd.interval_length;
+		range_start = (value / interval_length) * interval_length;
 
 		/* prevent integer overflow */
-		if (dim_end - range_start < dim->fd.interval_length)
+		if (dim_end - range_start < interval_length)
 			range_end = DIMENSION_SLICE_MAXVALUE;
 		else
-			range_end = range_start + dim->fd.interval_length;
+			range_end = range_start + interval_length;
 	}
 
 	return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
@@ -935,7 +926,6 @@ dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid c
 
 		if (chunk_interval->type == INTERVALOID)
 		{
-			/* Calendar-based interval */
 			values[AttrNumberGetAttrOffset(Anum_dimension_interval)] = chunk_interval->value;
 			nulls[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] = true;
 			values[AttrNumberGetAttrOffset(Anum_dimension_interval_origin)] =
@@ -944,7 +934,10 @@ dimension_insert_relation(Relation rel, int32 hypertable_id, Name colname, Oid c
 		else
 		{
 			/* Integer interval */
-			values[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] = chunk_interval->value;
+			int64 interval =
+				dimension_interval_to_internal(NameStr(*colname), coltype, chunk_interval, false);
+			values[AttrNumberGetAttrOffset(Anum_dimension_interval_length)] =
+				Int64GetDatum(interval);
 			nulls[AttrNumberGetAttrOffset(Anum_dimension_interval)] = true;
 			values[AttrNumberGetAttrOffset(Anum_dimension_interval_origin)] =
 				get_origin_for_type(chunk_interval);
