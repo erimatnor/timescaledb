@@ -385,6 +385,22 @@ interval_to_date_trunc_unit(const Interval *ivl)
 	return NULL;
 }
 
+static int64
+clamp_dimension_range_value(int64 unixts, Oid clamp_type)
+{
+	const int64 mints = ts_time_get_min(clamp_type);
+
+	if (unixts < mints)
+		return DIMENSION_SLICE_MINVALUE;
+
+	const int64 maxts = ts_time_get_max(clamp_type);
+
+	if (unixts > maxts)
+		return DIMENSION_SLICE_MAXVALUE;
+
+	return unixts;
+}
+
 static DimensionSlice *
 calculate_open_range_default(const Dimension *dim, int64 value)
 {
@@ -398,34 +414,42 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 
 		if (trunc_unit != NULL)
 		{
+			Oid tstype = dimtype;
+
 			// TODO: check handling of time-part func
 			if (dimtype == UUIDOID)
-				dimtype = TIMESTAMPTZOID;
+				tstype = TIMESTAMPTZOID;
 			else if (dimtype == DATEOID)
-				dimtype = TIMESTAMPOID;
+				tstype = TIMESTAMPOID;
 
-			Datum ts = ts_internal_to_time_value(value, dimtype);
+			Datum ts = ts_internal_to_time_value(value, tstype);
 			Datum range_start_datum;
 			Datum range_end_datum;
 
-			switch (dimtype)
+			// elog(NOTICE, "timestamp of value %s", timestamptz_to_str(ts));
+			switch (tstype)
 			{
 				case TIMESTAMPTZOID:
 				{
 					range_start_datum =
 						DirectFunctionCall2(timestamptz_trunc, CStringGetTextDatum(trunc_unit), ts);
+
+					//		elog(NOTICE,
+					//			 "truncated timestamp %s",
+					//			 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)));
+
 					range_end_datum = DirectFunctionCall2(timestamptz_pl_interval,
 														  range_start_datum,
 														  dim->chunk_interval.value);
-					elog(NOTICE,
-						 "trunc \"%s\" range %s  -  %s",
-						 trunc_unit,
-						 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)),
-						 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
+					//					elog(NOTICE,
+					//						 "trunc \"%s\" range end  %s",
+					//						 trunc_unit,
+					//						 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
 					break;
 				}
 				case TIMESTAMPOID:
 				{
+					// TODO: handle overflow error. Maybe use subtransaction and roll back.
 					range_start_datum =
 						DirectFunctionCall2(timestamp_trunc, CStringGetTextDatum(trunc_unit), ts);
 					range_end_datum = DirectFunctionCall2(timestamp_pl_interval,
@@ -438,9 +462,10 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 					break;
 			}
 
-			range_start = ts_time_value_to_internal(range_start_datum, dimtype);
-			range_end = ts_time_value_to_internal(range_end_datum, dimtype);
-
+			range_start = ts_time_value_to_internal(range_start_datum, tstype);
+			range_end = ts_time_value_to_internal(range_end_datum, tstype);
+			range_start = clamp_dimension_range_value(range_start, dimtype);
+			range_end = clamp_dimension_range_value(range_end, dimtype);
 			Assert(value >= range_start && value < range_end);
 
 			return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
