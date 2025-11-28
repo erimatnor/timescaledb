@@ -4,11 +4,12 @@
  * LICENSE-APACHE for a copy of the license.
  */
 #include <postgres.h>
-#include "guc.h"
 #include <access/relscan.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_type.h>
+#include <catalog/pg_type_d.h>
 #include <commands/tablecmds.h>
+#include <datatype/timestamp.h>
 #include <fmgr.h>
 #include <funcapi.h>
 #include <miscadmin.h>
@@ -22,16 +23,16 @@
 #include <utils/syscache.h>
 #include <utils/timestamp.h>
 
-#include "compat/compat.h"
-#include "cross_module_fn.h"
+#include "annotations.h"
+#include "chunk.h"
 #include "debug_point.h"
 #include "dimension.h"
 #include "dimension_slice.h"
 #include "dimension_vector.h"
 #include "error_utils.h"
 #include "errors.h"
+#include "guc.h"
 #include "hypertable.h"
-#include "hypertable_cache.h"
 #include "indexing.h"
 #include "partitioning.h"
 #include "scanner.h"
@@ -304,6 +305,85 @@ create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
 
 	return HeapTupleGetDatum(tuple);
 }
+/*
+ * Translate an interval to a date_trunc() unit. If there is no viable translation, return
+ * NULL.
+ *
+ * Supported units are:
+ *
+ * microseconds
+ * milliseconds
+ * second
+ * minute
+ * hour
+ * day
+ * week
+ * month
+ * quarter
+ * year
+ * decade
+ * century
+ * millennium
+ */
+static const char *
+interval_to_date_trunc_unit(const Interval *ivl)
+{
+	if (ivl->day == 0 && ivl->month == 0)
+	{
+		/* Less than day */
+		switch (ivl->time)
+		{
+			case 1:
+				return "microseconds";
+			case 1000:
+				return "milliseconds";
+			case USECS_PER_SEC:
+				return "second";
+			case USECS_PER_MINUTE:
+				return "chunk_time_interval";
+			case USECS_PER_HOUR:
+				return "hour";
+			default:
+				return NULL;
+		}
+	}
+
+	if (ivl->time != 0)
+		return NULL;
+
+	if (ivl->month == 0)
+	{
+		switch (ivl->day)
+		{
+			case 1:
+				return "day";
+			case DAYS_PER_WEEK:
+				return "week";
+			default:
+				return NULL;
+		}
+	}
+	else if (ivl->day == 0)
+	{
+		switch (ivl->month)
+		{
+			case 1:
+				return "month";
+			case MONTHS_PER_YEAR:
+				return "year";
+			case MONTHS_PER_YEAR * 10:
+				return "decade";
+			case MONTHS_PER_YEAR * 100:
+				return "century";
+			case MONTHS_PER_YEAR * 1000:
+				return "millennium";
+			default:
+				return NULL;
+		}
+	}
+
+	return NULL;
+}
 
 static DimensionSlice *
 calculate_open_range_default(const Dimension *dim, int64 value)
@@ -313,46 +393,61 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 
 	if (dim->chunk_interval.type == INTERVALOID)
 	{
-		TimestampTz ts = value - TS_EPOCH_DIFF_MICROSECONDS;
-		TimestampTz origin = 0; /* PostgreSQL Epoch */
+		const char *trunc_unit =
+			interval_to_date_trunc_unit(DatumGetIntervalP(dim->chunk_interval.value));
 
-		Datum diff = DirectFunctionCall2(timestamptz_age,
-										 TimestampTzGetDatum(ts),
-										 TimestampTzGetDatum(origin));
+		if (trunc_unit != NULL)
+		{
+			// TODO: check handling of time-part func
+			if (dimtype == UUIDOID)
+				dimtype = TIMESTAMPTZOID;
+			else if (dimtype == DATEOID)
+				dimtype = TIMESTAMPOID;
 
-		Datum num_intervals = DirectFunctionCall2(interval_div, diff, dim->chunk_interval.value);
+			Datum ts = ts_internal_to_time_value(value, dimtype);
+			Datum range_start_datum;
+			Datum range_end_datum;
 
-		Datum range_start_datum = DirectFunctionCall3(timestamptz_bin,
-													  dim->chunk_interval.value,
-													  TimestampTzGetDatum(ts),
-													  TimestampTzGetDatum(origin));
-		Datum range_end_datum =
-			DirectFunctionCall3(timestamptz_pl_interval_at_zone,
-								range_start_datum,
-								dim->chunk_interval.value,
-								CStringGetTextDatum(pg_get_timezone_name(session_timezone)));
+			switch (dimtype)
+			{
+				case TIMESTAMPTZOID:
+				{
+					range_start_datum =
+						DirectFunctionCall2(timestamptz_trunc, CStringGetTextDatum(trunc_unit), ts);
+					range_end_datum = DirectFunctionCall2(timestamptz_pl_interval,
+														  range_start_datum,
+														  dim->chunk_interval.value);
+					elog(NOTICE,
+						 "trunc \"%s\" range %s  -  %s",
+						 trunc_unit,
+						 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)),
+						 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
+					break;
+				}
+				case TIMESTAMPOID:
+				{
+					range_start_datum =
+						DirectFunctionCall2(timestamp_trunc, CStringGetTextDatum(trunc_unit), ts);
+					range_end_datum = DirectFunctionCall2(timestamp_pl_interval,
+														  range_start_datum,
+														  dim->chunk_interval.value);
+					break;
+				}
+				default:
+					Ensure(false, "unsupported time type for chunk interval");
+					break;
+			}
 
-		range_start = ts_time_value_to_internal(range_start_datum, TIMESTAMPTZOID);
-		range_end = ts_time_value_to_internal(range_end_datum, TIMESTAMPTZOID);
+			range_start = ts_time_value_to_internal(range_start_datum, dimtype);
+			range_end = ts_time_value_to_internal(range_end_datum, dimtype);
 
-		elog(NOTICE,
-			 "range %s  -  %s",
-			 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)),
-			 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
+			Assert(value >= range_start && value < range_end);
 
-		Assert(value >= range_start && value < range_end);
-
-		return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
+			return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
+		}
 	}
 
-#if 0
-	int64 interval_length = dimension_interval_to_internal(NameStr(dim->fd.column_name),
-														   dim->fd.column_type,
-														   &dim->chunk_interval,
-														   false);
-#else
 	int64 interval_length = dim->fd.interval_length;
-#endif
 
 	if (value < 0)
 	{
@@ -527,8 +622,9 @@ ts_dimension_get_open_slice_ordinal(const Dimension *dim, const DimensionSlice *
  * intervals where repartitioning happens, there might be an unexpected number
  * of slices due to a mix of slices from both the old and the new partitioning
  * configuration. As a result, the ordinal value of a given slice might not
- * actually match the partitioning settings at a given point in time. In this case, we will return
- * the ordinal of current slice most overlapping the given slice (or first fully overlapped slice).
+ * actually match the partitioning settings at a given point in time. In this case, we will
+ * return the ordinal of current slice most overlapping the given slice (or first fully
+ * overlapped slice).
  */
 static int
 ts_dimension_get_closed_slice_ordinal(const Dimension *dim, const DimensionSlice *target_slice)
@@ -542,8 +638,9 @@ ts_dimension_get_closed_slice_ordinal(const Dimension *dim, const DimensionSlice
 	Assert(NULL != target_slice);
 	Assert(dim->fd.num_slices > 0);
 
-	/* Slicing assumes partitioning functions use the range [0, INT32_MAX], though the first slice
-	 * uses INT64_MIN as its lower bound, and the last slice uses INT64_MAX as its upper bound. */
+	/* Slicing assumes partitioning functions use the range [0, INT32_MAX], though the first
+	 * slice uses INT64_MIN as its lower bound, and the last slice uses INT64_MAX as its upper
+	 * bound. */
 	if (target_slice->fd.range_start == DIMENSION_SLICE_MINVALUE)
 		return 0;
 
@@ -553,9 +650,10 @@ ts_dimension_get_closed_slice_ordinal(const Dimension *dim, const DimensionSlice
 	Assert(target_slice->fd.range_start > 0);
 	Assert(target_slice->fd.range_end < DIMENSION_SLICE_CLOSED_MAX);
 
-	/* Given a target slice starting from some point p, determine a candidate slice in the current
-	 * partitioning configuration that contains p. If that slice contains over half of our target
-	 * slice, return it's ordinal. Otherwise return the ordinal for the next slice. */
+	/* Given a target slice starting from some point p, determine a candidate slice in the
+	 * current partitioning configuration that contains p. If that slice contains over half of
+	 * our target slice, return it's ordinal. Otherwise return the ordinal for the next slice.
+	 */
 	current_slice_size = calculate_closed_range_interval(dim);
 	target_slice_size = target_slice->fd.range_end - target_slice->fd.range_start;
 	candidate_slice_ordinal = target_slice->fd.range_start / current_slice_size;
@@ -563,7 +661,7 @@ ts_dimension_get_closed_slice_ordinal(const Dimension *dim, const DimensionSlice
 		current_slice_size - (target_slice->fd.range_start % current_slice_size);
 
 	/* Note that if the candidate slice wholly contains the target slice,
-	 * target_overlap_with_candidate_slice will actually be greater than target_slice_size.  This
+	 * target_overlap_with_candidate_slice will actually be greater than target_slice_size. This
 	 * doesn't affect the correctness of the following check. */
 	if (target_overlap_with_candidate_slice >= target_slice_size / 2)
 		return candidate_slice_ordinal;
