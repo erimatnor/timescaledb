@@ -1,0 +1,1046 @@
+-- This file and its contents are licensed under the Apache License 2.0.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-APACHE for a copy of the license.
+--
+-- Test calendar-based chunking with various partitioning types
+--
+-- Calendar-based chunking aligns chunks with date_trunc() boundaries
+-- (e.g., start of day, week, month, year) based on the current timezone.
+--
+\set VERBOSITY terse
+-- Enable calendar-based chunking
+SET timescaledb.enable_calendar_chunking = true;
+---------------------------------------------------------------
+-- SECTION 1: UUID v7 PARTITIONING WITH CALENDAR ALIGNMENT
+---------------------------------------------------------------
+CREATE TABLE uuid_cal_events(
+    id uuid PRIMARY KEY,
+    device_id int,
+    temp float
+);
+-- Test with daily interval (compatible with date_trunc('day'))
+SELECT create_hypertable('uuid_cal_events', 'id', chunk_time_interval => interval '1 day');
+      create_hypertable       
+------------------------------
+ (1,public,uuid_cal_events,t)
+
+-- Verify dimension configuration
+SELECT time_interval, integer_interval
+FROM timescaledb_information.dimensions
+WHERE hypertable_name = 'uuid_cal_events';
+ time_interval | integer_interval 
+---------------+------------------
+ @ 1 day       |                 
+
+-- Insert UUIDs at specific timestamps (generated from known timestamps)
+-- These UUIDs correspond to:
+-- 2025-01-01 09:00:00 UTC -> 0194214e-cd00-7000-a9a7-63f1416dab45
+-- 2025-01-01 02:00:00 UTC -> 01942117-de80-7000-8121-f12b2b69dd96
+-- 2025-01-02 03:00:00 UTC -> 0194263e-3a80-7000-8f40-82c987b1bc1f
+-- 2025-01-02 04:00:00 UTC -> 01942675-2900-7000-8db1-a98694b18785
+-- 2025-01-03 05:00:00 UTC -> 01942bd2-7380-7000-9bc4-5f97443907b8
+-- 2025-01-03 12:00:00 UTC -> 01942d52-f900-7000-866e-07d6404d53c1
+INSERT INTO uuid_cal_events VALUES
+    ('01942117-de80-7000-8121-f12b2b69dd96', 1, 1.0),
+    ('0194214e-cd00-7000-a9a7-63f1416dab45', 2, 2.0),
+    ('0194263e-3a80-7000-8f40-82c987b1bc1f', 3, 3.0),
+    ('01942675-2900-7000-8db1-a98694b18785', 4, 4.0),
+    ('01942bd2-7380-7000-9bc4-5f97443907b8', 5, 5.0),
+    ('01942d52-f900-7000-866e-07d6404d53c1', 6, 6.0);
+-- Show chunks and verify calendar alignment
+SELECT * FROM show_chunks('uuid_cal_events');
+              show_chunks               
+----------------------------------------
+ _timescaledb_internal._hyper_1_1_chunk
+ _timescaledb_internal._hyper_1_2_chunk
+ _timescaledb_internal._hyper_1_3_chunk
+
+-- Show chunk constraints to verify alignment
+SELECT (test.show_constraints(ch)).* FROM show_chunks('uuid_cal_events') ch;
+        Constraint        | Type | Columns |                      Index                       |                                                      Expr                                                      | Deferrable | Deferred | Validated 
+--------------------------+------+---------+--------------------------------------------------+----------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ 1_1_uuid_cal_events_pkey | p    | {id}    | _timescaledb_internal."1_1_uuid_cal_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_1             | c    | {id}    | -                                                | ((id >= '019420e0-f000-0000-0000-000000000000'::uuid) AND (id < '01942607-4c00-0000-0000-000000000000'::uuid)) | f          | f        | t
+ 2_2_uuid_cal_events_pkey | p    | {id}    | _timescaledb_internal."2_2_uuid_cal_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_2             | c    | {id}    | -                                                | ((id >= '01942607-4c00-0000-0000-000000000000'::uuid) AND (id < '01942b2d-a800-0000-0000-000000000000'::uuid)) | f          | f        | t
+ 3_3_uuid_cal_events_pkey | p    | {id}    | _timescaledb_internal."3_3_uuid_cal_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_3             | c    | {id}    | -                                                | ((id >= '01942b2d-a800-0000-0000-000000000000'::uuid) AND (id < '01943054-0400-0000-0000-000000000000'::uuid)) | f          | f        | t
+
+-- Verify data with extracted timestamps
+SELECT uuid_timestamp(id), device_id, temp
+FROM uuid_cal_events ORDER BY id;
+        uuid_timestamp        | device_id | temp 
+------------------------------+-----------+------
+ Wed Jan 01 01:00:00 2025 PST |         1 |    1
+ Wed Jan 01 02:00:00 2025 PST |         2 |    2
+ Thu Jan 02 01:00:00 2025 PST |         3 |    3
+ Thu Jan 02 02:00:00 2025 PST |         4 |    4
+ Fri Jan 03 03:00:00 2025 PST |         5 |    5
+ Fri Jan 03 10:00:00 2025 PST |         6 |    6
+
+-- Test UUID v7 boundary values
+-- Min UUID v7 time: 00000000-0000-7000-8000-000000000000 (1970-01-01 00:00:00 UTC)
+BEGIN;
+INSERT INTO uuid_cal_events VALUES ('00000000-0000-7000-8000-000000000000', 0, 0.0);
+SELECT (test.show_constraints(ch)).* FROM show_chunks('uuid_cal_events') ch
+WHERE ch::text LIKE '%_1_chunk';
+        Constraint        | Type | Columns |                      Index                       |                                                      Expr                                                      | Deferrable | Deferred | Validated 
+--------------------------+------+---------+--------------------------------------------------+----------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ 1_1_uuid_cal_events_pkey | p    | {id}    | _timescaledb_internal."1_1_uuid_cal_events_pkey" |                                                                                                                | f          | f        | t
+ constraint_1             | c    | {id}    | -                                                | ((id >= '019420e0-f000-0000-0000-000000000000'::uuid) AND (id < '01942607-4c00-0000-0000-000000000000'::uuid)) | f          | f        | t
+
+ROLLBACK;
+-- Max UUID v7 time: ffffffff-ffff-7000-8000-000000000000 (far future)
+BEGIN;
+INSERT INTO uuid_cal_events VALUES ('ffffffff-ffff-7000-8000-000000000000', 99, 99.0);
+SELECT (test.show_constraints(ch)).* FROM show_chunks('uuid_cal_events') ch
+ORDER BY ch DESC LIMIT 1;
+        Constraint        | Type | Columns |                      Index                       | Expr | Deferrable | Deferred | Validated 
+--------------------------+------+---------+--------------------------------------------------+------+------------+----------+-----------
+ 5_5_uuid_cal_events_pkey | p    | {id}    | _timescaledb_internal."5_5_uuid_cal_events_pkey" |      | f          | f        | t
+
+ROLLBACK;
+DROP TABLE uuid_cal_events;
+-- Test UUID with monthly interval
+CREATE TABLE uuid_monthly(
+    id uuid PRIMARY KEY,
+    data text
+);
+SELECT create_hypertable('uuid_monthly', 'id', chunk_time_interval => interval '1 month');
+     create_hypertable     
+---------------------------
+ (2,public,uuid_monthly,t)
+
+-- Insert data spanning multiple months
+INSERT INTO uuid_monthly VALUES
+    ('01942117-de80-7000-8121-f12b2b69dd96', 'jan'),  -- 2025-01-01
+    ('0195f6e7-d400-7000-8000-000000000000', 'feb'),  -- ~2025-02-15
+    ('01978b69-8000-7000-8000-000000000000', 'mar');  -- ~2025-03-15
+SELECT * FROM show_chunks('uuid_monthly');
+              show_chunks               
+----------------------------------------
+ _timescaledb_internal._hyper_2_6_chunk
+ _timescaledb_internal._hyper_2_7_chunk
+ _timescaledb_internal._hyper_2_8_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('uuid_monthly') ch;
+      Constraint       | Type | Columns |                     Index                     |                                                      Expr                                                      | Deferrable | Deferred | Validated 
+-----------------------+------+---------+-----------------------------------------------+----------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ 6_6_uuid_monthly_pkey | p    | {id}    | _timescaledb_internal."6_6_uuid_monthly_pkey" |                                                                                                                | f          | f        | t
+ constraint_6          | c    | {id}    | -                                             | ((id >= '019420e0-f000-0000-0000-000000000000'::uuid) AND (id < '0194c086-1400-0000-0000-000000000000'::uuid)) | f          | f        | t
+ 7_7_uuid_monthly_pkey | p    | {id}    | _timescaledb_internal."7_7_uuid_monthly_pkey" |                                                                                                                | f          | f        | t
+ constraint_7          | c    | {id}    | -                                             | ((id >= '0195f026-5980-0000-0000-000000000000'::uuid) AND (id < '01968aa5-2180-0000-0000-000000000000'::uuid)) | f          | f        | t
+ 8_8_uuid_monthly_pkey | p    | {id}    | _timescaledb_internal."8_8_uuid_monthly_pkey" |                                                                                                                | f          | f        | t
+ constraint_8          | c    | {id}    | -                                             | ((id >= '01972a4a-4580-0000-0000-000000000000'::uuid) AND (id < '0197c4c9-0d80-0000-0000-000000000000'::uuid)) | f          | f        | t
+
+DROP TABLE uuid_monthly;
+---------------------------------------------------------------
+-- SECTION 2: TIMESTAMPTZ PARTITIONING WITH CALENDAR ALIGNMENT
+---------------------------------------------------------------
+-- Test with various date_trunc compatible intervals
+-- 2.1: Daily chunks
+CREATE TABLE tz_daily(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_daily', 'time', chunk_time_interval => interval '1 day');
+   create_hypertable   
+-----------------------
+ (3,public,tz_daily,t)
+
+-- Insert data spanning multiple days
+INSERT INTO tz_daily VALUES
+    ('2025-01-01 00:00:00 UTC', 1, 1.0),
+    ('2025-01-01 23:59:59.999999 UTC', 1, 1.5),
+    ('2025-01-02 00:00:00 UTC', 2, 2.0),
+    ('2025-01-02 12:00:00 UTC', 2, 2.5),
+    ('2025-01-03 00:00:00 UTC', 3, 3.0);
+SELECT * FROM show_chunks('tz_daily');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_3_9_chunk
+ _timescaledb_internal._hyper_3_10_chunk
+ _timescaledb_internal._hyper_3_11_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_daily') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_9  | c    | {time}  | -     | (("time" >= 'Tue Dec 31 00:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Wed Jan 01 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_10 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Thu Jan 02 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_11 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Fri Jan 03 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_daily;
+-- 2.2: Weekly chunks
+CREATE TABLE tz_weekly(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_weekly', 'time', chunk_time_interval => interval '1 week');
+   create_hypertable    
+------------------------
+ (4,public,tz_weekly,t)
+
+-- Insert data spanning multiple weeks (Monday start)
+INSERT INTO tz_weekly VALUES
+    ('2025-01-06 00:00:00 UTC', 1, 1.0),  -- Monday
+    ('2025-01-12 23:59:59 UTC', 1, 1.5),  -- Sunday
+    ('2025-01-13 00:00:00 UTC', 2, 2.0),  -- Monday (next week)
+    ('2025-01-20 12:00:00 UTC', 3, 3.0);  -- Monday (week after)
+SELECT * FROM show_chunks('tz_weekly');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_4_12_chunk
+ _timescaledb_internal._hyper_4_13_chunk
+ _timescaledb_internal._hyper_4_14_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_weekly') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_12 | c    | {time}  | -     | (("time" >= 'Mon Dec 30 00:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Mon Jan 06 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_13 | c    | {time}  | -     | (("time" >= 'Mon Jan 06 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Mon Jan 13 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_14 | c    | {time}  | -     | (("time" >= 'Mon Jan 20 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Mon Jan 27 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_weekly;
+-- 2.3: Monthly chunks
+CREATE TABLE tz_monthly(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_monthly', 'time', chunk_time_interval => interval '1 month');
+    create_hypertable    
+-------------------------
+ (5,public,tz_monthly,t)
+
+-- Insert data spanning multiple months including boundary conditions
+INSERT INTO tz_monthly VALUES
+    ('2025-01-01 00:00:00 UTC', 1, 1.0),
+    ('2025-01-31 23:59:59.999999 UTC', 1, 1.5),
+    ('2025-02-01 00:00:00 UTC', 2, 2.0),
+    ('2025-02-28 12:00:00 UTC', 2, 2.5),  -- Feb (non-leap year 2025)
+    ('2025-03-01 00:00:00 UTC', 3, 3.0);
+SELECT * FROM show_chunks('tz_monthly');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_5_15_chunk
+ _timescaledb_internal._hyper_5_16_chunk
+ _timescaledb_internal._hyper_5_17_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_monthly') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_15 | c    | {time}  | -     | (("time" >= 'Sun Dec 01 00:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Wed Jan 01 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_16 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Sat Feb 01 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_17 | c    | {time}  | -     | (("time" >= 'Sat Feb 01 00:00:00 2025 PST'::timestamp with time zone) AND ("time" < 'Sat Mar 01 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_monthly;
+-- 2.4: Yearly chunks
+CREATE TABLE tz_yearly(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_yearly', 'time', chunk_time_interval => interval '1 year');
+   create_hypertable    
+------------------------
+ (6,public,tz_yearly,t)
+
+INSERT INTO tz_yearly VALUES
+    ('2024-01-01 00:00:00 UTC', 1, 1.0),
+    ('2024-12-31 23:59:59 UTC', 1, 1.5),
+    ('2025-01-01 00:00:00 UTC', 2, 2.0),
+    ('2026-06-15 12:00:00 UTC', 3, 3.0);
+SELECT * FROM show_chunks('tz_yearly');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_6_18_chunk
+ _timescaledb_internal._hyper_6_19_chunk
+ _timescaledb_internal._hyper_6_20_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_yearly') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_18 | c    | {time}  | -     | (("time" >= 'Sun Jan 01 00:00:00 2023 PST'::timestamp with time zone) AND ("time" < 'Mon Jan 01 00:00:00 2024 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_19 | c    | {time}  | -     | (("time" >= 'Mon Jan 01 00:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Wed Jan 01 00:00:00 2025 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_20 | c    | {time}  | -     | (("time" >= 'Thu Jan 01 00:00:00 2026 PST'::timestamp with time zone) AND ("time" < 'Fri Jan 01 00:00:00 2027 PST'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_yearly;
+-- 2.5: Hourly chunks
+CREATE TABLE tz_hourly(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_hourly', 'time', chunk_time_interval => interval '1 hour');
+   create_hypertable    
+------------------------
+ (7,public,tz_hourly,t)
+
+INSERT INTO tz_hourly VALUES
+    ('2025-01-01 00:00:00 UTC', 1, 1.0),
+    ('2025-01-01 00:59:59.999999 UTC', 1, 1.5),
+    ('2025-01-01 01:00:00 UTC', 2, 2.0),
+    ('2025-01-01 02:30:00 UTC', 3, 3.0);
+SELECT * FROM show_chunks('tz_hourly');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_7_21_chunk
+ _timescaledb_internal._hyper_7_22_chunk
+ _timescaledb_internal._hyper_7_23_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_hourly') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_21 | c    | {time}  | -     | (("time" >= 'Tue Dec 31 16:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Tue Dec 31 17:00:00 2024 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_22 | c    | {time}  | -     | (("time" >= 'Tue Dec 31 17:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Tue Dec 31 18:00:00 2024 PST'::timestamp with time zone)) | f          | f        | t
+ constraint_23 | c    | {time}  | -     | (("time" >= 'Tue Dec 31 18:00:00 2024 PST'::timestamp with time zone) AND ("time" < 'Tue Dec 31 19:00:00 2024 PST'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_hourly;
+---------------------------------------------------------------
+-- SECTION 3: TIMESTAMP (WITHOUT TIME ZONE) PARTITIONING
+---------------------------------------------------------------
+CREATE TABLE ts_daily(
+    time timestamp NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('ts_daily', 'time', chunk_time_interval => interval '1 day');
+WARNING:  column type "timestamp without time zone" used for "time" does not follow best practices
+   create_hypertable   
+-----------------------
+ (8,public,ts_daily,t)
+
+-- Insert data spanning multiple days
+INSERT INTO ts_daily VALUES
+    ('2025-01-01 00:00:00', 1, 1.0),
+    ('2025-01-01 23:59:59.999999', 1, 1.5),
+    ('2025-01-02 00:00:00', 2, 2.0),
+    ('2025-01-02 12:00:00', 2, 2.5),
+    ('2025-01-03 00:00:00', 3, 3.0);
+SELECT * FROM show_chunks('ts_daily');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_8_24_chunk
+ _timescaledb_internal._hyper_8_25_chunk
+ _timescaledb_internal._hyper_8_26_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch;
+  Constraint   | Type | Columns | Index |                                                                     Expr                                                                     | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+----------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_24 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Thu Jan 02 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+ constraint_25 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Fri Jan 03 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+ constraint_26 | c    | {time}  | -     | (("time" >= 'Fri Jan 03 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Sat Jan 04 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+
+-- Test timestamp boundary values
+BEGIN;
+INSERT INTO ts_daily VALUES ('4714-11-24 00:00:00 BC', -1, -1.0);  -- Min timestamp
+SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch
+ORDER BY 1 DESC LIMIT 1;
+  Constraint   | Type | Columns | Index |                                                                        Expr                                                                        | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+----------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_27 | c    | {time}  | -     | (("time" >= 'Mon Nov 24 00:00:00 4714 BC'::timestamp without time zone) AND ("time" < 'Tue Nov 25 00:00:00 4714 BC'::timestamp without time zone)) | f          | f        | t
+
+ROLLBACK;
+DROP TABLE ts_daily;
+-- Test monthly chunks with timestamp
+CREATE TABLE ts_monthly(
+    time timestamp NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('ts_monthly', 'time', chunk_time_interval => interval '1 month');
+WARNING:  column type "timestamp without time zone" used for "time" does not follow best practices
+    create_hypertable    
+-------------------------
+ (9,public,ts_monthly,t)
+
+INSERT INTO ts_monthly VALUES
+    ('2025-01-15 12:00:00', 1, 1.0),
+    ('2025-02-15 12:00:00', 2, 2.0),
+    ('2025-03-15 12:00:00', 3, 3.0);
+SELECT * FROM show_chunks('ts_monthly');
+               show_chunks               
+-----------------------------------------
+ _timescaledb_internal._hyper_9_28_chunk
+ _timescaledb_internal._hyper_9_29_chunk
+ _timescaledb_internal._hyper_9_30_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_monthly') ch;
+  Constraint   | Type | Columns | Index |                                                                     Expr                                                                     | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+----------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_28 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Sat Feb 01 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+ constraint_29 | c    | {time}  | -     | (("time" >= 'Sat Feb 01 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Sat Mar 01 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+ constraint_30 | c    | {time}  | -     | (("time" >= 'Sat Mar 01 00:00:00 2025'::timestamp without time zone) AND ("time" < 'Tue Apr 01 00:00:00 2025'::timestamp without time zone)) | f          | f        | t
+
+DROP TABLE ts_monthly;
+---------------------------------------------------------------
+-- SECTION 4: DATE PARTITIONING
+---------------------------------------------------------------
+CREATE TABLE date_daily(
+    day date NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('date_daily', 'day', chunk_time_interval => interval '1 day');
+    create_hypertable     
+--------------------------
+ (10,public,date_daily,t)
+
+INSERT INTO date_daily VALUES
+    ('2025-01-01', 1, 1.0),
+    ('2025-01-02', 2, 2.0),
+    ('2025-01-03', 3, 3.0);
+SELECT * FROM show_chunks('date_daily');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_10_31_chunk
+ _timescaledb_internal._hyper_10_32_chunk
+ _timescaledb_internal._hyper_10_33_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('date_daily') ch;
+  Constraint   | Type | Columns | Index |                             Expr                             | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+--------------------------------------------------------------+------------+----------+-----------
+ constraint_31 | c    | {day}   | -     | ((day >= '01-01-2025'::date) AND (day < '01-02-2025'::date)) | f          | f        | t
+ constraint_32 | c    | {day}   | -     | ((day >= '01-02-2025'::date) AND (day < '01-03-2025'::date)) | f          | f        | t
+ constraint_33 | c    | {day}   | -     | ((day >= '01-03-2025'::date) AND (day < '01-04-2025'::date)) | f          | f        | t
+
+DROP TABLE date_daily;
+-- Test weekly chunks with date
+CREATE TABLE date_weekly(
+    day date NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('date_weekly', 'day', chunk_time_interval => interval '1 week');
+     create_hypertable     
+---------------------------
+ (11,public,date_weekly,t)
+
+INSERT INTO date_weekly VALUES
+    ('2025-01-06', 1, 1.0),  -- Monday
+    ('2025-01-12', 1, 1.5),  -- Sunday
+    ('2025-01-13', 2, 2.0),  -- Monday (next week)
+    ('2025-01-20', 3, 3.0);  -- Monday (week after)
+SELECT * FROM show_chunks('date_weekly');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_11_34_chunk
+ _timescaledb_internal._hyper_11_35_chunk
+ _timescaledb_internal._hyper_11_36_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('date_weekly') ch;
+  Constraint   | Type | Columns | Index |                             Expr                             | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+--------------------------------------------------------------+------------+----------+-----------
+ constraint_34 | c    | {day}   | -     | ((day >= '01-06-2025'::date) AND (day < '01-13-2025'::date)) | f          | f        | t
+ constraint_35 | c    | {day}   | -     | ((day >= '01-13-2025'::date) AND (day < '01-20-2025'::date)) | f          | f        | t
+ constraint_36 | c    | {day}   | -     | ((day >= '01-20-2025'::date) AND (day < '01-27-2025'::date)) | f          | f        | t
+
+DROP TABLE date_weekly;
+-- Test monthly chunks with date
+CREATE TABLE date_monthly(
+    day date NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('date_monthly', 'day', chunk_time_interval => interval '1 month');
+     create_hypertable      
+----------------------------
+ (12,public,date_monthly,t)
+
+INSERT INTO date_monthly VALUES
+    ('2025-01-15', 1, 1.0),
+    ('2025-02-15', 2, 2.0),
+    ('2025-03-15', 3, 3.0),
+    ('2025-04-15', 4, 4.0);
+SELECT * FROM show_chunks('date_monthly');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_12_37_chunk
+ _timescaledb_internal._hyper_12_38_chunk
+ _timescaledb_internal._hyper_12_39_chunk
+ _timescaledb_internal._hyper_12_40_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('date_monthly') ch;
+  Constraint   | Type | Columns | Index |                             Expr                             | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+--------------------------------------------------------------+------------+----------+-----------
+ constraint_37 | c    | {day}   | -     | ((day >= '01-01-2025'::date) AND (day < '02-01-2025'::date)) | f          | f        | t
+ constraint_38 | c    | {day}   | -     | ((day >= '02-01-2025'::date) AND (day < '03-01-2025'::date)) | f          | f        | t
+ constraint_39 | c    | {day}   | -     | ((day >= '03-01-2025'::date) AND (day < '04-01-2025'::date)) | f          | f        | t
+ constraint_40 | c    | {day}   | -     | ((day >= '04-01-2025'::date) AND (day < '05-01-2025'::date)) | f          | f        | t
+
+DROP TABLE date_monthly;
+-- Test date boundary values
+CREATE TABLE date_boundaries(
+    day date NOT NULL,
+    value int
+);
+SELECT create_hypertable('date_boundaries', 'day', chunk_time_interval => interval '1 year');
+       create_hypertable       
+-------------------------------
+ (13,public,date_boundaries,t)
+
+-- Test far past and future dates
+BEGIN;
+INSERT INTO date_boundaries VALUES ('0001-01-01', 1);
+INSERT INTO date_boundaries VALUES ('9999-12-31', 2);
+SELECT * FROM show_chunks('date_boundaries');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_13_41_chunk
+ _timescaledb_internal._hyper_13_42_chunk
+
+ROLLBACK;
+DROP TABLE date_boundaries;
+---------------------------------------------------------------
+-- SECTION 5: TIMEZONE AND DAYLIGHT SAVING TIME (DST) TESTS
+---------------------------------------------------------------
+-- Save and set known timezone for consistent results
+SET timezone = 'UTC';
+CREATE TABLE tz_dst_test(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_dst_test', 'time', chunk_time_interval => interval '1 day');
+     create_hypertable     
+---------------------------
+ (14,public,tz_dst_test,t)
+
+-- Insert data around US DST transitions (America/New_York)
+-- Spring forward: March 9, 2025 2:00 AM -> 3:00 AM
+-- Fall back: November 2, 2025 2:00 AM -> 1:00 AM
+-- Data around spring forward (March 9, 2025)
+INSERT INTO tz_dst_test VALUES
+    ('2025-03-08 23:00:00 America/New_York', 1, 1.0),  -- Day before DST
+    ('2025-03-09 01:00:00 America/New_York', 2, 2.0),  -- Before spring forward
+    ('2025-03-09 03:00:00 America/New_York', 3, 3.0),  -- After spring forward (2 AM doesn't exist)
+    ('2025-03-09 12:00:00 America/New_York', 4, 4.0),  -- Middle of day
+    ('2025-03-10 00:00:00 America/New_York', 5, 5.0);  -- Day after DST
+-- Data around fall back (November 2, 2025)
+INSERT INTO tz_dst_test VALUES
+    ('2025-11-01 23:00:00 America/New_York', 6, 6.0),  -- Day before DST
+    ('2025-11-02 00:30:00 America/New_York', 7, 7.0),  -- Before fall back
+    ('2025-11-02 01:30:00 EST', 8, 8.0),               -- After fall back (1:30 AM happens twice)
+    ('2025-11-02 03:00:00 America/New_York', 9, 9.0),  -- After fall back
+    ('2025-11-03 00:00:00 America/New_York', 10, 10.0); -- Day after DST
+-- Show chunks in UTC
+SELECT * FROM show_chunks('tz_dst_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_14_43_chunk
+ _timescaledb_internal._hyper_14_44_chunk
+ _timescaledb_internal._hyper_14_45_chunk
+ _timescaledb_internal._hyper_14_46_chunk
+
+-- Verify chunk boundaries
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_dst_test') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_43 | c    | {time}  | -     | (("time" >= 'Sun Mar 09 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Mon Mar 10 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_44 | c    | {time}  | -     | (("time" >= 'Mon Mar 10 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Tue Mar 11 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_45 | c    | {time}  | -     | (("time" >= 'Sun Nov 02 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Mon Nov 03 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_46 | c    | {time}  | -     | (("time" >= 'Mon Nov 03 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Tue Nov 04 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+
+-- Query data with different timezone settings
+SET timezone = 'America/New_York';
+SELECT time, device_id, value FROM tz_dst_test
+WHERE time >= '2025-03-08' AND time < '2025-03-11'
+ORDER BY time;
+             time             | device_id | value 
+------------------------------+-----------+-------
+ Sat Mar 08 23:00:00 2025 EST |         1 |     1
+ Sun Mar 09 01:00:00 2025 EST |         2 |     2
+ Sun Mar 09 03:00:00 2025 EDT |         3 |     3
+ Sun Mar 09 12:00:00 2025 EDT |         4 |     4
+ Mon Mar 10 00:00:00 2025 EDT |         5 |     5
+
+SET timezone = 'UTC';
+SELECT time, device_id, value FROM tz_dst_test
+WHERE time >= '2025-03-08' AND time < '2025-03-11'
+ORDER BY time;
+             time             | device_id | value 
+------------------------------+-----------+-------
+ Sun Mar 09 04:00:00 2025 UTC |         1 |     1
+ Sun Mar 09 06:00:00 2025 UTC |         2 |     2
+ Sun Mar 09 07:00:00 2025 UTC |         3 |     3
+ Sun Mar 09 16:00:00 2025 UTC |         4 |     4
+ Mon Mar 10 04:00:00 2025 UTC |         5 |     5
+
+DROP TABLE tz_dst_test;
+-- Test with European DST (Europe/Berlin)
+-- Spring forward: March 30, 2025 2:00 AM -> 3:00 AM
+-- Fall back: October 26, 2025 3:00 AM -> 2:00 AM
+CREATE TABLE tz_eu_dst_test(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_eu_dst_test', 'time', chunk_time_interval => interval '1 day');
+      create_hypertable       
+------------------------------
+ (15,public,tz_eu_dst_test,t)
+
+-- Data around European spring forward (March 30, 2025)
+INSERT INTO tz_eu_dst_test VALUES
+    ('2025-03-29 23:00:00 Europe/Berlin', 1, 1.0),  -- Day before DST
+    ('2025-03-30 01:00:00 Europe/Berlin', 2, 2.0),  -- Before spring forward
+    ('2025-03-30 03:00:00 Europe/Berlin', 3, 3.0),  -- After spring forward
+    ('2025-03-30 12:00:00 Europe/Berlin', 4, 4.0),  -- Middle of day
+    ('2025-03-31 00:00:00 Europe/Berlin', 5, 5.0);  -- Day after DST
+-- Data around European fall back (October 26, 2025)
+INSERT INTO tz_eu_dst_test VALUES
+    ('2025-10-25 23:00:00 Europe/Berlin', 6, 6.0),  -- Day before DST
+    ('2025-10-26 01:30:00 Europe/Berlin', 7, 7.0),  -- Before fall back
+    ('2025-10-26 02:30:00 CET', 8, 8.0),            -- After fall back (2:30 happens twice)
+    ('2025-10-26 04:00:00 Europe/Berlin', 9, 9.0),  -- After fall back
+    ('2025-10-27 00:00:00 Europe/Berlin', 10, 10.0); -- Day after DST
+SELECT * FROM show_chunks('tz_eu_dst_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_15_47_chunk
+ _timescaledb_internal._hyper_15_48_chunk
+ _timescaledb_internal._hyper_15_49_chunk
+ _timescaledb_internal._hyper_15_50_chunk
+
+SET timezone = 'Europe/Berlin';
+SELECT time, device_id, value FROM tz_eu_dst_test
+WHERE time >= '2025-03-29' AND time < '2025-04-01'
+ORDER BY time;
+             time              | device_id | value 
+-------------------------------+-----------+-------
+ Sat Mar 29 23:00:00 2025 CET  |         1 |     1
+ Sun Mar 30 01:00:00 2025 CET  |         2 |     2
+ Sun Mar 30 03:00:00 2025 CEST |         3 |     3
+ Sun Mar 30 12:00:00 2025 CEST |         4 |     4
+ Mon Mar 31 00:00:00 2025 CEST |         5 |     5
+
+SET timezone = 'UTC';
+DROP TABLE tz_eu_dst_test;
+---------------------------------------------------------------
+-- SECTION 6: CHUNK ALIGNMENT WITH DIFFERENT TIMEZONES
+---------------------------------------------------------------
+-- Test that chunks align properly when created in different timezones
+CREATE TABLE tz_align_test(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('tz_align_test', 'time', chunk_time_interval => interval '1 day');
+      create_hypertable      
+-----------------------------
+ (16,public,tz_align_test,t)
+
+-- Insert data with explicit timezone
+SET timezone = 'America/Los_Angeles';
+INSERT INTO tz_align_test VALUES
+    ('2025-01-01 00:00:00 America/Los_Angeles', 1, 1.0),
+    ('2025-01-01 23:59:59 America/Los_Angeles', 2, 2.0),
+    ('2025-01-02 00:00:00 America/Los_Angeles', 3, 3.0);
+-- Switch timezone and verify chunk boundaries
+SET timezone = 'Asia/Tokyo';
+INSERT INTO tz_align_test VALUES
+    ('2025-01-01 00:00:00 Asia/Tokyo', 4, 4.0),
+    ('2025-01-01 23:59:59 Asia/Tokyo', 5, 5.0);
+SET timezone = 'UTC';
+-- Show all chunks
+SELECT * FROM show_chunks('tz_align_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_16_51_chunk
+ _timescaledb_internal._hyper_16_52_chunk
+ _timescaledb_internal._hyper_16_53_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_align_test') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_51 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 08:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Thu Jan 02 08:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_52 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 08:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Fri Jan 03 08:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_53 | c    | {time}  | -     | (("time" >= 'Tue Dec 31 15:00:00 2024 UTC'::timestamp with time zone) AND ("time" < 'Wed Jan 01 08:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+
+-- Verify data distribution across chunks
+SELECT ch.chunk_name, count(*) as rows
+FROM (SELECT tableoid::regclass as chunk_name FROM tz_align_test) ch
+GROUP BY ch.chunk_name
+ORDER BY ch.chunk_name;
+                chunk_name                | rows 
+------------------------------------------+------
+ _timescaledb_internal._hyper_16_51_chunk |    3
+ _timescaledb_internal._hyper_16_52_chunk |    1
+ _timescaledb_internal._hyper_16_53_chunk |    1
+
+DROP TABLE tz_align_test;
+---------------------------------------------------------------
+-- SECTION 7: BOUNDARY VALUE TESTS FOR ALL TYPES
+---------------------------------------------------------------
+-- 7.1: TIMESTAMPTZ boundaries
+CREATE TABLE tz_boundary(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('tz_boundary', 'time', chunk_time_interval => interval '1 day');
+     create_hypertable     
+---------------------------
+ (17,public,tz_boundary,t)
+
+-- Test exact day boundaries
+INSERT INTO tz_boundary VALUES
+    ('2025-01-01 00:00:00+00', 1),        -- Exact start of day
+    ('2025-01-01 23:59:59.999999+00', 2), -- Just before midnight
+    ('2025-01-02 00:00:00+00', 3);        -- Exact start of next day
+SELECT time, value FROM tz_boundary ORDER BY time;
+                time                 | value 
+-------------------------------------+-------
+ Wed Jan 01 00:00:00 2025 UTC        |     1
+ Wed Jan 01 23:59:59.999999 2025 UTC |     2
+ Thu Jan 02 00:00:00 2025 UTC        |     3
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_boundary') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_54 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_55 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Fri Jan 03 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_boundary;
+-- 7.2: Test microsecond precision at boundaries
+CREATE TABLE tz_microsec(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('tz_microsec', 'time', chunk_time_interval => interval '1 second');
+     create_hypertable     
+---------------------------
+ (18,public,tz_microsec,t)
+
+INSERT INTO tz_microsec VALUES
+    ('2025-01-01 00:00:00.000000+00', 1),
+    ('2025-01-01 00:00:00.999999+00', 2),
+    ('2025-01-01 00:00:01.000000+00', 3),
+    ('2025-01-01 00:00:01.000001+00', 4);
+SELECT * FROM show_chunks('tz_microsec');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_18_56_chunk
+ _timescaledb_internal._hyper_18_57_chunk
+
+SELECT time, value FROM tz_microsec ORDER BY time;
+                time                 | value 
+-------------------------------------+-------
+ Wed Jan 01 00:00:00 2025 UTC        |     1
+ Wed Jan 01 00:00:00.999999 2025 UTC |     2
+ Wed Jan 01 00:00:01 2025 UTC        |     3
+ Wed Jan 01 00:00:01.000001 2025 UTC |     4
+
+DROP TABLE tz_microsec;
+-- 7.3: Test minute-level chunks
+CREATE TABLE tz_minute(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('tz_minute', 'time', chunk_time_interval => interval '1 minute');
+    create_hypertable    
+-------------------------
+ (19,public,tz_minute,t)
+
+INSERT INTO tz_minute VALUES
+    ('2025-01-01 00:00:00+00', 1),
+    ('2025-01-01 00:00:59+00', 2),
+    ('2025-01-01 00:01:00+00', 3),
+    ('2025-01-01 00:02:00+00', 4);
+SELECT * FROM show_chunks('tz_minute');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_19_58_chunk
+ _timescaledb_internal._hyper_19_59_chunk
+ _timescaledb_internal._hyper_19_60_chunk
+
+DROP TABLE tz_minute;
+---------------------------------------------------------------
+-- SECTION 8: MULTI-INTERVAL TESTS (2 days, 2 weeks, etc.)
+---------------------------------------------------------------
+-- Test 2-day chunks
+CREATE TABLE tz_2day(
+    time timestamptz NOT NULL,
+    value int
+);
+\set ON_ERROR_STOP 0
+-- Note: 2 day interval may not be compatible with date_trunc
+SELECT create_hypertable('tz_2day', 'time', chunk_time_interval => interval '2 days');
+   create_hypertable   
+-----------------------
+ (20,public,tz_2day,t)
+
+\set ON_ERROR_STOP 1
+DROP TABLE IF EXISTS tz_2day;
+-- Test 2-month chunks (should work with date_trunc logic)
+CREATE TABLE tz_2month(
+    time timestamptz NOT NULL,
+    value int
+);
+\set ON_ERROR_STOP 0
+SELECT create_hypertable('tz_2month', 'time', chunk_time_interval => interval '2 months');
+    create_hypertable    
+-------------------------
+ (21,public,tz_2month,t)
+
+\set ON_ERROR_STOP 1
+DROP TABLE IF EXISTS tz_2month;
+---------------------------------------------------------------
+-- SECTION 9: COMPARISON WITH NON-CALENDAR CHUNKING
+---------------------------------------------------------------
+-- Disable calendar chunking for comparison
+SET timescaledb.enable_calendar_chunking = false;
+CREATE TABLE tz_no_cal(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('tz_no_cal', 'time', chunk_time_interval => interval '1 day');
+    create_hypertable    
+-------------------------
+ (22,public,tz_no_cal,t)
+
+INSERT INTO tz_no_cal VALUES
+    ('2025-01-01 12:00:00+00', 1),
+    ('2025-01-02 12:00:00+00', 2),
+    ('2025-01-03 12:00:00+00', 3);
+-- Show non-calendar aligned chunks
+SELECT * FROM show_chunks('tz_no_cal');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_22_61_chunk
+ _timescaledb_internal._hyper_22_62_chunk
+ _timescaledb_internal._hyper_22_63_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_no_cal') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_61 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_62 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Fri Jan 03 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_63 | c    | {time}  | -     | (("time" >= 'Fri Jan 03 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Sat Jan 04 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_no_cal;
+-- Re-enable for calendar-aligned comparison
+SET timescaledb.enable_calendar_chunking = true;
+CREATE TABLE tz_cal(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('tz_cal', 'time', chunk_time_interval => interval '1 day');
+  create_hypertable   
+----------------------
+ (23,public,tz_cal,t)
+
+INSERT INTO tz_cal VALUES
+    ('2025-01-01 12:00:00+00', 1),
+    ('2025-01-02 12:00:00+00', 2),
+    ('2025-01-03 12:00:00+00', 3);
+-- Show calendar-aligned chunks
+SELECT * FROM show_chunks('tz_cal');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_23_64_chunk
+ _timescaledb_internal._hyper_23_65_chunk
+ _timescaledb_internal._hyper_23_66_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('tz_cal') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_64 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_65 | c    | {time}  | -     | (("time" >= 'Thu Jan 02 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Fri Jan 03 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_66 | c    | {time}  | -     | (("time" >= 'Fri Jan 03 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Sat Jan 04 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE tz_cal;
+---------------------------------------------------------------
+-- SECTION 10: EDGE CASES AND ERROR HANDLING
+---------------------------------------------------------------
+\set ON_ERROR_STOP 0
+-- Test invalid interval type
+CREATE TABLE invalid_interval(id uuid PRIMARY KEY);
+SELECT create_hypertable('invalid_interval', 'id', chunk_time_interval => true);
+ERROR:  invalid interval type for uuid dimension
+DROP TABLE IF EXISTS invalid_interval;
+-- Test inserting non-v7 UUID should fail
+CREATE TABLE uuid_v7_only(id uuid PRIMARY KEY, value int);
+SELECT create_hypertable('uuid_v7_only', 'id', chunk_time_interval => interval '1 day');
+     create_hypertable      
+----------------------------
+ (24,public,uuid_v7_only,t)
+
+INSERT INTO uuid_v7_only VALUES ('a8961135-cd89-4c4b-aa05-79df642407dd', 1);  -- v4 UUID
+ERROR:  a8961135-cd89-4c4b-aa05-79df642407dd is not a version 7 UUID
+DROP TABLE IF EXISTS uuid_v7_only;
+\set ON_ERROR_STOP 1
+---------------------------------------------------------------
+-- SECTION 11: LEAP YEAR BOUNDARY TESTS
+---------------------------------------------------------------
+CREATE TABLE leap_year_test(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('leap_year_test', 'time', chunk_time_interval => interval '1 month');
+      create_hypertable       
+------------------------------
+ (25,public,leap_year_test,t)
+
+-- Test February boundaries in leap year (2024)
+INSERT INTO leap_year_test VALUES
+    ('2024-02-28 12:00:00+00', 1),  -- Feb 28 in leap year
+    ('2024-02-29 12:00:00+00', 2),  -- Feb 29 in leap year
+    ('2024-03-01 00:00:00+00', 3);  -- March 1
+SELECT * FROM show_chunks('leap_year_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_25_67_chunk
+ _timescaledb_internal._hyper_25_68_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('leap_year_test') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_67 | c    | {time}  | -     | (("time" >= 'Thu Feb 01 00:00:00 2024 UTC'::timestamp with time zone) AND ("time" < 'Fri Mar 01 00:00:00 2024 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_68 | c    | {time}  | -     | (("time" >= 'Fri Mar 01 00:00:00 2024 UTC'::timestamp with time zone) AND ("time" < 'Mon Apr 01 00:00:00 2024 UTC'::timestamp with time zone)) | f          | f        | t
+
+-- Test February boundaries in non-leap year (2025)
+INSERT INTO leap_year_test VALUES
+    ('2025-02-28 12:00:00+00', 4),  -- Feb 28 in non-leap year
+    ('2025-03-01 00:00:00+00', 5);  -- March 1
+SELECT * FROM show_chunks('leap_year_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_25_67_chunk
+ _timescaledb_internal._hyper_25_68_chunk
+ _timescaledb_internal._hyper_25_69_chunk
+ _timescaledb_internal._hyper_25_70_chunk
+
+DROP TABLE leap_year_test;
+---------------------------------------------------------------
+-- SECTION 12: YEAR BOUNDARY TESTS
+---------------------------------------------------------------
+CREATE TABLE year_boundary_test(
+    time timestamptz NOT NULL,
+    value int
+);
+SELECT create_hypertable('year_boundary_test', 'time', chunk_time_interval => interval '1 year');
+        create_hypertable         
+----------------------------------
+ (26,public,year_boundary_test,t)
+
+-- Test year boundaries
+INSERT INTO year_boundary_test VALUES
+    ('2024-12-31 23:59:59.999999+00', 1),  -- Last moment of 2024
+    ('2025-01-01 00:00:00+00', 2),          -- First moment of 2025
+    ('2025-12-31 23:59:59.999999+00', 3),  -- Last moment of 2025
+    ('2026-01-01 00:00:00+00', 4);          -- First moment of 2026
+SELECT * FROM show_chunks('year_boundary_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_26_71_chunk
+ _timescaledb_internal._hyper_26_72_chunk
+ _timescaledb_internal._hyper_26_73_chunk
+
+SELECT (test.show_constraints(ch)).* FROM show_chunks('year_boundary_test') ch;
+  Constraint   | Type | Columns | Index |                                                                      Expr                                                                      | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
+ constraint_71 | c    | {time}  | -     | (("time" >= 'Mon Jan 01 00:00:00 2024 UTC'::timestamp with time zone) AND ("time" < 'Wed Jan 01 00:00:00 2025 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_72 | c    | {time}  | -     | (("time" >= 'Wed Jan 01 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Thu Jan 01 00:00:00 2026 UTC'::timestamp with time zone)) | f          | f        | t
+ constraint_73 | c    | {time}  | -     | (("time" >= 'Thu Jan 01 00:00:00 2026 UTC'::timestamp with time zone) AND ("time" < 'Fri Jan 01 00:00:00 2027 UTC'::timestamp with time zone)) | f          | f        | t
+
+DROP TABLE year_boundary_test;
+---------------------------------------------------------------
+-- SECTION 13: TIMEZONE OFFSET BOUNDARY TESTS
+---------------------------------------------------------------
+-- Test with positive and negative timezone offsets at day boundaries
+CREATE TABLE offset_boundary_test(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('offset_boundary_test', 'time', chunk_time_interval => interval '1 day');
+         create_hypertable          
+------------------------------------
+ (27,public,offset_boundary_test,t)
+
+-- Insert at midnight in various timezones
+-- These will fall into different chunks based on UTC alignment
+INSERT INTO offset_boundary_test VALUES
+    ('2025-01-01 00:00:00+00', 1, 1.0),    -- UTC midnight
+    ('2025-01-01 00:00:00+05:30', 2, 2.0), -- India (IST) midnight = Dec 31 18:30 UTC
+    ('2025-01-01 00:00:00-08', 3, 3.0),    -- Pacific midnight = Jan 1 08:00 UTC
+    ('2025-01-01 00:00:00+12', 4, 4.0),    -- New Zealand midnight = Dec 31 12:00 UTC
+    ('2025-01-01 00:00:00-12', 5, 5.0);    -- Baker Island midnight = Jan 1 12:00 UTC
+SELECT * FROM show_chunks('offset_boundary_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_27_74_chunk
+ _timescaledb_internal._hyper_27_75_chunk
+
+-- Display times in different zones to verify
+SET timezone = 'UTC';
+SELECT time AT TIME ZONE 'UTC' as utc_time,
+       time AT TIME ZONE 'Asia/Kolkata' as ist_time,
+       time AT TIME ZONE 'America/Los_Angeles' as pst_time,
+       device_id, value
+FROM offset_boundary_test
+ORDER BY time;
+         utc_time         |         ist_time         |         pst_time         | device_id | value 
+--------------------------+--------------------------+--------------------------+-----------+-------
+ Tue Dec 31 12:00:00 2024 | Tue Dec 31 17:30:00 2024 | Tue Dec 31 04:00:00 2024 |         4 |     4
+ Tue Dec 31 18:30:00 2024 | Wed Jan 01 00:00:00 2025 | Tue Dec 31 10:30:00 2024 |         2 |     2
+ Wed Jan 01 00:00:00 2025 | Wed Jan 01 05:30:00 2025 | Tue Dec 31 16:00:00 2024 |         1 |     1
+ Wed Jan 01 08:00:00 2025 | Wed Jan 01 13:30:00 2025 | Wed Jan 01 00:00:00 2025 |         3 |     3
+ Wed Jan 01 12:00:00 2025 | Wed Jan 01 17:30:00 2025 | Wed Jan 01 04:00:00 2025 |         5 |     5
+
+DROP TABLE offset_boundary_test;
+---------------------------------------------------------------
+-- SECTION 14: CHUNK EXCLUSION WITH CALENDAR CHUNKS
+---------------------------------------------------------------
+CREATE TABLE chunk_excl_test(
+    time timestamptz NOT NULL,
+    device_id int,
+    value float
+);
+SELECT create_hypertable('chunk_excl_test', 'time', chunk_time_interval => interval '1 day');
+       create_hypertable       
+-------------------------------
+ (28,public,chunk_excl_test,t)
+
+-- Insert data across multiple days
+INSERT INTO chunk_excl_test
+SELECT ts, (extract(epoch from ts)::int % 10), random()
+FROM generate_series('2025-01-01'::timestamptz, '2025-01-10'::timestamptz, '6 hours') ts;
+SELECT * FROM show_chunks('chunk_excl_test');
+               show_chunks                
+------------------------------------------
+ _timescaledb_internal._hyper_28_76_chunk
+ _timescaledb_internal._hyper_28_77_chunk
+ _timescaledb_internal._hyper_28_78_chunk
+ _timescaledb_internal._hyper_28_79_chunk
+ _timescaledb_internal._hyper_28_80_chunk
+ _timescaledb_internal._hyper_28_81_chunk
+ _timescaledb_internal._hyper_28_82_chunk
+ _timescaledb_internal._hyper_28_83_chunk
+ _timescaledb_internal._hyper_28_84_chunk
+ _timescaledb_internal._hyper_28_85_chunk
+
+-- Test chunk exclusion with different predicates
+EXPLAIN (COSTS OFF) SELECT * FROM chunk_excl_test WHERE time >= '2025-01-05' AND time < '2025-01-07';
+--- QUERY PLAN ---
+ Append
+   ->  Index Scan using _hyper_28_80_chunk_chunk_excl_test_time_idx on _hyper_28_80_chunk
+         Index Cond: (("time" >= 'Sun Jan 05 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Tue Jan 07 00:00:00 2025 UTC'::timestamp with time zone))
+   ->  Index Scan using _hyper_28_81_chunk_chunk_excl_test_time_idx on _hyper_28_81_chunk
+         Index Cond: (("time" >= 'Sun Jan 05 00:00:00 2025 UTC'::timestamp with time zone) AND ("time" < 'Tue Jan 07 00:00:00 2025 UTC'::timestamp with time zone))
+
+-- Verify data in excluded range
+SELECT count(*) FROM chunk_excl_test WHERE time >= '2025-01-05' AND time < '2025-01-07';
+ count 
+-------
+     8
+
+DROP TABLE chunk_excl_test;
+---------------------------------------------------------------
+-- CLEANUP
+---------------------------------------------------------------
+RESET timezone;
+RESET timescaledb.enable_calendar_chunking;
+\set VERBOSITY default

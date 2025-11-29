@@ -340,7 +340,7 @@ interval_to_date_trunc_unit(const Interval *ivl)
 			case USECS_PER_SEC:
 				return "second";
 			case USECS_PER_MINUTE:
-				return "chunk_time_interval";
+				return "minute";
 			case USECS_PER_HOUR:
 				return "hour";
 			default:
@@ -369,6 +369,8 @@ interval_to_date_trunc_unit(const Interval *ivl)
 		{
 			case 1:
 				return "month";
+			case 4:
+				return "quarter";
 			case MONTHS_PER_YEAR:
 				return "year";
 			case MONTHS_PER_YEAR * 10:

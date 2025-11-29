@@ -5,6 +5,7 @@ set(TEST_FILES
     alternate_users.sql
     baserel_cache.sql
     catalog_corruption.sql
+    calendar_chunking.sql
     chunks.sql
     chunk_adaptive.sql
     chunk_utils.sql
