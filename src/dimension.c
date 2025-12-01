@@ -18,6 +18,7 @@
 #include <storage/lmgr.h>
 #include <utils/builtins.h>
 #include <utils/date.h>
+#include <utils/datetime.h>
 #include <utils/fmgrprotos.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
@@ -334,15 +335,15 @@ interval_to_date_trunc_unit(const Interval *ivl)
 		switch (ivl->time)
 		{
 			case 1:
-				return "microseconds";
+				return DMICROSEC;
 			case 1000:
-				return "milliseconds";
+				return DMILLISEC;
 			case USECS_PER_SEC:
-				return "second";
+				return DSECOND;
 			case USECS_PER_MINUTE:
-				return "minute";
+				return DMINUTE;
 			case USECS_PER_HOUR:
-				return "hour";
+				return DHOUR;
 			default:
 				return NULL;
 		}
@@ -356,9 +357,9 @@ interval_to_date_trunc_unit(const Interval *ivl)
 		switch (ivl->day)
 		{
 			case 1:
-				return "day";
+				return DDAY;
 			case DAYS_PER_WEEK:
-				return "week";
+				return DWEEK;
 			default:
 				return NULL;
 		}
@@ -368,17 +369,17 @@ interval_to_date_trunc_unit(const Interval *ivl)
 		switch (ivl->month)
 		{
 			case 1:
-				return "month";
+				return DMONTH;
 			case 4:
-				return "quarter";
+				return DQUARTER;
 			case MONTHS_PER_YEAR:
-				return "year";
+				return DYEAR;
 			case MONTHS_PER_YEAR * 10:
-				return "decade";
+				return DDECADE;
 			case MONTHS_PER_YEAR * 100:
-				return "century";
+				return DCENTURY;
 			case MONTHS_PER_YEAR * 1000:
-				return "millennium";
+				return DMILLENNIUM;
 			default:
 				return NULL;
 		}
