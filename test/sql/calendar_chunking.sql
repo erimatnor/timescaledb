@@ -210,6 +210,7 @@ DROP TABLE tz_hourly;
 ---------------------------------------------------------------
 -- SECTION 3: TIMESTAMP (WITHOUT TIME ZONE) PARTITIONING
 ---------------------------------------------------------------
+SET TIMEZONE = 'UTC';
 
 CREATE TABLE ts_daily(
     time timestamp NOT NULL,
@@ -231,11 +232,11 @@ SELECT * FROM show_chunks('ts_daily');
 SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch;
 
 -- Test timestamp boundary values
-BEGIN;
-INSERT INTO ts_daily VALUES ('4714-11-24 00:00:00 BC', -1, -1.0);  -- Min timestamp
-SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch
-ORDER BY 1 DESC LIMIT 1;
-ROLLBACK;
+--BEGIN;
+--INSERT INTO ts_daily VALUES ('4714-11-24 00:00:00 BC', -1, -1.0);  -- Min timestamp
+--SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch
+--ORDER BY 1 DESC LIMIT 1;
+--ROLLBACK;
 
 DROP TABLE ts_daily;
 
@@ -255,6 +256,19 @@ INSERT INTO ts_monthly VALUES
 
 SELECT * FROM show_chunks('ts_monthly');
 SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_monthly') ch;
+
+-- Test timestamp boundary values
+BEGIN;
+INSERT INTO ts_monthly VALUES ('4714-11-24 00:00:00 BC', -1, -1.0);  -- Min timestamp
+SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_monthly') ch
+ORDER BY 1 DESC LIMIT 1;
+ROLLBACK;
+
+BEGIN;
+INSERT INTO ts_monthly VALUES ('294276 00:00:00 AD', -1, -1.0);  -- Min timestamp
+SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_monthly') ch
+ORDER BY 1 DESC LIMIT 1;
+ROLLBACK;
 
 DROP TABLE ts_monthly;
 

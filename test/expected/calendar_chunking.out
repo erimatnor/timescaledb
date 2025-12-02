@@ -338,9 +338,9 @@ BEGIN;
 INSERT INTO ts_daily VALUES ('4714-11-24 00:00:00 BC', -1, -1.0);  -- Min timestamp
 SELECT (test.show_constraints(ch)).* FROM show_chunks('ts_daily') ch
 ORDER BY 1 DESC LIMIT 1;
-  Constraint   | Type | Columns | Index |                                                                        Expr                                                                        | Deferrable | Deferred | Validated 
----------------+------+---------+-------+----------------------------------------------------------------------------------------------------------------------------------------------------+------------+----------+-----------
- constraint_27 | c    | {time}  | -     | (("time" >= 'Mon Nov 24 00:00:00 4714 BC'::timestamp without time zone) AND ("time" < 'Tue Nov 25 00:00:00 4714 BC'::timestamp without time zone)) | f          | f        | t
+  Constraint   | Type | Columns | Index |                                 Expr                                  | Deferrable | Deferred | Validated 
+---------------+------+---------+-------+-----------------------------------------------------------------------+------------+----------+-----------
+ constraint_27 | c    | {time}  | -     | ("time" < 'Tue Nov 25 00:00:00 4714 BC'::timestamp without time zone) | f          | f        | t
 
 ROLLBACK;
 DROP TABLE ts_daily;

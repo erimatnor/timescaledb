@@ -19,6 +19,7 @@
 #include <utils/builtins.h>
 #include <utils/date.h>
 #include <utils/datetime.h>
+#include <utils/elog.h>
 #include <utils/fmgrprotos.h>
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
@@ -393,15 +394,174 @@ clamp_dimension_range_value(int64 unixts, Oid clamp_type)
 {
 	const int64 mints = ts_time_get_min(clamp_type);
 
-	if (unixts < mints)
+	if (unixts <= mints)
 		return DIMENSION_SLICE_MINVALUE;
 
 	const int64 maxts = ts_time_get_max(clamp_type);
 
-	if (unixts > maxts)
+	if (unixts >= maxts)
 		return DIMENSION_SLICE_MAXVALUE;
 
 	return unixts;
+}
+
+typedef struct ChunkRange
+{
+	Oid type;
+	Datum range_start;
+	Datum range_end;
+} ChunkRange;
+
+static bool
+call_timestamp_func(PGFunction func, const Datum timestamp, const Datum modifier, Datum *out)
+{
+	LOCAL_FCINFO(fcinfo, 2);
+	Datum result;
+	bool success = false;
+
+	InitFunctionCallInfoData(*fcinfo, NULL, 2, InvalidOid, NULL, NULL);
+
+	fcinfo->args[0].value = timestamp;
+	fcinfo->args[0].isnull = false;
+	fcinfo->args[1].value = modifier;
+	fcinfo->args[1].isnull = false;
+
+	MemoryContext oldcontext = CurrentMemoryContext;
+	ResourceOwner oldowner = CurrentResourceOwner;
+
+	BeginInternalSubTransaction(NULL);
+	/* Want to run statements inside function's memory context */
+	MemoryContextSwitchTo(oldcontext);
+
+	PG_TRY();
+	{
+		result = (*func)(fcinfo);
+
+		ReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;
+		success = true;
+	}
+	PG_CATCH();
+	{
+		ErrorData *edata;
+		const int sqlerrcode = geterrcode();
+
+		/* Save error info in our stmt_mcontext */
+		MemoryContextSwitchTo(oldcontext);
+		edata = CopyErrorData();
+		FlushErrorState();
+
+		/* Abort the inner transaction */
+		RollbackAndReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;
+
+		elog(NOTICE, "got range exception");
+		/*
+		 * If it is not an out-of-range error we just rethrow it.
+		 */
+		if (sqlerrcode != ERRCODE_DATETIME_VALUE_OUT_OF_RANGE)
+		{
+			elog(NOTICE, "sqlerrcode %d errcode %d ", sqlerrcode, ERRCODE_TO_CATEGORY(sqlerrcode));
+			ReThrowError(edata);
+		}
+	}
+	PG_END_TRY();
+
+	/* Check for null result, since caller is clearly not expecting one */
+	Ensure(!fcinfo->isnull, "timestamp calculation returned NULL");
+
+	if (success && out)
+		*out = result;
+
+	return success;
+}
+
+static ChunkRange
+calc_calendar_chunk_range(Datum timestamp, Oid type, const char *trunc_unit, Interval *span)
+{
+	ChunkRange range = {
+		.type = type,
+	};
+	bool success = false;
+	PGFunction trunc_func;
+	PGFunction pl_func;
+	Datum min_timestamp;
+
+	if (type == TIMESTAMPTZOID)
+	{
+		trunc_func = timestamptz_trunc;
+		pl_func = timestamptz_pl_interval;
+		min_timestamp = TimestampTzGetDatum(MIN_TIMESTAMP);
+	}
+	else
+	{
+		Ensure(type == TIMESTAMPOID, "unsupported timestamp type in chunk range calculation");
+		trunc_func = timestamp_trunc;
+		pl_func = timestamp_pl_interval;
+		min_timestamp = TimestampGetDatum(MIN_TIMESTAMP);
+	}
+
+	success = call_timestamp_func(trunc_func,
+								  CStringGetTextDatum(trunc_unit),
+								  timestamp,
+								  &range.range_start);
+
+	if (success)
+
+	{
+		success = call_timestamp_func(pl_func,
+									  range.range_start,
+									  IntervalPGetDatum(span),
+									  &range.range_end);
+
+		if (!success)
+		{
+			elog(NOTICE, "got oor when adding end range");
+			/* If we got out-of-range when calculating the end of the bucket, just set end to
+			 * +infinity to make the end of the range open. */
+			range.range_end = ts_time_get_noend(type);
+		}
+	}
+	else
+	{
+		elog(NOTICE, "trunc lower failed");
+		/*
+		 * The timestamp truncation must have gone out-of-range (less than MIN timestamp). Set the
+		 * start of the bucket to MIN timestamp. To find the end of the interval, move to the next
+		 * interval and truncate it.
+		 *
+		 * Set the start of the range to -infinity since the chunk interval can be open in the
+		 * "left" direction.
+		 */
+		range.range_start = TimestampTzGetDatum(TIMESTAMP_MINUS_INFINITY);
+		success =
+			call_timestamp_func(pl_func, min_timestamp, IntervalPGetDatum(span), &range.range_end);
+
+		if (!success)
+		{
+			elog(NOTICE, "got oor when adding end range from min");
+			/*
+			 * If we get out-of-range in both directions, just return the infinite range.
+			 *
+			 * This case should not happen in practice because we don't support intervals for
+			 * calendar-based chunking that are big enough to overflow from MIN timestamp.
+			 */
+			range.range_end = TimestampTzGetDatum(TIMESTAMP_INFINITY);
+			return range;
+		}
+
+		/* This trunctation should not fail since we already moved to the next interval. */
+		success = call_timestamp_func(trunc_func,
+									  CStringGetTextDatum(trunc_unit),
+									  range.range_end,
+									  &range.range_end);
+
+		Ensure(success, "cannot compute chunk time interval");
+	}
+
+	return range;
 }
 
 static DimensionSlice *
@@ -426,47 +586,15 @@ calculate_open_range_default(const Dimension *dim, int64 value)
 				tstype = TIMESTAMPOID;
 
 			Datum ts = ts_internal_to_time_value(value, tstype);
-			Datum range_start_datum;
-			Datum range_end_datum;
+			ChunkRange crange;
 
-			// elog(NOTICE, "timestamp of value %s", timestamptz_to_str(ts));
-			switch (tstype)
-			{
-				case TIMESTAMPTZOID:
-				{
-					range_start_datum =
-						DirectFunctionCall2(timestamptz_trunc, CStringGetTextDatum(trunc_unit), ts);
+			crange = calc_calendar_chunk_range(ts,
+											   tstype,
+											   trunc_unit,
+											   DatumGetIntervalP(dim->chunk_interval.value));
 
-					//		elog(NOTICE,
-					//			 "truncated timestamp %s",
-					//			 timestamptz_to_str(DatumGetTimestampTz(range_start_datum)));
-
-					range_end_datum = DirectFunctionCall2(timestamptz_pl_interval,
-														  range_start_datum,
-														  dim->chunk_interval.value);
-					//					elog(NOTICE,
-					//						 "trunc \"%s\" range end  %s",
-					//						 trunc_unit,
-					//						 timestamptz_to_str(DatumGetTimestampTz(range_end_datum)));
-					break;
-				}
-				case TIMESTAMPOID:
-				{
-					// TODO: handle overflow error. Maybe use subtransaction and roll back.
-					range_start_datum =
-						DirectFunctionCall2(timestamp_trunc, CStringGetTextDatum(trunc_unit), ts);
-					range_end_datum = DirectFunctionCall2(timestamp_pl_interval,
-														  range_start_datum,
-														  dim->chunk_interval.value);
-					break;
-				}
-				default:
-					Ensure(false, "unsupported time type for chunk interval");
-					break;
-			}
-
-			range_start = ts_time_value_to_internal(range_start_datum, tstype);
-			range_end = ts_time_value_to_internal(range_end_datum, tstype);
+			range_start = ts_time_value_to_internal(crange.range_start, tstype);
+			range_end = ts_time_value_to_internal(crange.range_end, tstype);
 			range_start = clamp_dimension_range_value(range_start, dimtype);
 			range_end = clamp_dimension_range_value(range_end, dimtype);
 			Assert(value >= range_start && value < range_end);
