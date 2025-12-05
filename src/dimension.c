@@ -5,6 +5,7 @@
  */
 #include <postgres.h>
 #include <access/relscan.h>
+#include <c.h>
 #include <catalog/namespace.h>
 #include <catalog/pg_type.h>
 #include <catalog/pg_type_d.h>
@@ -334,7 +335,9 @@ create_range_datum_from_slice(FunctionCallInfo fcinfo, const DimensionSlice *sli
  * century
  * millennium
  */
-static const char *
+const char *interval_to_date_trunc_unit(const Interval *ivl, uint32 *multiplier);
+
+const char *
 interval_to_date_trunc_unit(const Interval *ivl, uint32 *multiplier)
 {
 	*multiplier = 1;
@@ -499,7 +502,10 @@ call_timestamp_func(PGFunction func, const Datum timestamp, const Datum modifier
 	return success;
 }
 
-static ChunkRange
+ChunkRange calc_calendar_chunk_range(Datum timestamp, Oid type, const char *trunc_unit,
+									 Interval *span);
+
+ChunkRange
 calc_calendar_chunk_range(Datum timestamp, Oid type, const char *trunc_unit, Interval *span)
 {
 	ChunkRange range = {
@@ -585,6 +591,167 @@ calc_calendar_chunk_range(Datum timestamp, Oid type, const char *trunc_unit, Int
 	return range;
 }
 
+static ChunkRange
+chunk_interval_trunc(TimestampTz timestamp, const Interval *ival, pg_tz *tzp)
+{
+	ChunkRange result = {
+		.type = InvalidOid,
+	};
+	int tz;
+	int val = -1;
+	bool redotz = false;
+	fsec_t fsec;
+	struct pg_tm tt, *tm = &tt;
+	uint32 multiplier = 1;
+	TimestampTz start;
+
+	if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, tzp) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE), errmsg("timestamp out of range")));
+
+	if (ival->month > 0)
+	{
+		val = DTK_MONTH;
+		multiplier = (ival->month % 12) + 1;
+	}
+	else if (ival->day > 0)
+	{
+		int week_remain = ival->day % DAYS_PER_WEEK;
+
+		if (week_remain == 0)
+		{
+			val = DTK_WEEK;
+			multiplier = (ival->day / DAYS_PER_WEEK);
+		}
+		else
+		{
+			val = DTK_DAY;
+			multiplier = ival->day;
+		}
+	}
+
+	switch (val)
+	{
+		case DTK_WEEK:
+		{
+			int woy;
+			int bucketnum = 52 % multiplier;
+
+			if (multiplier > 52 || bucketnum != 0)
+			{
+				elog(NOTICE, "week not even with year");
+				return result;
+			}
+			elog(NOTICE, "DTK_WEEK multiplir %d", multiplier);
+			woy = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
+
+			int bucket = (woy - 1) / multiplier;
+			woy = (bucket * multiplier) + 1;
+
+			/*
+			 * If it is week 52/53 and the month is January, then the
+			 * week must belong to the previous year. Also, some
+			 * December dates belong to the next year.
+			 */
+			if (woy >= 52 && tm->tm_mon == 1)
+				--tm->tm_year;
+			if (woy <= 1 && tm->tm_mon == MONTHS_PER_YEAR)
+				++tm->tm_year;
+			isoweek2date(woy, &(tm->tm_year), &(tm->tm_mon), &(tm->tm_mday));
+			tm->tm_hour = 0;
+			tm->tm_min = 0;
+			tm->tm_sec = 0;
+			fsec = 0;
+			redotz = true;
+			break;
+		}
+			/* one may consider DTK_THOUSAND and DTK_HUNDRED... */
+		case DTK_MILLENNIUM:
+
+			/*
+			 * truncating to the millennium? what is this supposed to
+			 * mean? let us put the first year of the millennium... i.e.
+			 * -1000, 1, 1001, 2001...
+			 */
+			if (tm->tm_year > 0)
+				tm->tm_year = ((tm->tm_year + 999) / 1000) * 1000 - 999;
+			else
+				tm->tm_year = -((999 - (tm->tm_year - 1)) / 1000) * 1000 + 1;
+			TS_FALLTHROUGH;
+		case DTK_CENTURY:
+			/* truncating to the century? as above: -100, 1, 101... */
+			if (tm->tm_year > 0)
+				tm->tm_year = ((tm->tm_year + 99) / 100) * 100 - 99;
+			else
+				tm->tm_year = -((99 - (tm->tm_year - 1)) / 100) * 100 + 1;
+			TS_FALLTHROUGH;
+		case DTK_DECADE:
+
+			/*
+			 * truncating to the decade? first year of the decade. must
+			 * not be applied if year was truncated before!
+			 */
+			if (val != DTK_MILLENNIUM && val != DTK_CENTURY)
+			{
+				if (tm->tm_year > 0)
+					tm->tm_year = (tm->tm_year / 10) * 10;
+				else
+					tm->tm_year = -((8 - (tm->tm_year - 1)) / 10) * 10;
+			}
+			TS_FALLTHROUGH;
+		case DTK_YEAR:
+			tm->tm_mon = 1;
+			TS_FALLTHROUGH;
+		case DTK_QUARTER:
+			tm->tm_mon = (3 * ((tm->tm_mon - 1) / 3)) + 1;
+			TS_FALLTHROUGH;
+		case DTK_MONTH:
+			if (multiplier > 1)
+			{
+				int monbucket = (tm->tm_mon - 1) / multiplier;
+				tm->tm_mon = monbucket * multiplier + 1;
+			}
+			tm->tm_mday = 1;
+			TS_FALLTHROUGH;
+		case DTK_DAY:
+			tm->tm_hour = 0;
+			redotz = true; /* for all cases >= DAY */
+			TS_FALLTHROUGH;
+		case DTK_HOUR:
+			tm->tm_min = 0;
+			TS_FALLTHROUGH;
+		case DTK_MINUTE:
+			tm->tm_sec = 0;
+			TS_FALLTHROUGH;
+		case DTK_SECOND:
+			fsec = 0;
+			break;
+		case DTK_MILLISEC:
+			fsec = (fsec / 1000) * 1000;
+			break;
+		case DTK_MICROSEC:
+			break;
+
+		default:
+			result.type = InvalidOid;
+			return result;
+	}
+
+	if (redotz)
+		tz = DetermineTimeZoneOffset(tm, tzp);
+
+	if (tm2timestamp(tm, fsec, &tz, &start) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE), errmsg("timestamp out of range")));
+
+	result.type = TIMESTAMPTZOID;
+	result.range_start = TimestampTzGetDatum(start);
+	result.range_end =
+		DirectFunctionCall2(timestamptz_pl_interval, result.range_start, IntervalPGetDatum(ival));
+
+	return result;
+}
+
 static bool
 is_calendar_compatible_interval(const Interval *interval)
 {
@@ -608,6 +775,17 @@ is_calendar_compatible_chunk_interval(const ChunkInterval *chunk_interval)
 
 	return is_calendar_compatible_interval(DatumGetIntervalP(chunk_interval->value));
 }
+
+typedef enum CalendarBucketUnit
+{
+	CBU_MIN,
+	CBU_HOUR,
+	CBU_DAY,
+	CBU_WEEK,
+	CBU_MONTH,
+	CBU_QUARTER,
+	CBU_YEAR,
+} CalendarBucketUnit;
 
 /*
  * Calculate the timezone-aligned chunk range for a given timestamp.
@@ -779,9 +957,9 @@ calculate_open_range_default(const Dimension *dim, int64 value, bool do_trunc)
 			.type = InvalidOid,
 		};
 		Oid tstype = dimtype;
-		uint32 multiplier = 0;
-		const char *trunc_unit =
-			interval_to_date_trunc_unit(DatumGetIntervalP(dim->chunk_interval.value), &multiplier);
+		// uint32 multiplier = 0;
+		//  const char *trunc_unit =
+		//  interval_to_date_trunc_unit(DatumGetIntervalP(dim->chunk_interval.value), &multiplier);
 
 		// TODO: check handling of time-part func
 		if (dimtype == UUIDOID)
@@ -791,12 +969,17 @@ calculate_open_range_default(const Dimension *dim, int64 value, bool do_trunc)
 
 		Datum ts = ts_internal_to_time_value(value, tstype);
 
-		if (trunc_unit != NULL && do_trunc)
+		if (do_trunc)
 		{
+			/*
 			crange = calc_calendar_chunk_range(ts,
 											   tstype,
 											   trunc_unit,
 											   DatumGetIntervalP(dim->chunk_interval.value));
+*/
+			crange = chunk_interval_trunc(ts,
+										  DatumGetIntervalP(dim->chunk_interval.value),
+										  session_timezone);
 		}
 		else
 		{
