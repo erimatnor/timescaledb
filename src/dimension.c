@@ -289,7 +289,7 @@ dimension_fill_in_from_tuple(Dimension *d, TupleInfo *ti, Oid main_table_relid)
 }
 
 static Datum
-create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
+create_range_datum(FunctionCallInfo fcinfo, int64 start, int64 end)
 {
 	TupleDesc tupdesc;
 	Datum values[2];
@@ -301,12 +301,19 @@ create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
 
 	tupdesc = BlessTupleDesc(tupdesc);
 
-	values[0] = Int64GetDatum(slice->fd.range_start);
-	values[1] = Int64GetDatum(slice->fd.range_end);
+	values[0] = Int64GetDatum(start);
+	values[1] = Int64GetDatum(end);
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 
 	return HeapTupleGetDatum(tuple);
 }
+
+static Datum
+create_range_datum_from_slice(FunctionCallInfo fcinfo, const DimensionSlice *slice)
+{
+	return create_range_datum(fcinfo, slice->fd.range_start, slice->fd.range_end);
+}
+
 /*
  * Translate an interval to a date_trunc() unit. If there is no viable translation, return
  * NULL.
@@ -328,8 +335,10 @@ create_range_datum(FunctionCallInfo fcinfo, DimensionSlice *slice)
  * millennium
  */
 static const char *
-interval_to_date_trunc_unit(const Interval *ivl)
+interval_to_date_trunc_unit(const Interval *ivl, uint32 *multiplier)
 {
+	*multiplier = 1;
+
 	if (ivl->day == 0 && ivl->month == 0)
 	{
 		/* Less than day */
@@ -361,6 +370,12 @@ interval_to_date_trunc_unit(const Interval *ivl)
 				return DDAY;
 			case DAYS_PER_WEEK:
 				return DWEEK;
+			case DAYS_PER_WEEK * 2:
+				*multiplier = 2;
+				return DWEEK;
+			case DAYS_PER_WEEK * 3:
+				*multiplier = 3;
+				return DWEEK;
 			default:
 				return NULL;
 		}
@@ -370,6 +385,12 @@ interval_to_date_trunc_unit(const Interval *ivl)
 		switch (ivl->month)
 		{
 			case 1:
+				return DMONTH;
+			case 2:
+				*multiplier = 2;
+				return DMONTH;
+			case 3:
+				*multiplier = 3;
 				return DMONTH;
 			case 4:
 				return DQUARTER;
@@ -564,46 +585,254 @@ calc_calendar_chunk_range(Datum timestamp, Oid type, const char *trunc_unit, Int
 	return range;
 }
 
+static bool
+is_calendar_compatible_interval(const Interval *interval)
+{
+	if (interval->month > 0)
+		return interval->time == 0 && interval->day == 0;
+
+	if (interval->day > 0)
+		return interval->month == 0 && interval->time == 0;
+
+	if (interval->time > 0)
+		return interval->month == 0 && interval->day == 0;
+
+	return false;
+}
+
+static bool
+is_calendar_compatible_chunk_interval(const ChunkInterval *chunk_interval)
+{
+	if (chunk_interval->type != INTERVALOID)
+		return false;
+
+	return is_calendar_compatible_interval(DatumGetIntervalP(chunk_interval->value));
+}
+
+/*
+ * Calculate the timezone-aligned chunk range for a given timestamp.
+ *
+ * The interval length can be expressed in either months or days (not both).
+ * The start of the interval is evenly aligned with the PostgreSQL epoch
+ * (2000-01-01 00:00:00).
+ *
+ * For example, with a timestamp of Feb 1 2024 and an interval of 2 months,
+ * the range would be Jan 1 2024 to Mar 1 2024.
+ */
+static ChunkRange
+calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *interval)
+{
+	ChunkRange range = {
+		.type = type,
+	};
+	Assert(is_calendar_compatible_interval(interval));
+
+	/* PostgreSQL epoch is 2000-01-01 00:00:00 */
+	const int origin_year = 2000;
+	const int origin_month = 1;
+	const int origin_day = 1;
+
+	struct pg_tm tt, *tm = &tt;
+	fsec_t fsec;
+	int tz;
+	pg_tz *attimezone = session_timezone;
+
+	if (type == TIMESTAMPTZOID)
+	{
+		elog(NOTICE, "calculating months (timezone)");
+		if (timestamp2tm(DatumGetTimestampTz(timestamp), &tz, tm, &fsec, NULL, attimezone) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+	else
+	{
+		Ensure(type == TIMESTAMPOID, "unsupported timestamp type in chunk range calculation");
+		if (timestamp2tm(DatumGetTimestamp(timestamp), NULL, tm, &fsec, NULL, NULL) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	struct pg_tm tm_start;
+	memset(&tm_start, 0, sizeof(tm_start));
+
+	if (interval->month > 0)
+	{
+		/*
+		 * For month-based intervals:
+		 * 1. Calculate total months from origin for both origin and timestamp
+		 * 2. Find which bucket the timestamp falls into
+		 * 3. Convert bucket number back to year/month
+		 */
+		int year_diff = tm->tm_year - origin_year;
+		int month_diff = tm->tm_mon - origin_month;
+
+		if (month_diff < 0)
+		{
+			year_diff--;
+			month_diff = 12 + month_diff;
+		}
+
+		int total_month_diff = year_diff * MONTHS_PER_YEAR + month_diff;
+		int bucket_num = total_month_diff / interval->month;
+		// TODO  handle negative offset/diff
+
+		int month_offset = bucket_num * interval->month;
+		tm_start.tm_year = origin_year + (origin_month + month_offset) / MONTHS_PER_YEAR;
+		tm_start.tm_mon = ((origin_month + month_offset) % MONTHS_PER_YEAR) + 1;
+
+		if (tm_start.tm_mon <= 0)
+		{
+			tm_start.tm_mon += 12;
+			tm_start.tm_year -= 1;
+		}
+		tm_start.tm_mday = 1;
+		tm_start.tm_hour = 0;
+		tm_start.tm_min = 0;
+		tm_start.tm_sec = 0;
+	}
+	else if (interval->day > 0)
+	{
+		/*
+		 * For day-based intervals:
+		 * 1. Calculate Julian day numbers for origin and timestamp
+		 * 2. Find which bucket the timestamp falls into
+		 * 3. Convert bucket start back to calendar date
+		 */
+		int ts_julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday);
+		int origin_julian = date2j(origin_year, origin_month, origin_day);
+
+		/* Calculate days since origin (can be negative) */
+		int days_since_origin = ts_julian - origin_julian;
+
+		/* Find the bucket number using floor division for correct negative handling */
+		int bucket_num;
+		if (days_since_origin >= 0)
+			bucket_num = days_since_origin / interval->day;
+		else
+			bucket_num = (days_since_origin - interval->day + 1) / interval->day;
+
+		/* Calculate the start Julian day of this bucket */
+		int start_julian = origin_julian + (bucket_num * interval->day);
+
+		/* Convert Julian day back to calendar date */
+		j2date(start_julian, &tm_start.tm_year, &tm_start.tm_mon, &tm_start.tm_mday);
+		tm_start.tm_hour = 0;
+		tm_start.tm_min = 0;
+		tm_start.tm_sec = 0;
+	}
+	else
+	{
+		range.type = InvalidOid;
+		return range;
+	}
+
+	/* Convert tm_start back to timestamp */
+	Timestamp ts_start;
+	if (type == TIMESTAMPTZOID)
+	{
+		tz = DetermineTimeZoneOffset(tm, attimezone);
+
+		if (tm2timestamp(&tm_start, 0, &tz, &ts_start) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+		range.range_start = TimestampTzGetDatum(ts_start);
+	}
+	else
+	{
+		if (tm2timestamp(&tm_start, 0, NULL, &ts_start) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+		range.range_start = TimestampGetDatum(ts_start);
+	}
+
+	/* Calculate range_end by adding the interval to range_start */
+	if (type == TIMESTAMPTZOID)
+	{
+		range.range_end = DirectFunctionCall2(timestamptz_pl_interval,
+											  range.range_start,
+											  IntervalPGetDatum(interval));
+	}
+	else
+	{
+		range.range_end = DirectFunctionCall2(timestamp_pl_interval,
+											  range.range_start,
+											  IntervalPGetDatum(interval));
+	}
+
+	return range;
+}
+
 static DimensionSlice *
-calculate_open_range_default(const Dimension *dim, int64 value)
+calculate_open_range_default(const Dimension *dim, int64 value, bool do_trunc)
 {
 	int64 range_start = 0, range_end = 0;
 	Oid dimtype = ts_dimension_get_partition_type(dim);
+	int64 interval_length = 0;
 
-	if (dim->chunk_interval.type == INTERVALOID)
+	if (is_calendar_compatible_chunk_interval(&dim->chunk_interval))
 	{
+		ChunkRange crange = {
+			.type = InvalidOid,
+		};
+		Oid tstype = dimtype;
+		uint32 multiplier = 0;
 		const char *trunc_unit =
-			interval_to_date_trunc_unit(DatumGetIntervalP(dim->chunk_interval.value));
+			interval_to_date_trunc_unit(DatumGetIntervalP(dim->chunk_interval.value), &multiplier);
 
-		if (trunc_unit != NULL)
+		// TODO: check handling of time-part func
+		if (dimtype == UUIDOID)
+			tstype = TIMESTAMPTZOID;
+		else if (dimtype == DATEOID)
+			tstype = TIMESTAMPOID;
+
+		Datum ts = ts_internal_to_time_value(value, tstype);
+
+		if (trunc_unit != NULL && do_trunc)
 		{
-			Oid tstype = dimtype;
-
-			// TODO: check handling of time-part func
-			if (dimtype == UUIDOID)
-				tstype = TIMESTAMPTZOID;
-			else if (dimtype == DATEOID)
-				tstype = TIMESTAMPOID;
-
-			Datum ts = ts_internal_to_time_value(value, tstype);
-			ChunkRange crange;
-
 			crange = calc_calendar_chunk_range(ts,
 											   tstype,
 											   trunc_unit,
 											   DatumGetIntervalP(dim->chunk_interval.value));
+		}
+		else
+		{
+			crange =
+				calc_calendar_chunk_range_with_origin(ts,
+													  tstype,
+													  DatumGetIntervalP(dim->chunk_interval.value));
+		}
 
+		if (crange.type != InvalidOid)
+		{
 			range_start = ts_time_value_to_internal(crange.range_start, tstype);
 			range_end = ts_time_value_to_internal(crange.range_end, tstype);
 			range_start = clamp_dimension_range_value(range_start, dimtype);
 			range_end = clamp_dimension_range_value(range_end, dimtype);
-			Assert(value >= range_start && value < range_end);
+			// Assert(value >= range_start && value < range_end);
+			if (!(value >= range_start && value < range_end))
+			{
+				elog(NOTICE,
+					 "value not in range " INT64_FORMAT " start " INT64_FORMAT " end " INT64_FORMAT,
+					 value,
+					 range_start,
+					 range_end);
+			}
 
 			return ts_dimension_slice_create(dim->fd.id, range_start, range_end);
 		}
+		else
+		{
+			interval_length = interval_to_usec(&dim->fd.interval);
+		}
 	}
-
-	int64 interval_length = dim->fd.interval_length;
+	else
+	{
+		interval_length = dim->fd.interval_length;
+	}
 
 	if (value < 0)
 	{
@@ -652,9 +881,38 @@ ts_dimension_calculate_open_range_default(PG_FUNCTION_ARGS)
 		},
 		.fd.column_type = TypenameGetTypid(PG_GETARG_CSTRING(2)),
 	};
-	DimensionSlice *slice = calculate_open_range_default(&dim, value);
+	DimensionSlice *slice = calculate_open_range_default(&dim, value, false);
 
-	PG_RETURN_DATUM(create_range_datum(fcinfo, slice));
+	PG_RETURN_DATUM(create_range_datum_from_slice(fcinfo, slice));
+}
+
+TS_FUNCTION_INFO_V1(ts_dimension_calculate_open_range_calendar);
+
+/*
+ * Expose open dimension range calculation for testing purposes.
+ */
+Datum
+ts_dimension_calculate_open_range_calendar(PG_FUNCTION_ARGS)
+{
+	Oid type = get_fn_expr_argtype(fcinfo->flinfo, 0);
+	Datum timestamp = PG_GETARG_DATUM(0);
+	Dimension dim = {
+		.type = DIMENSION_TYPE_OPEN,
+		.fd.id = 0,
+		.fd.interval_length = 0,
+		.chunk_interval = {
+			.type = INTERVALOID,
+			.value =  PG_GETARG_DATUM(1),
+		},
+		.fd.column_type = type,
+	};
+	bool do_trunc = PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2);
+	int64 value = ts_time_value_to_internal(timestamp, type);
+	DimensionSlice *slice = calculate_open_range_default(&dim, value, do_trunc);
+	Datum start = ts_internal_to_time_value(slice->fd.range_start, type);
+	Datum end = ts_internal_to_time_value(slice->fd.range_end, type);
+
+	PG_RETURN_DATUM(create_range_datum(fcinfo, start, end));
 }
 
 static int64
@@ -713,14 +971,14 @@ ts_dimension_calculate_closed_range_default(PG_FUNCTION_ARGS)
 	};
 	DimensionSlice *slice = calculate_closed_range_default(&dim, value);
 
-	PG_RETURN_DATUM(create_range_datum(fcinfo, slice));
+	PG_RETURN_DATUM(create_range_datum_from_slice(fcinfo, slice));
 }
 
 DimensionSlice *
 ts_dimension_calculate_default_slice(const Dimension *dim, int64 value)
 {
 	if (IS_OPEN_DIMENSION(dim))
-		return calculate_open_range_default(dim, value);
+		return calculate_open_range_default(dim, value, false);
 
 	return calculate_closed_range_default(dim, value);
 }

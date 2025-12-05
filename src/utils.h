@@ -41,7 +41,7 @@
 #define UnassignedDatum (Datum) 0
 
 static inline int64
-interval_to_usec(Interval *interval)
+interval_to_usec(const Interval *interval)
 {
 	return (interval->month * DAYS_PER_MONTH * USECS_PER_DAY) + (interval->day * USECS_PER_DAY) +
 		   interval->time;
@@ -201,10 +201,7 @@ extern TSDLLEXPORT List *ts_get_reloptions(Oid relid);
 
 #define is_inheritance_table(relid) (is_inheritance_child(relid) || is_inheritance_parent(relid))
 
-#define INIT_NULL_DATUM                                                                            \
-	{                                                                                              \
-		.value = 0, .isnull = true                                                                 \
-	}
+#define INIT_NULL_DATUM { .value = 0, .isnull = true }
 
 static inline Datum
 ts_fetch_att(const void *T, bool attbyval, int attlen)

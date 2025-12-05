@@ -8,11 +8,19 @@
 -- Calendar-based chunking aligns chunks with date_trunc() boundaries
 -- (e.g., start of day, week, month, year) based on the current timezone.
 --
+\c :TEST_DBNAME :ROLE_SUPERUSER
+CREATE OR REPLACE FUNCTION calc_calendar_chunk_interval(ts TIMESTAMPTZ, chunk_interval INTERVAL)
+RETURNS TABLE(startts TIMESTAMPTZ, endts TIMESTAMPTZ) AS :MODULE_PATHNAME, 'ts_dimension_calculate_open_range_calendar' LANGUAGE C;
+SET ROLE :ROLE_DEFAULT_PERM_USER;
 
 \set VERBOSITY terse
 
 -- Enable calendar-based chunking
 SET timescaledb.enable_calendar_chunking = true;
+
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 months');
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 weeks');
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 day');
 
 ---------------------------------------------------------------
 -- SECTION 1: UUID v7 PARTITIONING WITH CALENDAR ALIGNMENT
