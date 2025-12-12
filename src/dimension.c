@@ -805,23 +805,25 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 	};
 	Assert(is_calendar_compatible_interval(interval));
 
-	/* PostgreSQL epoch is 2000-01-01 00:00:00 */
-	const int origin_year = 2000;
+	/* 2001-01-01 00:00:00 is a Monday */
+	const int origin_year = 2001;
 	const int origin_month = 1;
 	const int origin_day = 1;
 
 	struct pg_tm tt, *tm = &tt;
 	fsec_t fsec;
-	int tz;
+	int tz1;
 	pg_tz *attimezone = session_timezone;
+	const char *tzn;
 
 	if (type == TIMESTAMPTZOID)
 	{
-		elog(NOTICE, "calculating months (timezone)");
-		if (timestamp2tm(DatumGetTimestampTz(timestamp), &tz, tm, &fsec, NULL, attimezone) != 0)
+		if (timestamp2tm(DatumGetTimestampTz(timestamp), &tz1, tm, &fsec, &tzn, attimezone) != 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 					 errmsg("timestamp out of range")));
+
+		elog(NOTICE, "timezone %s", tzn);
 	}
 	else
 	{
@@ -870,6 +872,7 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 		tm_start.tm_min = 0;
 		tm_start.tm_sec = 0;
 	}
+#if 1
 	else if (interval->day > 0)
 	{
 		/*
@@ -900,6 +903,65 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 		tm_start.tm_min = 0;
 		tm_start.tm_sec = 0;
 	}
+#endif
+	else if (interval->day > 0 || interval->time > 0)
+	{
+		TimestampTz result, stride_usecs, tm_diff, tm_modulo, tm_delta;
+		TimestampTz origin;
+
+		struct pg_tm tt_o, *tm_o = &tt_o;
+
+		memset(tm_o, 0, sizeof(struct pg_tm));
+
+		tm_o->tm_year = origin_year;
+		tm_o->tm_mday = origin_day;
+		tm_o->tm_mon = origin_month;
+
+		tm2timestamp(tm_o, 0, &tz1, &origin);
+
+		if (unlikely(pg_mul_s64_overflow(interval->day, USECS_PER_DAY, &stride_usecs)) ||
+			unlikely(pg_add_s64_overflow(stride_usecs, interval->time, &stride_usecs)))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("interval out of range")));
+
+		if (stride_usecs <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("stride must be greater than zero")));
+
+		if (unlikely(pg_sub_s64_overflow(timestamp, origin, &tm_diff)))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("interval out of range")));
+
+		/* These calculations cannot overflow */
+		tm_modulo = tm_diff % stride_usecs;
+		tm_delta = tm_diff - tm_modulo;
+		result = origin + tm_delta;
+
+		/*
+		 * We want to round towards -infinity, not 0, when tm_diff is negative and
+		 * not a multiple of stride_usecs.  This adjustment *can* cause overflow,
+		 * since the result might now be out of the range origin .. timestamp.
+		 */
+		if (tm_modulo < 0)
+		{
+			if (unlikely(pg_sub_s64_overflow(result, stride_usecs, &result)) ||
+				!IS_VALID_TIMESTAMP(result))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+						 errmsg("timestamp out of range")));
+		}
+
+		range.range_start = timestamp;
+
+		range.range_end = DirectFunctionCall2(timestamptz_pl_interval,
+											  range.range_start,
+											  IntervalPGetDatum(interval));
+
+		return range;
+	}
 	else
 	{
 		range.type = InvalidOid;
@@ -910,9 +972,24 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 	Timestamp ts_start;
 	if (type == TIMESTAMPTZOID)
 	{
-		tz = DetermineTimeZoneOffset(tm, attimezone);
+		int tz2;
+		tz2 = DetermineTimeZoneOffset(&tm_start, attimezone);
 
-		if (tm2timestamp(&tm_start, 0, &tz, &ts_start) != 0)
+		elog(NOTICE, "time zone diff tz1 %d tz2 %d", tz1, tz2);
+
+#if 0
+		if (tz2 > tz1)
+		{
+			int diff = tz2 - tz1;
+			int hours = (diff / SECS_PER_HOUR);
+			int mins = (diff - (hours * SECS_PER_HOUR)) / 60;
+
+			elog(NOTICE, "Adding %d hours", hours);
+			tm_start.tm_min += mins;HH
+			tm_start.tm_hour += hours;
+		}
+#endif
+		if (tm2timestamp(&tm_start, 0, &tz2, &ts_start) != 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 					 errmsg("timestamp out of range")));

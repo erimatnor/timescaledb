@@ -9,7 +9,7 @@
 -- (e.g., start of day, week, month, year) based on the current timezone.
 --
 \c :TEST_DBNAME :ROLE_SUPERUSER
-CREATE OR REPLACE FUNCTION calc_calendar_chunk_interval(ts TIMESTAMPTZ, chunk_interval INTERVAL)
+CREATE OR REPLACE FUNCTION calc_calendar_chunk_interval(ts TIMESTAMPTZ, chunk_interval INTERVAL, trunc BOOLEAN = false)
 RETURNS TABLE(startts TIMESTAMPTZ, endts TIMESTAMPTZ) AS :MODULE_PATHNAME, 'ts_dimension_calculate_open_range_calendar' LANGUAGE C;
 SET ROLE :ROLE_DEFAULT_PERM_USER;
 
@@ -17,11 +17,25 @@ SET ROLE :ROLE_DEFAULT_PERM_USER;
 
 -- Enable calendar-based chunking
 SET timescaledb.enable_calendar_chunking = true;
+SET timezone = 'America/Los_Angeles';
 
+-- PST to PDT shift for 2024 is March 10 02:00 AM (set forward 1 hour)
+-- PDT to PST shift for 2024 is Nobember 3 02:00 AM (set back 1 hour)
+\set ON_ERROR_STOP 0
 SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 months');
 SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 weeks');
 SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 day');
 
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 months', true);
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 weeks', true);
+SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 day', true);
+SELECT '2024-03-30 12:30:01 CET'::timestamptz;
+SELECT date_bin('3 days','2024-03-30 12:30:01 CET','2001-01-01 00:00:00 PST');
+SELECT date_bin('3 days','Sat Mar 30 04:30:01 2024 PDT','2001-01-01 00:00:00 PST');
+SELECT date_bin('3 days','2024-03-30 12:30:01','2001-01-01 00:00:00 PST');
+SELECT date_bin('3 days','2024-03-10 12:30:01','2001-01-01 00:00:00 PST');
+SELECT date_bin('3 days','2024-03-10 01:30:01','2001-01-01 00:00:00 PST');
+\set ON_ERROR_STOP 1
 ---------------------------------------------------------------
 -- SECTION 1: UUID v7 PARTITIONING WITH CALENDAR ALIGNMENT
 ---------------------------------------------------------------
