@@ -805,7 +805,7 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 	};
 	Assert(is_calendar_compatible_interval(interval));
 
-	/* 2001-01-01 00:00:00 is a Monday */
+	/* Pick 2001-01-01 00:00:00 is a Monday so that 7 days align with start of week by default.  */
 	const int origin_year = 2001;
 	const int origin_month = 1;
 	const int origin_day = 1;
@@ -822,8 +822,6 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 			ereport(ERROR,
 					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 					 errmsg("timestamp out of range")));
-
-		elog(NOTICE, "timezone %s", tzn);
 	}
 	else
 	{
@@ -846,27 +844,33 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 		 * 3. Convert bucket number back to year/month
 		 */
 		int year_diff = tm->tm_year - origin_year;
-		int month_diff = tm->tm_mon - origin_month;
-
-		if (month_diff < 0)
-		{
-			year_diff--;
-			month_diff = 12 + month_diff;
-		}
-
+		int month_diff = (tm->tm_mon - origin_month);
 		int total_month_diff = year_diff * MONTHS_PER_YEAR + month_diff;
-		int bucket_num = total_month_diff / interval->month;
-		// TODO  handle negative offset/diff
+		int bucket_num;
+
+		if (total_month_diff >= 0)
+			bucket_num = total_month_diff / interval->month;
+		else
+			bucket_num = (total_month_diff - interval->month + 1) / interval->month;
 
 		int month_offset = bucket_num * interval->month;
-		tm_start.tm_year = origin_year + (origin_month + month_offset) / MONTHS_PER_YEAR;
-		tm_start.tm_mon = ((origin_month + month_offset) % MONTHS_PER_YEAR) + 1;
+		int total_months_from_jan = origin_month - 1 + month_offset;
+		int full_years, remaining_months;
 
-		if (tm_start.tm_mon <= 0)
+		if (total_months_from_jan >= 0)
 		{
-			tm_start.tm_mon += 12;
-			tm_start.tm_year -= 1;
+			full_years = total_months_from_jan / MONTHS_PER_YEAR;
+			remaining_months = total_months_from_jan % MONTHS_PER_YEAR;
 		}
+		else
+		{
+			full_years = (total_months_from_jan - MONTHS_PER_YEAR + 1) / MONTHS_PER_YEAR;
+			remaining_months = total_months_from_jan - (full_years * MONTHS_PER_YEAR);
+		}
+
+		tm_start.tm_year = origin_year + full_years;
+		tm_start.tm_mon = 1 + remaining_months;
+
 		tm_start.tm_mday = 1;
 		tm_start.tm_hour = 0;
 		tm_start.tm_min = 0;
@@ -974,8 +978,6 @@ calc_calendar_chunk_range_with_origin(Datum timestamp, Oid type, Interval *inter
 	{
 		int tz2;
 		tz2 = DetermineTimeZoneOffset(&tm_start, attimezone);
-
-		elog(NOTICE, "time zone diff tz1 %d tz2 %d", tz1, tz2);
 
 #if 0
 		if (tz2 > tz1)

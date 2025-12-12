@@ -9,8 +9,8 @@
 -- (e.g., start of day, week, month, year) based on the current timezone.
 --
 \c :TEST_DBNAME :ROLE_SUPERUSER
-CREATE OR REPLACE FUNCTION calc_calendar_chunk_interval(ts TIMESTAMPTZ, chunk_interval INTERVAL, trunc BOOLEAN = false)
-RETURNS TABLE(startts TIMESTAMPTZ, endts TIMESTAMPTZ) AS :MODULE_PATHNAME, 'ts_dimension_calculate_open_range_calendar' LANGUAGE C;
+CREATE OR REPLACE FUNCTION calrange(ts TIMESTAMPTZ, chunk_interval INTERVAL, trunc BOOLEAN = false)
+RETURNS TABLE(start_ts TIMESTAMPTZ, end_ts TIMESTAMPTZ) AS :MODULE_PATHNAME, 'ts_dimension_calculate_open_range_calendar' LANGUAGE C;
 SET ROLE :ROLE_DEFAULT_PERM_USER;
 
 \set VERBOSITY terse
@@ -22,19 +22,24 @@ SET timezone = 'America/Los_Angeles';
 -- PST to PDT shift for 2024 is March 10 02:00 AM (set forward 1 hour)
 -- PDT to PST shift for 2024 is Nobember 3 02:00 AM (set back 1 hour)
 \set ON_ERROR_STOP 0
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 months');
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 weeks');
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 day');
+SELECT calrange('2024-03-30 12:30:01 CET', interval '3 months');
+SELECT calrange('2024-03-30 12:30:01 CET', interval '3 weeks');
+SELECT calrange('2024-03-30 12:30:01 CET', interval '3 day');
 
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 months', true);
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 weeks', true);
-SELECT calc_calendar_chunk_interval('2024-03-30 12:30:01 CET', interval '3 day', true);
-SELECT '2024-03-30 12:30:01 CET'::timestamptz;
-SELECT date_bin('3 days','2024-03-30 12:30:01 CET','2001-01-01 00:00:00 PST');
-SELECT date_bin('3 days','Sat Mar 30 04:30:01 2024 PDT','2001-01-01 00:00:00 PST');
-SELECT date_bin('3 days','2024-03-30 12:30:01','2001-01-01 00:00:00 PST');
-SELECT date_bin('3 days','2024-03-10 12:30:01','2001-01-01 00:00:00 PST');
-SELECT date_bin('3 days','2024-03-10 01:30:01','2001-01-01 00:00:00 PST');
+SELECT '2024-11-03'::timestamptz;
+
+CREATE TABLE test_timestamps AS
+SELECT unnest(ARRAY[timestamptz '2024-01-01 00:00', '2024-12-31 23:59', '2024-03-10 02:00', '2024-11-03 02:00', '1999-12-31 23:59', '1876-03-12 14:12']) AS ts;
+
+CREATE TABLE test_intervals AS
+SELECT unnest(ARRAY[interval '1 hour', '1 day', '2 days', '3 days', '30 days', '31 days', '1 week', '2 weeks', '3 weeks', '4 weeks', '1 month', '2 months', '3 months', '1 year' ]) AS inv;
+
+WITH chunk_intervals AS (
+SELECT ts, inv, (calrange(ts, inv)).*
+FROM test_timestamps CROSS JOIN test_intervals
+) SELECT ts, inv, start_ts, end_ts, ts >= start_ts AND ts < end_ts AS in_range, time_bucket(inv, ts, origin => timestamptz '2021-01-01')
+FROM chunk_intervals;
+
 \set ON_ERROR_STOP 1
 ---------------------------------------------------------------
 -- SECTION 1: UUID v7 PARTITIONING WITH CALENDAR ALIGNMENT
