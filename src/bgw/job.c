@@ -6,6 +6,7 @@
 #include <postgres.h>
 
 #include <unistd.h>
+#include "debug_point.h"
 #include <access/xact.h>
 #include <catalog/pg_authid.h>
 #include <executor/execdebug.h>
@@ -410,6 +411,7 @@ ts_bgw_job_get_all(size_t alloc_size, MemoryContext mctx)
 		.lockmode = AccessShareLock,
 		.result_mctx = mctx,
 		.scandirection = ForwardScanDirection,
+		.snapshot = GetActiveSnapshot(),
 	};
 
 	ts_scanner_scan(&scanctx);
@@ -465,6 +467,7 @@ ts_bgw_job_find_by_proc_and_hypertable_id(const char *proc_name, const char *pro
 		.tuple_found = bgw_job_accum_tuple_found,
 		.lockmode = AccessShareLock,
 		.scandirection = ForwardScanDirection,
+		.snapshot = GetActiveSnapshot(),
 	};
 
 	init_scan_by_proc_schema(&scankey[0], proc_schema);
@@ -493,6 +496,7 @@ ts_bgw_job_find_by_hypertable_id(int32 hypertable_id)
 		.tuple_found = bgw_job_accum_tuple_found,
 		.lockmode = AccessShareLock,
 		.scandirection = ForwardScanDirection,
+		.snapshot = GetActiveSnapshot(),
 	};
 
 	init_scan_by_hypertable_id(&scankey[0], hypertable_id);
@@ -630,7 +634,8 @@ ts_bgw_job_get_share_lock(int32 bgw_job_id, MemoryContext mctx)
 BgwJob *
 ts_bgw_job_find(int32 bgw_job_id, MemoryContext mctx, bool fail_if_not_found)
 {
-	ScanIterator iterator = ts_scan_iterator_create(BGW_JOB, AccessShareLock, mctx);
+	ScanIterator iterator =
+		ts_scan_iterator_create_with_active_snapshot(BGW_JOB, AccessShareLock, mctx);
 	int num_found = 0;
 	BgwJob *job = NULL;
 
@@ -641,6 +646,7 @@ ts_bgw_job_find(int32 bgw_job_id, MemoryContext mctx, bool fail_if_not_found)
 		Assert(num_found == 0);
 		job = bgw_job_from_tupleinfo(ts_scan_iterator_tuple_info(&iterator), sizeof(BgwJob));
 		num_found++;
+		DEBUG_WAITPOINT("bgw_job_find_during_scan");
 	}
 
 	if (num_found == 0 && fail_if_not_found)
@@ -741,7 +747,7 @@ bgw_job_delete_scan(ScanKeyData *scankey, int32 job_id)
 	/* get job lock before relation lock */
 	get_job_lock_for_delete(job_id);
 
-	scanctx = (ScannerCtx){
+	scanctx = (ScannerCtx) {
 		.table = catalog_get_table_id(catalog, BGW_JOB),
 		.index = catalog_get_index(catalog, BGW_JOB, BGW_JOB_PKEY_IDX),
 		.nkeys = 1,
