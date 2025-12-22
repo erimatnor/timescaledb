@@ -803,7 +803,8 @@ select job_id, schedule_interval, config, check_config from alter_job(:job_id_al
 CREATE OR REPLACE PROCEDURE add_scheduled_jobs_with_check(job_id int, config jsonb) LANGUAGE PLPGSQL AS
 $$
 BEGIN
-    perform add_job('test_proc_with_check', schedule_interval => '10 secs', config => '{}', check_config => 'renamed_func');
+    -- Use fully-qualified name because background worker may have different search_path
+    perform add_job('test_proc_with_check', schedule_interval => '10 secs', config => '{}', check_config => 'public.renamed_func');
 END
 $$;
 select add_job('add_scheduled_jobs_with_check', schedule_interval => '1 hour') as last_job_id \gset
