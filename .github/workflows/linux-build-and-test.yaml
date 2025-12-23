@@ -359,9 +359,9 @@ jobs:
   claude-analyze-failures:
     name: Analyze Failures with Claude Code
     needs: regress
-    # Only run on nightly (scheduled) builds when regress job fails
+    # Only run on nightly (scheduled) builds or push to main when regress job fails
     # Also requires ANTHROPIC_API_KEY to be configured
-    if: always() && github.event_name == 'schedule' && needs.regress.result == 'failure'
+    if: always() && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.regress.result == 'failure'
     runs-on: ubuntu-latest
 
     permissions:
