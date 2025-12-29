@@ -651,12 +651,12 @@ BEGIN
 END;
 $$;
 
--- Proc that sleeps for 1m - to keep the test jobs in running state
+-- Proc that sleeps to keep the test jobs in running state
 CREATE OR REPLACE PROCEDURE proc_that_sleeps(job_id INT, config JSONB)
 LANGUAGE PLPGSQL AS
 $$
 BEGIN
-    PERFORM pg_sleep(60);
+    PERFORM pg_sleep(5);
 END
 $$;
 
