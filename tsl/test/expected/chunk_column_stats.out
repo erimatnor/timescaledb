@@ -729,19 +729,19 @@ SELECT compress_chunk(show_chunks('chunk_skipping'));
 -----------------------------------------
  _timescaledb_internal._hyper_6_10_chunk
 
-SELECT * from chunk_skipping where updated_at < '2026-01-01';
-             time             | device |          updated_at          
-------------------------------+--------+------------------------------
- Wed Jan 01 00:00:00 2025 PST | d1     | Wed Jan 01 00:00:00 2025 PST
+SELECT time::date, device, updated_at::date from chunk_skipping where updated_at < '2026-01-01';
+    time    | device | updated_at
+------------+--------+------------
+ 2025-01-01 | d1     | 2025-01-01
 
 INSERT INTO chunk_skipping SELECT '2025-01-01', 'd2', '2026-01-01';
 SELECT compress_chunk(show_chunks('chunk_skipping'));
-             compress_chunk              
+             compress_chunk
 -----------------------------------------
  _timescaledb_internal._hyper_6_10_chunk
 
-SELECT * from chunk_skipping where updated_at < '2026-01-01';
-             time             | device |          updated_at          
-------------------------------+--------+------------------------------
- Wed Jan 01 00:00:00 2025 PST | d1     | Wed Jan 01 00:00:00 2025 PST
+SELECT time::date, device, updated_at::date from chunk_skipping where updated_at < '2026-01-01';
+    time    | device | updated_at
+------------+--------+------------
+ 2025-01-01 | d1     | 2025-01-01
 

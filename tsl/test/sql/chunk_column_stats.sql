@@ -321,9 +321,9 @@ SELECT enable_chunk_skipping('chunk_skipping', 'updated_at');
 INSERT INTO chunk_skipping SELECT '2025-01-01', 'd1', '2025-01-01';
 SELECT compress_chunk(show_chunks('chunk_skipping'));
 
-SELECT * from chunk_skipping where updated_at < '2026-01-01';
+SELECT time::date, device, updated_at::date from chunk_skipping where updated_at < '2026-01-01';
 
 INSERT INTO chunk_skipping SELECT '2025-01-01', 'd2', '2026-01-01';
 SELECT compress_chunk(show_chunks('chunk_skipping'));
 
-SELECT * from chunk_skipping where updated_at < '2026-01-01';
+SELECT time::date, device, updated_at::date from chunk_skipping where updated_at < '2026-01-01';
