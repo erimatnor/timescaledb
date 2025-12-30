@@ -119,13 +119,23 @@ setup
     CREATE TABLE cancelpid (
         pid INTEGER NOT NULL PRIMARY KEY
     );
-    CREATE OR REPLACE PROCEDURE cancelpids() AS 
+    CREATE OR REPLACE PROCEDURE cancelpids() AS
     $$
+    DECLARE
+        max_attempts INT := 1000;  -- 10 seconds max (1000 * 0.01s)
+        attempt INT := 0;
     BEGIN
         PERFORM pg_cancel_backend(pid) FROM cancelpid;
-        WHILE EXISTS (SELECT FROM pg_stat_activity WHERE pid IN (SELECT pid FROM cancelpid) AND state = 'active')
+        -- Wait for backends to finish, checking if they're still active or if they even exist
+        WHILE EXISTS (SELECT FROM pg_stat_activity WHERE pid IN (SELECT pid FROM cancelpid) AND state <> 'idle')
         LOOP
             PERFORM pg_sleep(0.01);
+            attempt := attempt + 1;
+            IF attempt >= max_attempts THEN
+                -- Log warning but don't fail - the backend should be cancelled even if not reflected in pg_stat_activity yet
+                RAISE WARNING 'cancelpids() timed out after % seconds', max_attempts * 0.01;
+                EXIT;
+            END IF;
         END LOOP;
         DELETE FROM cancelpid;
     END;
