@@ -129,7 +129,7 @@ SELECT _timescaledb_functions.restart_background_workers();
  t
 
 SELECT test.wait_for_job_to_run(3, 1);
- wait_for_job_to_run 
+ wait_for_job_to_run
 ---------------------
  t
 
@@ -137,9 +137,13 @@ SELECT test.wait_for_job_to_run(3, 1);
 SELECT job_id, pid, succeeded, execution_start, execution_finish, data
 FROM _timescaledb_internal.bgw_job_stat_history
 WHERE succeeded IS FALSE;
- job_id |  pid  | succeeded |       execution_start        |       execution_finish       | data 
+ job_id |  pid  | succeeded |       execution_start        |       execution_finish       | data
 --------+-------+-----------+------------------------------+------------------------------+------
     123 | 23456 | f         | Fri Dec 31 16:00:00 2049 PST | Fri Dec 31 16:00:10 2049 PST | {}
+
+-- Reschedule job 3 to prevent it from running again before we stop workers
+SELECT FROM alter_job(3, next_start => '2060-01-01 00:00:00+00'::timestamptz);
+--
 
 -- test failure when starting jobs
 \c :TEST_DBNAME :ROLE_SUPERUSER

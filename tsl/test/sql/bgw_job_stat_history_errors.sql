@@ -93,6 +93,9 @@ SELECT job_id, pid, succeeded, execution_start, execution_finish, data
 FROM _timescaledb_internal.bgw_job_stat_history
 WHERE succeeded IS FALSE;
 
+-- Reschedule job 3 to prevent it from running again before we stop workers
+SELECT FROM alter_job(3, next_start => '2060-01-01 00:00:00+00'::timestamptz);
+
 -- test failure when starting jobs
 \c :TEST_DBNAME :ROLE_SUPERUSER
 SELECT _timescaledb_functions.stop_background_workers();
