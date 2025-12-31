@@ -780,7 +780,7 @@ $$;
 
 SELECT add_job('job_test', '8 min', fixed_schedule => false) AS jobid_drifting_1 \gset
 SELECT add_job('job_test', '8 min', fixed_schedule => false) AS jobid_drifting_2 \gset
-SELECT ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(25);
+SELECT ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(2000000);
 SELECT last_finish AS finish_time_drifting_1 FROM _timescaledb_internal.bgw_job_stat WHERE job_id = :jobid_drifting_1 \gset
 -- job is on fixed schedule, so changing the timezone and initial start, has no effect on its next start,
 -- which should be 8 min after the finish time

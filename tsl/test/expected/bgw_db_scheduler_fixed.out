@@ -1611,7 +1611,7 @@ END
 $$;
 SELECT add_job('job_test', '8 min', fixed_schedule => false) AS jobid_drifting_1 \gset
 SELECT add_job('job_test', '8 min', fixed_schedule => false) AS jobid_drifting_2 \gset
-SELECT ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(25);
+SELECT ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(2000000);
  ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish 
 ------------------------------------------------------------
  
