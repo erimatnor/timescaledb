@@ -219,6 +219,8 @@ ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(PG_FUNCTION_ARGS)
 {
 	BackgroundWorkerHandle *worker_handle;
 	pid_t pid;
+	BgwHandleStatus status;
+	int retries;
 
 	worker_handle = start_test_scheduler(PG_GETARG_INT32(0), GetUserId());
 	TestAssertTrue(worker_handle != NULL);
@@ -230,11 +232,23 @@ ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(PG_FUNCTION_ARGS)
 	if (!worker_handle)
 		PG_RETURN_VOID();
 
-	BgwHandleStatus status = WaitForBackgroundWorkerStartup(worker_handle, &pid);
+	/*
+	 * Retry waiting for background worker startup multiple times with a small delay.
+	 * This helps on slower systems (e.g., macOS Debug builds) where background
+	 * workers may take longer to start than PostgreSQL's default timeout allows.
+	 */
+	status = WaitForBackgroundWorkerStartup(worker_handle, &pid);
+	for (retries = 0; retries < 10 && status != BGWH_STARTED; retries++)
+	{
+		pg_usleep(500000L); /* Sleep 500ms between retries */
+		status = WaitForBackgroundWorkerStartup(worker_handle, &pid);
+	}
+
 	TestAssertTrue(BGWH_STARTED == status);
 	if (status != BGWH_STARTED)
 		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not started")));
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("bgw not started after %d retries", retries)));
 
 	status = WaitForBackgroundWorkerShutdown(worker_handle);
 	TestAssertTrue(BGWH_STOPPED == status);
@@ -253,6 +267,7 @@ ts_bgw_db_scheduler_test_run(PG_FUNCTION_ARGS)
 	pid_t pid;
 	MemoryContext old_ctx;
 	BgwHandleStatus status;
+	int retries;
 
 	old_ctx = MemoryContextSwitchTo(TopMemoryContext);
 	current_handle = start_test_scheduler(PG_GETARG_INT32(0), GetUserId());
@@ -265,11 +280,23 @@ ts_bgw_db_scheduler_test_run(PG_FUNCTION_ARGS)
 	if (!current_handle)
 		PG_RETURN_VOID();
 
+	/*
+	 * Retry waiting for background worker startup multiple times with a small delay.
+	 * This helps on slower systems (e.g., macOS Debug builds) where background
+	 * workers may take longer to start than PostgreSQL's default timeout allows.
+	 */
 	status = WaitForBackgroundWorkerStartup(current_handle, &pid);
+	for (retries = 0; retries < 10 && status != BGWH_STARTED; retries++)
+	{
+		pg_usleep(500000L); /* Sleep 500ms between retries */
+		status = WaitForBackgroundWorkerStartup(current_handle, &pid);
+	}
+
 	TestAssertTrue(BGWH_STARTED == status);
 	if (status != BGWH_STARTED)
 		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not started")));
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("bgw not started after %d retries", retries)));
 
 	PG_RETURN_VOID();
 }
