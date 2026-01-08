@@ -137,10 +137,10 @@ SELECT (test.show_constraints(ch)).* from show_chunks('uuid_events') ch;
  constraint_8         | c    | {id}    | -                                            | ((id >= '01942976-3400-0000-0000-000000000000'::uuid) AND (id < '01942e9c-9000-0000-0000-000000000000'::uuid)) | f          | f        | t
 
 SELECT id, device, temp FROM uuid_events;
-                  id                  | device | temp 
+                  id                  | device | temp
 --------------------------------------+--------+------
  0194214e-cd00-7000-a9a7-63f1416dab45 |      2 |    2
- 01942117-de80-7000-84d6-59afc1662c47 |      1 |    1
+ 01942117-de80-7000-8000-000000000000 |      1 |    1
  0194263e-3a80-7000-8f40-82c987b1bc1f |      3 |    3
  01942675-2900-7000-8db1-a98694b18785 |      4 |    4
  01942bd2-7380-7000-9bc4-5f97443907b8 |      5 |    5
