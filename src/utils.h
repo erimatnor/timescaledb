@@ -201,10 +201,7 @@ extern TSDLLEXPORT List *ts_get_reloptions(Oid relid);
 
 #define is_inheritance_table(relid) (is_inheritance_child(relid) || is_inheritance_parent(relid))
 
-#define INIT_NULL_DATUM                                                                            \
-	{                                                                                              \
-		.value = 0, .isnull = true                                                                 \
-	}
+#define INIT_NULL_DATUM { .value = 0, .isnull = true }
 
 static inline Datum
 ts_fetch_att(const void *T, bool attbyval, int attlen)
