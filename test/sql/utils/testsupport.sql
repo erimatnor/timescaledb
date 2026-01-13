@@ -374,8 +374,7 @@ BEGIN
     LOOP
         SELECT total_successes, total_failures FROM _timescaledb_internal.bgw_job_stat WHERE job_id=job_param_id INTO r;
         IF (r.total_failures > 0) THEN
-            RAISE INFO 'wait_for_job_to_run: job execution failed';
-            RETURN false;
+            RAISE EXCEPTION 'wait_for_job_to_run: job % execution failed (total_failures=%)', job_param_id, r.total_failures;
         ELSEIF (r.total_successes = expected_runs) THEN
             RETURN true;
         ELSEIF (r.total_successes > expected_runs) THEN
@@ -384,8 +383,7 @@ BEGIN
             PERFORM pg_sleep(0.1);
         END IF;
     END LOOP;
-    RAISE INFO 'wait_for_job_to_run: timeout after % tries', spins;
-    RETURN false;
+    RAISE EXCEPTION 'wait_for_job_to_run: timeout after % tries waiting for job % to reach % runs', spins, job_param_id, expected_runs;
 END
 $BODY$;
 
@@ -405,8 +403,7 @@ BEGIN
             PERFORM pg_sleep(0.1);
         END IF;
     END LOOP;
-    RAISE INFO 'wait_for_job_to_run_or_fail: timeout after % tries', spins;
-    RETURN false;
+    RAISE EXCEPTION 'wait_for_job_to_run_or_fail: timeout after % tries waiting for job % to run', spins, job_param_id;
 END
 $BODY$;
 
