@@ -97,8 +97,14 @@ SELECT pg_reload_conf();
 -- Reconnect to make sure the GUC is set
 \c :TEST_DBNAME :ROLE_SUPERUSER
 -- test the retention job
+-- Stop background workers first to avoid race condition with running retention job
+SELECT _timescaledb_functions.stop_background_workers();
+ stop_background_workers
+-------------------------
+ t
+
 SELECT next_start FROM alter_job(3, next_start => '2060-01-01 00:00:00+00'::timestamptz);
-          next_start          
+          next_start
 ------------------------------
  Wed Dec 31 16:00:00 2059 PST
 

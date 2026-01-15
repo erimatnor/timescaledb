@@ -72,6 +72,8 @@ SELECT pg_reload_conf();
 \c :TEST_DBNAME :ROLE_SUPERUSER
 
 -- test the retention job
+-- Stop background workers first to avoid race condition with running retention job
+SELECT _timescaledb_functions.stop_background_workers();
 SELECT next_start FROM alter_job(3, next_start => '2060-01-01 00:00:00+00'::timestamptz);
 DELETE FROM _timescaledb_internal.bgw_job_stat_history;
 INSERT INTO _timescaledb_internal.bgw_job_stat_history(job_id, pid, succeeded, execution_start, execution_finish, data)
