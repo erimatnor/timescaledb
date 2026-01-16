@@ -330,6 +330,9 @@ order by device, time_bucket('1 minute', time) limit 1;
 -- Test incorrect transformation into a Pathkey on different relation through
 -- a join EquivalenceClass.
 set max_parallel_workers_per_gather = 0;
+-- Disable seqscan to get a deterministic plan, since the planner may choose
+-- either Index Scan or Seq Scan for the uncompressed part depending on cost estimates.
+set enable_seqscan = false;
 :PREFIX
 select time_bucket('1 minute', a.time) from ht_metrics_partially_compressed a
 join ht_metrics_partially_compressed b
@@ -363,6 +366,7 @@ group by 1
                            ->  Index Only Scan Backward using _hyper_1_1_chunk_ht_metrics_partially_compressed_time_idx on _hyper_1_1_chunk b_1 (actual rows=720.00 loops=1)
                                  Index Cond: ("time" < 'Tue Jan 07 00:00:00 2020 PST'::timestamp with time zone)
 
+reset enable_seqscan;
 reset max_parallel_workers_per_gather;
 reset work_mem;
 reset enable_hashagg;
