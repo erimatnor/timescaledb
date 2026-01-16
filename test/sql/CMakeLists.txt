@@ -111,6 +111,7 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
     c_unit_tests.sql
     copy_memory_usage.sql
     calendar_chunking.sql
+    calendar_chunking_comparison.sql
     metadata.sql
     multi_transaction_index.sql
     net.sql
