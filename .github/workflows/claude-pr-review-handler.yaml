@@ -12,6 +12,7 @@ jobs:
   handle-review:
     name: Handle PR Review with Claude
     # Only run on PRs with the claude-code label and when review requests changes or comments
+    # Requires CLAUDE_PR_REVIEW_HANDLER_ENABLED variable and ANTHROPIC_API_KEY secret
     if: |
       contains(github.event.pull_request.labels.*.name, 'claude-code') &&
       (github.event.review.state == 'changes_requested' || github.event.review.state == 'commented')
@@ -22,18 +23,22 @@ jobs:
       pull-requests: write
 
     steps:
-    - name: Check for API key
-      id: check-key
+    - name: Check prerequisites
+      id: check-prereqs
       run: |
+        skip=false
+        if [[ -z "${{ vars.CLAUDE_PR_REVIEW_HANDLER_ENABLED }}" ]]; then
+          echo "CLAUDE_PR_REVIEW_HANDLER_ENABLED variable is not configured, skipping"
+          skip=true
+        fi
         if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
           echo "ANTHROPIC_API_KEY secret is not configured, skipping Claude review handler"
-          echo "skip=true" >> $GITHUB_OUTPUT
-        else
-          echo "skip=false" >> $GITHUB_OUTPUT
+          skip=true
         fi
+        echo "skip=${skip}" >> $GITHUB_OUTPUT
 
     - name: Generate GitHub App token
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       id: generate-token
       uses: actions/create-github-app-token@v1
       with:
@@ -41,7 +46,7 @@ jobs:
         private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
 
     - name: Checkout PR branch
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.pull_request.head.ref }}
@@ -49,23 +54,23 @@ jobs:
         token: ${{ steps.generate-token.outputs.token }}
 
     - name: Configure Git
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       run: |
         git config user.name "timescale-automation"
         git config user.email "123763385+github-actions[bot]@users.noreply.github.com"
 
     - name: Setup Node.js
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       uses: actions/setup-node@v4
       with:
         node-version: "20"
 
     - name: Install Claude Code
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       run: npm install -g @anthropic-ai/claude-code
 
     - name: Handle review feedback
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       env:
         GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -82,7 +87,7 @@ jobs:
       run: .github/scripts/claude-handle-pr-review.sh
 
     - name: Upload Claude review handler output
-      if: always() && steps.check-key.outputs.skip != 'true'
+      if: always() && steps.check-prereqs.outputs.skip != 'true'
       uses: actions/upload-artifact@v4
       with:
         name: Claude review handler output PR-${{ github.event.pull_request.number }}

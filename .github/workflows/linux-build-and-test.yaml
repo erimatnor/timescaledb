@@ -358,7 +358,7 @@ jobs:
     name: Analyze Failures with Claude Code
     needs: regress
     # Only run on nightly (scheduled) builds when regress job fails
-    # Also requires ANTHROPIC_API_KEY to be configured
+    # Requires CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable and ANTHROPIC_API_KEY secret
     if: always() && github.event_name == 'schedule' && needs.regress.result == 'failure'
     runs-on: ubuntu-latest
 
@@ -367,41 +367,45 @@ jobs:
       pull-requests: write
 
     steps:
-    - name: Check for API key
-      id: check-key
+    - name: Check prerequisites
+      id: check-prereqs
       run: |
+        skip=false
+        if [[ -z "${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}" ]]; then
+          echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping Claude analysis"
+          skip=true
+        fi
         if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
           echo "ANTHROPIC_API_KEY secret is not configured, skipping Claude analysis"
-          echo "skip=true" >> $GITHUB_OUTPUT
-        else
-          echo "skip=false" >> $GITHUB_OUTPUT
+          skip=true
         fi
+        echo "skip=${skip}" >> $GITHUB_OUTPUT
 
     - name: Checkout TimescaleDB
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
     - name: Configure Git
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       run: |
         git config user.name "timescale-automation"
         git config user.email "123763385+github-actions[bot]@users.noreply.github.com"
 
     - name: Setup Node.js
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       uses: actions/setup-node@v4
       with:
         node-version: "20"
 
     - name: Install Claude Code
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       run: |
         npm install -g @anthropic-ai/claude-code
 
     - name: Generate GitHub App token
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       id: generate-token
       uses: actions/create-github-app-token@v1
       with:
@@ -409,20 +413,20 @@ jobs:
         private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
 
     - name: Analyze failures and create fix PR
-      if: steps.check-key.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true'
       env:
         GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
+        SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
         GITHUB_RUN_ID: ${{ github.run_id }}
         ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
       run: |
         .github/scripts/claude-analyze-failures.sh
 
     - name: Upload Claude analysis output
-      if: always() && steps.check-key.outputs.skip != 'true'
+      if: always() && steps.check-prereqs.outputs.skip != 'true'
       uses: actions/upload-artifact@v4
       with:
         name: Claude analysis output
