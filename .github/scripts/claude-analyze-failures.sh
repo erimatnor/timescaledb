@@ -6,18 +6,18 @@
 # 1. Downloads and aggregates test failure artifacts
 # 2. Prepares context for Claude Code
 # 3. Invokes Claude Code to analyze failures and propose fixes
-# 4. Creates a PR with the proposed fix
+# 4. Creates a separate PR for each fix with a descriptive title
 #
 # Required environment variables:
 #   GITHUB_RUN_ID      - The workflow run ID
+#   SOURCE_REPOSITORY  - The source repository to clone and fetch artifacts from
 #
 # Optional environment variables (with defaults):
 #   GITHUB_TOKEN       - GitHub token (default: from gh auth token)
-#   GITHUB_REPOSITORY  - The source repository for artifacts (default: timescale/timescaledb)
 #
 # Optional environment variables:
 #   ANTHROPIC_API_KEY  - API key for Claude Code (not needed if logged in locally)
-#   TARGET_REPOSITORY  - Repository to create the PR in (default: GITHUB_REPOSITORY)
+#   TARGET_REPOSITORY  - Repository to create the PR in (default: SOURCE_REPOSITORY)
 #                        Useful for creating PRs in a fork during testing
 #   BASE_BRANCH        - Branch to create the PR against (default: main)
 #   CLAUDE_MODEL       - Model to use (default: claude-sonnet-4-20250514)
@@ -44,9 +44,12 @@ SKIP_PR="${SKIP_PR:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
 ANALYSIS_OUTPUT_DIR="${ANALYSIS_OUTPUT_DIR:-}"
 
-# GITHUB_REPOSITORY defaults to timescale/timescaledb
-GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-timescale/timescaledb}"
-export GITHUB_REPOSITORY
+# SOURCE_REPOSITORY is required (no default - must be explicitly set)
+if [[ -z "${SOURCE_REPOSITORY:-}" ]]; then
+    echo "ERROR: SOURCE_REPOSITORY is not set" >&2
+    exit 1
+fi
+export SOURCE_REPOSITORY
 
 # GITHUB_TOKEN defaults to gh auth token if not set
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
@@ -54,7 +57,7 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
 fi
 export GITHUB_TOKEN
 
-# TARGET_REPOSITORY defaults to GITHUB_REPOSITORY (set after env var check)
+# TARGET_REPOSITORY defaults to SOURCE_REPOSITORY (set in check_prerequisites)
 
 # Colors for output
 RED='\033[0;31m'
@@ -111,8 +114,7 @@ cleanup() {
 trap cleanup EXIT
 
 send_slack_notification() {
-    local pr_url="$1"
-    local test_count="$2"
+    local pr_count="$1"
 
     if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
         log_info "SLACK_BOT_TOKEN not set, skipping Slack notification"
@@ -124,19 +126,40 @@ send_slack_notification() {
         return 0
     fi
 
+    if [[ ! -s "${WORK_DIR}/created_prs.txt" ]]; then
+        log_info "No PRs created, skipping Slack notification"
+        return 0
+    fi
+
     log_info "Sending Slack notification to channel ${SLACK_CHANNEL}..."
+
+    # Build PR list for the message
+    local pr_list=""
+    local pr_buttons="["
+    local first=true
+    while read -r pr_url; do
+        [[ -z "${pr_url}" ]] && continue
+        pr_list="${pr_list}\n• <${pr_url}|${pr_url##*/}>"
+        if [[ "${first}" == "true" ]]; then
+            first=false
+        else
+            pr_buttons="${pr_buttons},"
+        fi
+        pr_buttons="${pr_buttons}{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"PR ${pr_url##*/}\"},\"url\":\"${pr_url}\"}"
+    done < "${WORK_DIR}/created_prs.txt"
+    pr_buttons="${pr_buttons}]"
 
     local message
     message=$(cat <<EOF
 {
     "channel": "${SLACK_CHANNEL}",
-    "text": "Claude created a PR to fix nightly test failures",
+    "text": "Claude created ${pr_count} PR(s) to fix nightly test failures",
     "blocks": [
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": ":robot_face: *Claude created a PR to fix nightly test failures*"
+                "text": ":robot_face: *Claude created ${pr_count} PR(s) to fix nightly test failures*"
             }
         },
         {
@@ -144,27 +167,20 @@ send_slack_notification() {
             "fields": [
                 {
                     "type": "mrkdwn",
-                    "text": "*Tests Fixed:*\n${test_count}"
+                    "text": "*PRs Created:*\n${pr_count}"
                 },
                 {
                     "type": "mrkdwn",
-                    "text": "*Repository:*\n${TARGET_REPOSITORY:-${GITHUB_REPOSITORY}}"
+                    "text": "*Repository:*\n${TARGET_REPOSITORY:-${SOURCE_REPOSITORY}}"
                 }
             ]
         },
         {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": "View Pull Request"
-                    },
-                    "url": "${pr_url}",
-                    "style": "primary"
-                }
-            ]
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*Pull Requests:*${pr_list}"
+            }
         }
     ]
 }
@@ -218,11 +234,11 @@ check_prerequisites() {
         log_info "Using ANTHROPIC_API_KEY for authentication"
     fi
 
-    # Set TARGET_REPOSITORY (defaults to GITHUB_REPOSITORY)
-    TARGET_REPOSITORY="${TARGET_REPOSITORY:-${GITHUB_REPOSITORY}}"
+    # Set TARGET_REPOSITORY (defaults to SOURCE_REPOSITORY)
+    TARGET_REPOSITORY="${TARGET_REPOSITORY:-${SOURCE_REPOSITORY}}"
     export TARGET_REPOSITORY
-    if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
-        log_info "Artifacts from: ${GITHUB_REPOSITORY}"
+    if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
+        log_info "Artifacts from: ${SOURCE_REPOSITORY}"
         log_info "PR will be created in: ${TARGET_REPOSITORY}"
     fi
 
@@ -235,7 +251,7 @@ get_failed_jobs() {
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
-    gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
         --paginate \
         --jq '.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}' \
         > "${jobs_file}" 2>/dev/null || {
@@ -272,7 +288,7 @@ download_job_logs() {
         local safe_name
         safe_name=$(echo "${job_name}" | tr '/' '_' | tr ' ' '_')
 
-        gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" \
+        gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
             > "${WORK_DIR}/logs/${safe_name}.log" 2>/dev/null || {
             log_warn "Failed to download log for job: ${job_name}"
             continue
@@ -364,7 +380,7 @@ download_failure_artifacts() {
     local artifacts_file="${WORK_DIR}/artifacts.json"
 
     # Get artifacts that match failed jobs and are relevant types
-    gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
         --paginate \
         --jq ".artifacts[] | select(.name | test(\"Regression|PostgreSQL log|Stacktrace|TAP\")) | {name: .name, id: .id}" \
         > "${artifacts_file}.all" 2>/dev/null || {
@@ -409,7 +425,7 @@ download_failure_artifacts() {
 
         ((count++))
         log_info "Downloading artifact: ${name} (${count}/${total_artifacts})"
-        gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
+        gh api "repos/${SOURCE_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
             log_warn "Failed to download artifact: ${name}"
             continue
         }
@@ -612,10 +628,24 @@ commit_claude_changes() {
         echo "${filtered_new}" | xargs git add >&2
     fi
 
-    # Extract commit message from Claude's output using markers
-    local summary
+    # Extract commit title from Claude's output using markers
+    local title=""
+    if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
+        title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
+            grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
+            sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
+            tr '\n' ' ' | \
+            sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' | \
+            cut -c1-72)
+    fi
 
-    # Look for content between COMMIT_MESSAGE: and END_COMMIT_MESSAGE markers
+    # Fallback title if no markers found
+    if [[ -z "${title}" ]]; then
+        title="Fix test: ${test_name}"
+    fi
+
+    # Extract commit message body from Claude's output using markers
+    local summary=""
     if grep -q "COMMIT_MESSAGE:" "${analysis_output}"; then
         summary=$(sed -n '/COMMIT_MESSAGE:/,/END_COMMIT_MESSAGE/p' "${analysis_output}" | \
             grep -v "COMMIT_MESSAGE:\|END_COMMIT_MESSAGE" | \
@@ -632,7 +662,7 @@ commit_claude_changes() {
 
     # Create commit with descriptive message (redirect to stderr to avoid capturing in return value)
     git commit -m "$(cat <<EOF
-Fix test: ${test_name}
+${title}
 
 ${summary}
 
@@ -686,6 +716,18 @@ fix_single_test() {
         return 2  # Return code 2 indicates "skipped due to existing PR"
     fi
 
+    # Create a unique branch for this test fix
+    local safe_test_name
+    safe_test_name=$(echo "${test_name}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//; s/-$//' | cut -c1-40)
+    local branch_name
+    branch_name="claude-fix/${safe_test_name}-$(date +%Y%m%d-%H%M%S)"
+
+    log_info "Creating branch: ${branch_name}"
+    git checkout -b "${branch_name}" "${BASE_BRANCH}" >&2
+
+    # Save list of untracked files before Claude runs
+    git status --porcelain | grep '^??' | cut -c4- > "${WORK_DIR}/untracked_before.txt"
+
     # Create a prompt file for this specific test
     local prompt_file="${WORK_DIR}/prompt_${test_number}.txt"
     local analysis_output="${WORK_DIR}/analysis_${test_number}.txt"
@@ -711,7 +753,11 @@ Important:
 - NEVER modify files in .github/workflows/ - these require special permissions we don't have
 - Explain your reasoning briefly
 
-After making changes, output a commit message in this exact format:
+After making changes, output BOTH a title and description for the commit in this exact format:
+
+COMMIT_TITLE:
+<A concise title describing the fix, ideally under 50 characters (max 72), e.g., "Fix race condition in chunk_column_stats">
+END_COMMIT_TITLE
 
 COMMIT_MESSAGE:
 <A brief description of the root cause and the fix, suitable for a git commit message body. 2-4 sentences.>
@@ -731,6 +777,8 @@ EOF
         < "${prompt_file}" \
         2>&1 | tee "${analysis_output}" >&2; then
         log_warn "Claude Code failed to fix test: ${test_name}"
+        git checkout "${BASE_BRANCH}" >&2
+        git branch -D "${branch_name}" >&2 2>/dev/null || true
         return 1
     fi
 
@@ -740,11 +788,29 @@ EOF
     log_info "Analysis completed in ${duration} seconds"
 
     # Commit the changes for this test
-    if commit_claude_changes "${test_name}" "${analysis_output}"; then
-        return 0
-    else
+    if ! commit_claude_changes "${test_name}" "${analysis_output}"; then
+        log_info "No changes made for test: ${test_name}"
+        git checkout "${BASE_BRANCH}" >&2
+        git branch -D "${branch_name}" >&2 2>/dev/null || true
         return 1
     fi
+
+    # Create PR for this specific fix (unless SKIP_PR is set)
+    if [[ "${SKIP_PR}" != "true" ]]; then
+        local pr_url
+        if pr_url=$(create_pull_request "${branch_name}" "${test_name}" "${analysis_output}"); then
+            log_info "PR created for ${test_name}: ${pr_url}"
+            # Store PR URL for later notification
+            echo "${pr_url}" >> "${WORK_DIR}/created_prs.txt"
+        else
+            log_warn "Failed to create PR for ${test_name}"
+        fi
+    fi
+
+    # Return to base branch for next test
+    git checkout "${BASE_BRANCH}" >&2
+
+    return 0
 }
 
 extract_test_context() {
@@ -785,24 +851,15 @@ $(cat "${context_file}")
 invoke_claude_code() {
     local context_file="$1"
     local failed_tests_file="$2"
-    local branch_name
-    branch_name="claude-fix/nightly-$(date +%Y%m%d-%H%M%S)"
 
     log_info "=============================================="
     log_info "INVOKING CLAUDE CODE"
     log_info "=============================================="
 
-    cd "${REPO_ROOT}"
+    cd "${CLONE_DIR}"
 
-    # Save list of untracked files before Claude runs
-    git status --porcelain | grep '^??' | cut -c4- > "${WORK_DIR}/untracked_before.txt"
-    local untracked_count
-    untracked_count=$(wc -l < "${WORK_DIR}/untracked_before.txt")
-    log_info "Pre-existing untracked files: ${untracked_count}"
-
-    # Create a new branch for the fix
-    log_info "Creating branch: ${branch_name}"
-    git checkout -b "${branch_name}" >&2
+    # Initialize PR tracking file
+    : > "${WORK_DIR}/created_prs.txt"
 
     # Get list of unique failed tests
     local unique_tests_file="${WORK_DIR}/unique_failed_tests.txt"
@@ -850,7 +907,7 @@ invoke_claude_code() {
             local test_context
             test_context=$(extract_test_context "${test_name}" "${context_file}")
 
-            # Fix this specific test
+            # Fix this specific test (creates its own branch and PR)
             local fix_result
             fix_single_test "${test_name}" "${test_context}" "${test_number}" "${total_tests}"
             fix_result=$?
@@ -863,14 +920,20 @@ invoke_claude_code() {
                 ((failed_fixes++))
             fi
 
-            # Update untracked files list after each commit
-            git status --porcelain | grep '^??' | cut -c4- > "${WORK_DIR}/untracked_before.txt"
-
         done < "${unique_tests_file}"
     else
         # Fallback: if we can't identify individual tests, do one big fix
         log_info "Could not identify individual tests, attempting bulk fix..."
         total_tests=1
+
+        # Create a branch for the bulk fix
+        local branch_name
+        branch_name="claude-fix/nightly-$(date +%Y%m%d-%H%M%S)"
+        log_info "Creating branch: ${branch_name}"
+        git checkout -b "${branch_name}" "${BASE_BRANCH}" >&2
+
+        # Save list of untracked files before Claude runs
+        git status --porcelain | grep '^??' | cut -c4- > "${WORK_DIR}/untracked_before.txt"
 
         local prompt_file="${WORK_DIR}/prompt.txt"
         cat > "${prompt_file}" << EOF
@@ -891,7 +954,11 @@ Important guidelines:
 - NEVER modify files in .github/workflows/ - these require special permissions we don't have
 - Explain your reasoning for each fix
 
-After making changes, output a commit message in this exact format:
+After making changes, output BOTH a title and description for the commit in this exact format:
+
+COMMIT_TITLE:
+<A concise title describing the fix, ideally under 50 characters (max 72)>
+END_COMMIT_TITLE
 
 COMMIT_MESSAGE:
 <A brief description of the root cause and the fix, suitable for a git commit message body. 2-4 sentences.>
@@ -905,12 +972,21 @@ EOF
             2>&1 | tee "${analysis_output}" >&2; then
             if commit_claude_changes "all-failures" "${analysis_output}"; then
                 ((fixed_tests++))
+                # Create PR for bulk fix
+                if [[ "${SKIP_PR}" != "true" ]]; then
+                    local pr_url
+                    if pr_url=$(create_pull_request "${branch_name}" "all-failures" "${analysis_output}"); then
+                        echo "${pr_url}" >> "${WORK_DIR}/created_prs.txt"
+                    fi
+                fi
             else
                 ((failed_fixes++))
             fi
         else
             ((failed_fixes++))
         fi
+
+        git checkout "${BASE_BRANCH}" >&2
     fi
 
     log_info "=============================================="
@@ -921,11 +997,13 @@ EOF
     log_info "Skipped (existing PR): ${skipped_tests}"
     log_info "Failed to fix: ${failed_fixes}"
 
-    # Show all commits made
-    log_info "Commits created:"
-    git log --oneline "${BASE_BRANCH}..HEAD" 2>/dev/null | while read -r line; do
-        log_info "  ${line}"
-    done >&2
+    # Show created PRs
+    if [[ -s "${WORK_DIR}/created_prs.txt" ]]; then
+        log_info "PRs created:"
+        while read -r pr_url; do
+            log_info "  ${pr_url}"
+        done < "${WORK_DIR}/created_prs.txt"
+    fi
 
     log_info "=============================================="
 
@@ -939,15 +1017,18 @@ EOF
         return 1
     fi
 
-    echo "${branch_name}"
+    # Return the number of fixes (used for Slack notification)
+    echo "${fixed_tests}"
 }
 
 create_pull_request() {
     local branch_name="$1"
+    local test_name="${2:-}"
+    local analysis_output="${3:-}"
 
     log_info "Creating pull request..."
 
-    cd "${REPO_ROOT}"
+    cd "${CLONE_DIR}"
 
     # Check if there are any commits on this branch
     local commit_count
@@ -961,7 +1042,7 @@ create_pull_request() {
 
     # Set up the remote for the target repository if different from source
     local push_remote="origin"
-    if [[ "${TARGET_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]]; then
+    if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
         log_info "Setting up remote for target repository: ${TARGET_REPOSITORY}"
         # Use token in URL for authentication
         local target_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git"
@@ -970,7 +1051,7 @@ create_pull_request() {
         push_remote="target"
     else
         # For same repo, also ensure origin uses token authentication
-        local origin_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        local origin_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${SOURCE_REPOSITORY}.git"
         git remote set-url origin "${origin_url}" 2>/dev/null || true
     fi
 
@@ -999,31 +1080,57 @@ create_pull_request() {
 
     log_info "Push successful"
 
-    # Generate commit list for PR body
-    local commit_list
-    commit_list=$(git log --format="- **%s**%n  %b" "${BASE_BRANCH}..HEAD" 2>/dev/null | head -100)
+    # Generate PR title from commit message or test name
+    local pr_title=""
+    if [[ -n "${analysis_output}" ]] && [[ -f "${analysis_output}" ]]; then
+        # Extract title from Claude's output
+        if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
+            pr_title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
+                grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
+                sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
+                tr '\n' ' ' | \
+                sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+        fi
+    fi
+
+    # Fallback: use commit subject line
+    if [[ -z "${pr_title}" ]]; then
+        pr_title=$(git log -1 --format="%s" 2>/dev/null)
+    fi
+
+    # Final fallback: use test name
+    if [[ -z "${pr_title}" ]] && [[ -n "${test_name}" ]]; then
+        pr_title="Fix test: ${test_name}"
+    fi
+
+    # Generate commit details for PR body
+    local commit_body
+    commit_body=$(git log -1 --format="%b" 2>/dev/null)
 
     # Create the PR body
     local pr_body
     pr_body=$(cat <<EOF
 ## Summary
 
-This PR was automatically generated by Claude Code to fix failing nightly CI tests.
-Each test fix is in a separate commit with its own description.
+This PR was automatically generated by Claude Code to fix a failing nightly CI test.
+
+### Test Fixed
+
+\`${test_name}\`
+
+### What Changed
+
+${commit_body}
 
 ### Original Failure
 
 - **Run ID**: ${GITHUB_RUN_ID}
-- **Run URL**: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-### Commits (${commit_count} fixes)
-
-${commit_list}
+- **Run URL**: https://github.com/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
 ### Testing
 
-Please review each commit and ensure the fixes are appropriate before merging.
-The CI will run the full test suite to verify the fixes.
+Please review the fix and ensure it is appropriate before merging.
+The CI will run the full test suite to verify the fix.
 
 ---
 
@@ -1036,27 +1143,24 @@ EOF
     log_info "Base: ${BASE_BRANCH}, Head: ${branch_name}"
 
     # Save PR body to file for debugging
-    echo "${pr_body}" > "${WORK_DIR}/pr_body.md"
-    log_info "PR body saved to: ${WORK_DIR}/pr_body.md"
+    echo "${pr_body}" > "${WORK_DIR}/pr_body_${test_name}.md"
 
     local pr_url
     local gh_output
-    gh_output="${WORK_DIR}/gh_pr_output.txt"
+    gh_output="${WORK_DIR}/gh_pr_output_${test_name}.txt"
 
     # Determine head ref format
-    # - Same repo: just branch name
-    # - Cross-repo (fork): owner:branch format
     local head_ref="${branch_name}"
     log_info "Creating PR: base=${BASE_BRANCH}, head=${head_ref}"
-    log_info "Target repo: ${TARGET_REPOSITORY}"
+    log_info "PR title: ${pr_title}"
 
     if gh pr create \
         --repo "${TARGET_REPOSITORY}" \
-        --title "Fix nightly test failures ($(date +%Y-%m-%d))" \
+        --title "${pr_title}" \
         --body "${pr_body}" \
         --base "${BASE_BRANCH}" \
         --head "${head_ref}" \
-        2>&1 | tee "${gh_output}"; then
+        2>&1 | tee "${gh_output}" >&2; then
         pr_url=$(grep -oE 'https://github.com/[^ ]+' "${gh_output}" | head -1)
         log_info "Pull request created: ${pr_url}"
 
@@ -1071,14 +1175,14 @@ EOF
                 --repo "${TARGET_REPOSITORY}" \
                 --description "PR generated by Claude Code" \
                 --color "7C3AED" \
-                2>/dev/null || log_warn "Could not create label (may already exist)"
+                &>/dev/null || log_warn "Could not create label (may already exist)"
         fi
 
         # Add the label to the PR
         gh pr edit "${head_ref}" \
             --repo "${TARGET_REPOSITORY}" \
             --add-label "${label_name}" \
-            2>/dev/null || log_warn "Could not add label to PR"
+            &>/dev/null || log_warn "Could not add label to PR"
 
         echo "${pr_url}"
     else
@@ -1092,8 +1196,8 @@ EOF
 
 main() {
     log_info "Starting Claude failure analysis..."
-    log_info "Source repository: ${GITHUB_REPOSITORY:-not set}"
-    log_info "Target repository: ${TARGET_REPOSITORY:-${GITHUB_REPOSITORY:-not set}}"
+    log_info "Source repository: ${SOURCE_REPOSITORY:-not set}"
+    log_info "Target repository: ${TARGET_REPOSITORY:-${SOURCE_REPOSITORY:-not set}}"
     log_info "Base branch: ${BASE_BRANCH}"
     log_info "Run ID: ${GITHUB_RUN_ID:-not set}"
     log_info "Mode: $(if [[ "${DRY_RUN}" == "true" ]]; then echo "DRY_RUN"; elif [[ "${SKIP_PR}" == "true" ]]; then echo "SKIP_PR"; else echo "FULL"; fi)"
@@ -1101,6 +1205,17 @@ main() {
     check_prerequisites
 
     mkdir -p "${WORK_DIR}"
+
+    # Clone repo to temp directory for isolation
+    CLONE_DIR="${WORK_DIR}/repo"
+    log_info "Cloning ${SOURCE_REPOSITORY} to temp directory..."
+    if ! git clone --depth=1 --branch "${BASE_BRANCH}" \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${SOURCE_REPOSITORY}.git" \
+        "${CLONE_DIR}" >&2; then
+        log_error "Failed to clone repository"
+        exit 1
+    fi
+    log_info "Clone complete"
 
     # Step 1: Get list of failed jobs
     local jobs_file
@@ -1135,30 +1250,25 @@ main() {
         exit 0
     fi
 
-    # Step 5: Invoke Claude Code (one commit per test)
-    local branch_name
-    branch_name=$(invoke_claude_code "${context_file}" "${failed_tests_file}")
+    # Step 5: Invoke Claude Code (creates separate PR for each fix)
+    local fixed_count
+    fixed_count=$(invoke_claude_code "${context_file}" "${failed_tests_file}")
 
     if [[ "${SKIP_PR}" == "true" ]]; then
-        log_info "SKIP_PR mode - skipping PR creation"
-        log_info "Changes are on branch: ${branch_name}"
-        log_info "To review changes: git diff ${BASE_BRANCH}...${branch_name}"
-        log_info "To push manually: git push origin ${branch_name}"
+        log_info "SKIP_PR mode - PRs were not created"
+        log_info "Fixed ${fixed_count} tests locally"
         exit 0
     fi
 
-    # Step 6: Create PR
-    local pr_url
-    pr_url=$(create_pull_request "${branch_name}")
+    # Step 6: Send Slack notification for all created PRs
+    send_slack_notification "${fixed_count}"
 
-    # Count fixed tests (number of commits on the branch)
-    local fixed_count
-    fixed_count=$(git rev-list --count "${BASE_BRANCH}..${branch_name}" 2>/dev/null || echo "unknown")
-
-    # Step 7: Send Slack notification
-    send_slack_notification "${pr_url}" "${fixed_count}"
-
-    log_info "Done! PR created: ${pr_url}"
+    # Show summary
+    local pr_count=0
+    if [[ -s "${WORK_DIR}/created_prs.txt" ]]; then
+        pr_count=$(wc -l < "${WORK_DIR}/created_prs.txt")
+    fi
+    log_info "Done! Created ${pr_count} PR(s) for ${fixed_count} fix(es)"
 }
 
 main "$@"
