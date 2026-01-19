@@ -32,12 +32,21 @@ jobs:
           echo "skip=false" >> $GITHUB_OUTPUT
         fi
 
+    - name: Generate GitHub App token
+      if: steps.check-key.outputs.skip != 'true'
+      id: generate-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ secrets.CLAUDE_APP_ID }}
+        private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+
     - name: Checkout PR branch
       if: steps.check-key.outputs.skip != 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.pull_request.head.ref }}
         fetch-depth: 0
+        token: ${{ steps.generate-token.outputs.token }}
 
     - name: Configure Git
       if: steps.check-key.outputs.skip != 'true'
@@ -58,6 +67,7 @@ jobs:
     - name: Handle review feedback
       if: steps.check-key.outputs.skip != 'true'
       env:
+        GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         PR_BRANCH: ${{ github.event.pull_request.head.ref }}
