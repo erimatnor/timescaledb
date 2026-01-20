@@ -21,6 +21,7 @@
 #                        Useful for creating PRs in a fork during testing
 #   BASE_BRANCH        - Branch to create the PR against (default: main)
 #   CLAUDE_MODEL       - Model to use (default: claude-sonnet-4-20250514)
+#   CLAUDE_BOT_USERNAME - Bot username for filtering existing PRs (default: none, uses label only)
 #   MAX_ARTIFACTS      - Maximum number of artifacts to download (default: 10)
 #   DRY_RUN            - If set to "true", skip Claude invocation and PR creation
 #   SKIP_PR            - If set to "true", run Claude to make local changes but skip PR creation
@@ -680,13 +681,19 @@ check_existing_pr_for_test() {
     local test_name="$1"
 
     # Search for open PRs with the claude-code label that mention this test
+    # If CLAUDE_BOT_USERNAME is set, also filter by author
     local matching_pr
+    local author_filter=""
+    if [[ -n "${CLAUDE_BOT_USERNAME:-}" ]]; then
+        author_filter="and .author.login == \"${CLAUDE_BOT_USERNAME}\""
+    fi
+
     matching_pr=$(gh pr list \
         --repo "${TARGET_REPOSITORY}" \
         --state open \
         --label "claude-code" \
-        --json number,title,url,body \
-        --jq ".[] | select(.title + .body | test(\"${test_name}\"; \"i\")) | .url" \
+        --json number,title,url,body,author \
+        --jq ".[] | select((.title + .body | test(\"${test_name}\"; \"i\")) ${author_filter}) | .url" \
         2>/dev/null | head -1)
 
     if [[ -n "${matching_pr}" ]]; then

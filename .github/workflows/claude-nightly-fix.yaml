@@ -145,6 +145,8 @@ jobs:
         SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
         GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
         ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
+        # Bot username for filtering existing PRs (constructed from app slug)
+        CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]
       run: |
         .github/scripts/claude-analyze-failures.sh
 
