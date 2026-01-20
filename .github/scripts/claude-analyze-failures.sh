@@ -596,34 +596,34 @@ commit_claude_changes() {
         return 1
     fi
 
-    # Filter out workflow files - these require special 'workflow' scope that we don't have
-    # This is a safety measure in case Claude modifies workflow files despite instructions
+    # Filter out .github/ files - workflows require special scope, and scripts shouldn't be modified
+    # This is a safety measure in case Claude modifies these files despite instructions
     local filtered_modified filtered_new
-    filtered_modified=$(echo "${modified_files}" | grep -v '^\.github/workflows/' || true)
-    filtered_new=$(echo "${new_files_list}" | grep -v '^\.github/workflows/' || true)
+    filtered_modified=$(echo "${modified_files}" | grep -v '^\.github/' || true)
+    filtered_new=$(echo "${new_files_list}" | grep -v '^\.github/' || true)
 
-    # Check if any workflow files were modified and warn
-    local workflow_changes
-    workflow_changes=$(echo "${modified_files}" | grep '^\.github/workflows/' || true)
-    if [[ -n "${workflow_changes}" ]]; then
-        log_warn "Skipping workflow file changes (requires 'workflow' scope):"
-        echo "${workflow_changes}" | while read -r f; do
+    # Check if any .github files were modified and warn
+    local github_changes
+    github_changes=$(echo "${modified_files}" | grep '^\.github/' || true)
+    if [[ -n "${github_changes}" ]]; then
+        log_warn "Skipping .github/ file changes:"
+        echo "${github_changes}" | while read -r f; do
             log_warn "  - ${f}"
             git checkout -- "${f}" 2>/dev/null || true  # Revert the changes
         done >&2
     fi
 
     if [[ -z "${filtered_modified}" && -z "${filtered_new}" ]]; then
-        log_info "No non-workflow changes made for test: ${test_name}"
+        log_info "No changes made for test (excluding .github/): ${test_name}"
         return 1
     fi
 
-    # Stage modified files (excluding workflows)
+    # Stage modified files (excluding .github/)
     if [[ -n "${filtered_modified}" ]]; then
         echo "${filtered_modified}" | xargs git add >&2
     fi
 
-    # Stage new files created by Claude (excluding workflows)
+    # Stage new files created by Claude (excluding .github/)
     if [[ -n "${filtered_new}" ]]; then
         echo "${filtered_new}" | xargs git add >&2
     fi
@@ -749,7 +749,7 @@ ${test_context}
 Important:
 - Focus ONLY on fixing this one test: ${test_name}
 - Do not modify files unrelated to this test
-- NEVER modify files in .github/workflows/ - these require special permissions we don't have
+- NEVER modify files in .github/ (workflows, scripts, etc.)
 - After making C code changes, run \`make format\` to format the code
 - For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
 - NEVER modify expected output files (.out files) directly. Instead:
@@ -957,7 +957,7 @@ Please:
 Important guidelines:
 - Only fix actual bugs, don't just update test expectations to make tests pass unless the new behavior is correct
 - If a test is flaky due to timing issues, make the test more robust rather than ignoring it
-- NEVER modify files in .github/workflows/ - these require special permissions we don't have
+- NEVER modify files in .github/ (workflows, scripts, etc.)
 - After making C code changes, run \`make format\` to format the code
 - For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
 - NEVER modify expected output files (.out files) directly. Instead:

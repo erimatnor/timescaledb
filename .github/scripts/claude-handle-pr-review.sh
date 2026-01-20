@@ -548,7 +548,7 @@ RIGHT: [Calls Edit tool with old and new strings] (tool call = file changed)
 Important constraints:
 - Make minimal, targeted changes to address the feedback
 - Don't make unrelated changes or refactors
-- NEVER modify files in .github/workflows/
+- NEVER modify files in .github/ (workflows, scripts, etc.)
 - After making C code changes, run \`make format\` to format the code
 - For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
 - NEVER modify expected output files (.out files) directly. Instead:
@@ -619,23 +619,24 @@ commit_and_push_changes() {
         return 1
     fi
 
-    # Filter out workflow files
+    # Filter out .github/ files - workflows require special scope, scripts shouldn't be modified
     local filtered_modified
-    filtered_modified=$(echo "${modified_files}" | grep -v '^\.github/workflows/' || true)
+    filtered_modified=$(echo "${modified_files}" | grep -v '^\.github/' || true)
 
-    local workflow_changes
-    workflow_changes=$(echo "${modified_files}" | grep '^\.github/workflows/' || true)
-    if [[ -n "${workflow_changes}" ]]; then
-        log_warn "Reverting workflow file changes (requires special permissions):"
-        echo "${workflow_changes}" | while read -r f; do
+    local github_changes
+    github_changes=$(echo "${modified_files}" | grep '^\.github/' || true)
+    if [[ -n "${github_changes}" ]]; then
+        log_warn "Reverting .github/ file changes:"
+        echo "${github_changes}" | while read -r f; do
             if [[ -n "${f}" ]]; then
+                log_warn "  - ${f}"
                 git checkout -- "${f}" 2>/dev/null || true
             fi
         done
     fi
 
     if [[ -z "${filtered_modified}" ]]; then
-        log_info "No non-workflow changes to commit"
+        log_info "No changes to commit (excluding .github/)"
         return 1
     fi
 
