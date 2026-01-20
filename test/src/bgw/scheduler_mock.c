@@ -221,7 +221,6 @@ ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(PG_FUNCTION_ARGS)
 	pid_t pid;
 
 	worker_handle = start_test_scheduler(PG_GETARG_INT32(0), GetUserId());
-	TestAssertTrue(worker_handle != NULL);
 
 	/*
 	 * If RegisterDynamicbackgroundworker fails, worker_handle will be
@@ -231,13 +230,11 @@ ts_bgw_db_scheduler_test_run_and_wait_for_scheduler_finish(PG_FUNCTION_ARGS)
 		PG_RETURN_VOID();
 
 	BgwHandleStatus status = WaitForBackgroundWorkerStartup(worker_handle, &pid);
-	TestAssertTrue(BGWH_STARTED == status);
 	if (status != BGWH_STARTED)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not started")));
 
 	status = WaitForBackgroundWorkerShutdown(worker_handle);
-	TestAssertTrue(BGWH_STOPPED == status);
 	if (status != BGWH_STOPPED)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not stopped")));
@@ -266,7 +263,6 @@ ts_bgw_db_scheduler_test_run(PG_FUNCTION_ARGS)
 		PG_RETURN_VOID();
 
 	status = WaitForBackgroundWorkerStartup(current_handle, &pid);
-	TestAssertTrue(BGWH_STARTED == status);
 	if (status != BGWH_STARTED)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not started")));
@@ -280,7 +276,6 @@ ts_bgw_db_scheduler_test_wait_for_scheduler_finish(PG_FUNCTION_ARGS)
 	if (current_handle != NULL)
 	{
 		BgwHandleStatus status = WaitForBackgroundWorkerShutdown(current_handle);
-		TestAssertTrue(BGWH_STOPPED == status);
 		if (status != BGWH_STOPPED)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE), errmsg("bgw not stopped")));
