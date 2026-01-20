@@ -2,6 +2,9 @@
 -- Please see the included NOTICE for copyright information and
 -- LICENSE-TIMESCALE for a copy of the license.
 
+-- Set random seed for deterministic test results
+SELECT setseed(0.1);
+
 CREATE TABLE skip_scan(time int, dev int, dev_name text, val int);
 
 INSERT INTO skip_scan SELECT t, d, 'device_' || d::text, t*d FROM generate_series(1, 1000) t, generate_series(1, 10) d;
