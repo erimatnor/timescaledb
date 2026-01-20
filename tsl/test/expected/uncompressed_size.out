@@ -23,5 +23,5 @@ SELECT ccs.compressed_chunk_id,round(ccs.uncompressed_heap_size, -5) uncompresse
  compressed_chunk_id | uncompressed_heap_size | uncompressed_toast_size | uncompressed_index_size | uncompressed_total_size | relation_size | index_size | total_size 
 ---------------------+------------------------+-------------------------+-------------------------+-------------------------+---------------+------------+------------
                    3 |                6000000 |                    8192 |                 2300000 |                 8298496 |       5980000 |    2000000 |    7980000
-                   4 |                5200000 |                       0 |                 2300000 |                 7479296 |       5520000 |    2000000 |    7520000
+                   4 |                5300000 |                       0 |                 2300000 |                 7512064 |       5520000 |    2000000 |    7520000
 
