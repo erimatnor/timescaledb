@@ -1,8 +1,8 @@
 name: Handle PR Review Feedback
 
 # This workflow allows Claude to respond to PR review feedback on PRs it created.
-# When a review is submitted on a claude-code labeled PR, Claude will attempt
-# to address the feedback and push fixes.
+# When a review is submitted, the workflow verifies the PR was created by the
+# GitHub App bot before processing. This is more secure than label-based filtering.
 #
 # Required repository variables:
 #   CLAUDE_PR_REVIEW_HANDLER_ENABLED - Set to any value to enable this workflow
@@ -13,17 +13,30 @@ name: Handle PR Review Feedback
 #   CLAUDE_APP_PRIVATE_KEY - GitHub App private key
 
 on:
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to process (required)'
+        required: true
+        type: string
+
+  # Automatic trigger on PR review
   pull_request_review:
     types: [submitted]
 
 jobs:
   handle-review:
     name: Handle PR Review with Claude
-    # Only run on PRs with the claude-code label and when review requests changes or comments
+    # For pull_request_review: only run on PRs with claude-code label when review requests changes or comments
+    # For workflow_dispatch: always run (useful for testing)
+    # Author verification happens after token generation (needs app-slug)
+    # The label check allows users to disable review handling by removing the label
     # Requires CLAUDE_PR_REVIEW_HANDLER_ENABLED variable and ANTHROPIC_API_KEY secret
     if: |
-      contains(github.event.pull_request.labels.*.name, 'claude-code') &&
-      (github.event.review.state == 'changes_requested' || github.event.review.state == 'commented')
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'claude-code') &&
+       (github.event.review.state == 'changes_requested' || github.event.review.state == 'commented'))
     runs-on: ubuntu-latest
 
     permissions:
@@ -53,55 +66,105 @@ jobs:
         app-id: ${{ secrets.CLAUDE_APP_ID }}
         private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
 
-    - name: Checkout PR branch
+    - name: Get PR info and verify author
       if: steps.check-prereqs.outputs.skip != 'true'
+      id: pr-info
+      env:
+        GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+      run: |
+        EXPECTED_AUTHOR="${{ steps.generate-token.outputs.app-slug }}[bot]"
+
+        # For workflow_dispatch, fetch PR info from API
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          PR_NUMBER="${{ inputs.pr_number }}"
+          echo "Fetching PR #${PR_NUMBER} info..."
+          PR_INFO=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}")
+          ACTUAL_AUTHOR=$(echo "$PR_INFO" | jq -r '.user.login')
+          PR_BRANCH=$(echo "$PR_INFO" | jq -r '.head.ref')
+          PUSH_REPO=$(echo "$PR_INFO" | jq -r '.head.repo.full_name')
+        else
+          ACTUAL_AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
+          PUSH_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+
+          # Check reviewer is not the bot itself (prevent loops)
+          REVIEWER="${{ github.event.review.user.login }}"
+          if [[ "$REVIEWER" == "$EXPECTED_AUTHOR" ]]; then
+            echo "::notice::Review submitted by bot itself, skipping to prevent loops"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check reviewer has trusted association (OWNER, MEMBER, or COLLABORATOR)
+          ASSOCIATION="${{ github.event.review.author_association }}"
+          if [[ ! "$ASSOCIATION" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+            echo "::notice::Reviewer association ($ASSOCIATION) is not trusted, skipping"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Reviewer association verified: $ASSOCIATION"
+        fi
+
+        echo "pr_branch=${PR_BRANCH}" >> $GITHUB_OUTPUT
+        echo "push_repo=${PUSH_REPO}" >> $GITHUB_OUTPUT
+        echo "pr_author=${ACTUAL_AUTHOR}" >> $GITHUB_OUTPUT
+
+        # Verify PR author is the bot
+        if [[ "$ACTUAL_AUTHOR" != "$EXPECTED_AUTHOR" ]]; then
+          echo "::notice::PR author ($ACTUAL_AUTHOR) does not match expected bot ($EXPECTED_AUTHOR), skipping"
+          echo "skip=true" >> $GITHUB_OUTPUT
+        else
+          echo "Author verified: $ACTUAL_AUTHOR"
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Checkout PR branch
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.pull_request.head.ref }}
+        ref: ${{ steps.pr-info.outputs.pr_branch }}
         fetch-depth: 0
         token: ${{ steps.generate-token.outputs.token }}
 
     - name: Configure Git
-      if: steps.check-prereqs.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       run: |
         git config user.name "timescale-automation"
         git config user.email "123763385+github-actions[bot]@users.noreply.github.com"
 
     - name: Setup Node.js
-      if: steps.check-prereqs.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       uses: actions/setup-node@v4
       with:
         node-version: "20"
 
     - name: Install Claude Code
-      if: steps.check-prereqs.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       run: npm install -g @anthropic-ai/claude-code
 
     - name: Handle review feedback
-      if: steps.check-prereqs.outputs.skip != 'true'
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       env:
         GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+        PR_BRANCH: ${{ steps.pr-info.outputs.pr_branch }}
+        PR_AUTHOR: ${{ steps.pr-info.outputs.pr_author }}
+        # Review context - only available for pull_request_review events
         REVIEW_ID: ${{ github.event.review.id }}
         REVIEW_BODY: ${{ github.event.review.body }}
         REVIEW_STATE: ${{ github.event.review.state }}
         REVIEWER: ${{ github.event.review.user.login }}
-        # PR_REPOSITORY is where the PR lives (for API calls)
         PR_REPOSITORY: ${{ github.repository }}
-        # PUSH_REPOSITORY is where to push (may be a fork)
-        PUSH_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-        # Bot username for author verification (constructed from app slug)
+        PUSH_REPOSITORY: ${{ steps.pr-info.outputs.push_repo }}
         CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]
       run: .github/scripts/claude-handle-pr-review.sh
 
     - name: Upload Claude review handler output
-      if: always() && steps.check-prereqs.outputs.skip != 'true'
+      if: always() && steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: Claude review handler output PR-${{ github.event.pull_request.number }}
+        name: Claude review handler output PR-${{ inputs.pr_number || github.event.pull_request.number }}
         path: /tmp/claude-review-*/
         if-no-files-found: ignore
         retention-days: 7
