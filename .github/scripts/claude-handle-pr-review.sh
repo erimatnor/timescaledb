@@ -549,6 +549,13 @@ Important constraints:
 - Make minimal, targeted changes to address the feedback
 - Don't make unrelated changes or refactors
 - NEVER modify files in .github/workflows/
+- After making C code changes, run \`make format\` to format the code
+- For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
+- NEVER modify expected output files (.out files) directly. Instead:
+  1. Modify the test SQL file (.sql) if needed
+  2. Run the test to generate new output
+  3. If the test passes without errors, crashes, or truncated output, copy the new output over the expected file
+  4. This ensures all output changes (including unexpected ones like plan changes) are captured
 - If you cannot address a comment, explain why
 
 After making changes, output a summary in this exact format:

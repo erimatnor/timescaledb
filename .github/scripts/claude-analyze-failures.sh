@@ -752,6 +752,13 @@ Important:
 - Focus ONLY on fixing this one test: ${test_name}
 - Do not modify files unrelated to this test
 - NEVER modify files in .github/workflows/ - these require special permissions we don't have
+- After making C code changes, run \`make format\` to format the code
+- For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
+- NEVER modify expected output files (.out files) directly. Instead:
+  1. Modify the test SQL file (.sql) if needed
+  2. Run the test to generate new output
+  3. If the test passes without errors, crashes, or truncated output, copy the new output over the expected file
+  4. This ensures all output changes (including unexpected ones like plan changes) are captured
 - Explain your reasoning briefly
 
 After making changes, output BOTH a title and description for the commit in this exact format:
@@ -947,12 +954,19 @@ Please:
 1. Analyze the test failures shown above
 2. Identify the root cause of each failure
 3. Implement fixes for the issues in the codebase
-4. If the test expectations need updating (not the code), update the expected output files
+4. If the test expectations need updating (not the code), regenerate the expected output files
 
 Important guidelines:
 - Only fix actual bugs, don't just update test expectations to make tests pass unless the new behavior is correct
 - If a test is flaky due to timing issues, make the test more robust rather than ignoring it
 - NEVER modify files in .github/workflows/ - these require special permissions we don't have
+- After making C code changes, run \`make format\` to format the code
+- For other code (shell scripts, Python, etc.), check scripts/ for formatting tools
+- NEVER modify expected output files (.out files) directly. Instead:
+  1. Modify the test SQL file (.sql) if needed
+  2. Run the test to generate new output
+  3. If the test passes without errors, crashes, or truncated output, copy the new output over the expected file
+  4. This ensures all output changes (including unexpected ones like plan changes) are captured
 - Explain your reasoning for each fix
 
 After making changes, output BOTH a title and description for the commit in this exact format:
