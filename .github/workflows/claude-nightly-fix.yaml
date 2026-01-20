@@ -111,12 +111,6 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Configure Git
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      run: |
-        git config user.name "timescale-automation"
-        git config user.email "123763385+github-actions[bot]@users.noreply.github.com"
-
     - name: Setup Node.js
       if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
       uses: actions/setup-node@v4
@@ -134,6 +128,25 @@ jobs:
       with:
         app-id: ${{ secrets.CLAUDE_APP_ID }}
         private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+
+    - name: Configure Git
+      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
+      env:
+        APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
+        APP_ID: ${{ secrets.CLAUDE_APP_ID }}
+      run: |
+        # Use configured variables if set, otherwise fall back to GitHub App bot identity
+        GIT_USER="${{ vars.CLAUDE_GIT_AUTHOR_NAME }}"
+        GIT_EMAIL="${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}"
+        if [[ -z "${GIT_USER}" ]]; then
+          GIT_USER="${APP_SLUG}[bot]"
+        fi
+        if [[ -z "${GIT_EMAIL}" ]]; then
+          GIT_EMAIL="${APP_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+        fi
+        git config --global user.name "${GIT_USER}"
+        git config --global user.email "${GIT_EMAIL}"
+        echo "Configured git author: ${GIT_USER} <${GIT_EMAIL}>"
 
     - name: Analyze failures and create fix PR
       if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
