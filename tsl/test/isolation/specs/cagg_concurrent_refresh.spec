@@ -119,13 +119,21 @@ setup
     CREATE TABLE cancelpid (
         pid INTEGER NOT NULL PRIMARY KEY
     );
-    CREATE OR REPLACE PROCEDURE cancelpids() AS 
+    CREATE OR REPLACE PROCEDURE cancelpids() AS
     $$
+    DECLARE
+        max_iterations INT := 1000;
+        iteration INT := 0;
     BEGIN
-        PERFORM pg_cancel_backend(pid) FROM cancelpid;
         WHILE EXISTS (SELECT FROM pg_stat_activity WHERE pid IN (SELECT pid FROM cancelpid) AND state = 'active')
         LOOP
+            -- Send cancel signal each iteration to ensure it's received
+            PERFORM pg_cancel_backend(pid) FROM cancelpid;
             PERFORM pg_sleep(0.01);
+            iteration := iteration + 1;
+            IF iteration >= max_iterations THEN
+                RAISE EXCEPTION 'Timeout waiting for backends to cancel after % iterations', max_iterations;
+            END IF;
         END LOOP;
         DELETE FROM cancelpid;
     END;
