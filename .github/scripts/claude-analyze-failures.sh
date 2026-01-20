@@ -1223,6 +1223,22 @@ main() {
     fi
     log_info "Clone complete"
 
+    # Warn if source and target repos are at different commits
+    # Note: This is informational only. The failed workflow may have run on a
+    # different commit than either repo's current HEAD, so this check can't
+    # definitively detect problems.
+    if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
+        local target_sha source_sha
+        target_sha=$(git -C "${CLONE_DIR}" rev-parse HEAD 2>/dev/null)
+        source_sha=$(gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' 2>/dev/null || echo "")
+
+        if [[ -n "${source_sha}" && "${target_sha}" != "${source_sha}" ]]; then
+            log_warn "Source and target repos are at different commits:"
+            log_warn "  Source (${SOURCE_REPOSITORY}): ${source_sha:0:12}"
+            log_warn "  Target (${TARGET_REPOSITORY}): ${target_sha:0:12}"
+        fi
+    fi
+
     # Step 1: Get list of failed jobs
     local jobs_file
     jobs_file=$(get_failed_jobs)
