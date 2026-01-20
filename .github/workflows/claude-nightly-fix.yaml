@@ -36,7 +36,7 @@ on:
   # Schedule trigger as alternative to workflow_run
   # Uncomment to enable, but disable workflow_run above first
   # schedule:
-  #   - cron: '30 5 * * *'  # Run 30 min after nightly tests (adjust as needed)
+  #   - cron: '0 2 * * *'  # 2 hours after nightly tests (which run at 0 0 * * *)
 
 jobs:
   analyze-and-fix:
