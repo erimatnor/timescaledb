@@ -32,6 +32,7 @@
 #   PUSH_REPOSITORY   - Repository to push to, for forks (default: auto-detected from PR)
 #   ANTHROPIC_API_KEY - API key for Claude Code (default: use local auth)
 #   CLAUDE_MODEL      - Model to use (default: claude-sonnet-4-20250514)
+#   CLAUDE_BOT_USERNAME - Bot username for author verification (default: none, skips check)
 #   DRY_RUN           - If "true", show context but don't invoke Claude
 #   SKIP_PUSH         - If "true", make changes locally but don't push
 #   KEEP_WORK_DIR     - If "true", preserve work directory after completion
@@ -138,6 +139,24 @@ fetch_pr_info() {
     if [[ -z "${PR_BRANCH:-}" ]]; then
         PR_BRANCH=$(echo "${pr_info}" | jq -r '.head.ref')
         log_info "PR branch: ${PR_BRANCH}"
+    fi
+
+    # Get PR author if not provided
+    if [[ -z "${PR_AUTHOR:-}" ]]; then
+        PR_AUTHOR=$(echo "${pr_info}" | jq -r '.user.login')
+    fi
+    log_info "PR author: ${PR_AUTHOR}"
+
+    # Verify PR was created by the expected bot (if CLAUDE_BOT_USERNAME is set)
+    if [[ -n "${CLAUDE_BOT_USERNAME:-}" ]]; then
+        if [[ "${PR_AUTHOR}" != "${CLAUDE_BOT_USERNAME}" ]]; then
+            log_error "PR #${PR_NUMBER} was not created by ${CLAUDE_BOT_USERNAME} (author: ${PR_AUTHOR})"
+            log_error "This script only handles PRs created by the Claude bot"
+            exit 1
+        fi
+        log_info "Verified PR author matches expected bot: ${CLAUDE_BOT_USERNAME}"
+    else
+        log_warn "CLAUDE_BOT_USERNAME not set, skipping author verification"
     fi
 
     # Detect if PR is from a fork and set PUSH_REPOSITORY accordingly
