@@ -1210,10 +1210,13 @@ main() {
     mkdir -p "${WORK_DIR}"
 
     # Clone repo to temp directory for isolation
+    # When TARGET_REPOSITORY differs from SOURCE_REPOSITORY, clone from TARGET
+    # to ensure we don't include files (like workflows) that exist in source but not target
     CLONE_DIR="${WORK_DIR}/repo"
-    log_info "Cloning ${SOURCE_REPOSITORY} to temp directory..."
+    local clone_repo="${TARGET_REPOSITORY}"
+    log_info "Cloning ${clone_repo} to temp directory..."
     if ! git clone --depth=1 --branch "${BASE_BRANCH}" \
-        "https://x-access-token:${GITHUB_TOKEN}@github.com/${SOURCE_REPOSITORY}.git" \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${clone_repo}.git" \
         "${CLONE_DIR}" >&2; then
         log_error "Failed to clone repository"
         exit 1
