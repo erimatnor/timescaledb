@@ -3,6 +3,14 @@ name: Handle PR Review Feedback
 # This workflow allows Claude to respond to PR review feedback on PRs it created.
 # When a review is submitted on a claude-code labeled PR, Claude will attempt
 # to address the feedback and push fixes.
+#
+# Required repository variables:
+#   CLAUDE_PR_REVIEW_HANDLER_ENABLED - Set to any value to enable this workflow
+#
+# Required secrets:
+#   ANTHROPIC_API_KEY - API key for Claude
+#   CLAUDE_APP_ID - GitHub App ID for authentication
+#   CLAUDE_APP_PRIVATE_KEY - GitHub App private key
 
 on:
   pull_request_review:
