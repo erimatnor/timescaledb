@@ -351,3 +351,21 @@ jobs:
         fi
         export GITHUB_PR_NUMBER
         scripts/upload_ci_stats.sh
+
+  # Trigger Claude to analyze and fix nightly test failures
+  trigger-claude-fix:
+    needs: regress
+    # Run on nightly failures - always() ensures this runs even when regress fails
+    if: |
+      always() &&
+      github.event_name == 'schedule' &&
+      needs.regress.result == 'failure'
+    uses: ./.github/workflows/claude-nightly-fix.yaml
+    with:
+      run_id: "${{ github.run_id }}"
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_APP_ID: ${{ secrets.CLAUDE_APP_ID }}
+      CLAUDE_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_CLAUDE: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
