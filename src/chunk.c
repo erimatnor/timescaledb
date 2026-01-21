@@ -2391,7 +2391,7 @@ get_chunks_in_time_range(Hypertable *ht, int64 older_than, int64 newer_than, Mem
 	MemoryContextSwitchTo(oldcontext);
 
 	chunks = MemoryContextAllocZero(mctx, sizeof(Chunk) * num_chunks);
-	data = (ChunkScanCtxAddChunkData){
+	data = (ChunkScanCtxAddChunkData) {
 		.chunks = chunks,
 		.max_chunks = num_chunks,
 		.num_chunks = 0,

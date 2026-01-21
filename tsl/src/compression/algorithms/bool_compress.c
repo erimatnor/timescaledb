@@ -139,7 +139,7 @@ bool_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 	BoolDecompressionIterator *bool_iter = (BoolDecompressionIterator *) iter;
 
 	if (bool_iter->position >= bool_iter->values.num_elements)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -150,7 +150,7 @@ bool_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 		if (is_null)
 		{
 			bool_iter->position++;
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 		}
@@ -159,7 +159,7 @@ bool_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 	bool val = simple8brle_bitmap_get_at(&bool_iter->values, bool_iter->position);
 	bool_iter->position++;
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = BoolGetDatum(val),
 	};
 }
@@ -185,7 +185,7 @@ bool_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 	BoolDecompressionIterator *bool_iter = (BoolDecompressionIterator *) iter;
 
 	if (bool_iter->position < 0)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -196,7 +196,7 @@ bool_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 		if (is_null)
 		{
 			bool_iter->position--;
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 		}
@@ -205,7 +205,7 @@ bool_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 	bool val = simple8brle_bitmap_get_at(&bool_iter->values, bool_iter->position);
 	bool_iter->position--;
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = BoolGetDatum(val),
 	};
 }
@@ -266,7 +266,7 @@ bool_compressor_for_type(Oid element_type)
 	switch (element_type)
 	{
 		case BOOLOID:
-			*compressor = (ExtendedCompressor){ .base = bool_compressor_initializer };
+			*compressor = (ExtendedCompressor) { .base = bool_compressor_initializer };
 			return &compressor->base;
 		default:
 			elog(ERROR, "invalid type for bool compressor \"%s\"", format_type_be(element_type));
@@ -473,7 +473,7 @@ decompression_iterator_init(BoolDecompressionIterator *iter, void *compressed, O
 
 	CheckCompressedData(has_nulls == 0 || has_nulls == 1);
 
-	*iter = (BoolDecompressionIterator){
+	*iter = (BoolDecompressionIterator) {
 		.base = { .compression_algorithm = COMPRESSION_ALGORITHM_BOOL,
 				  .forward = forward,
 				  .element_type = element_type,

@@ -259,7 +259,7 @@ test_gorilla_int()
 		gorilla_compressed_send((CompressedDataHeader *) compressed, &buf);
 		sent = pq_endtypsend(&buf);
 
-		transmission = (StringInfoData){
+		transmission = (StringInfoData) {
 			.data = VARDATA(sent),
 			.len = VARSIZE(sent),
 			.maxlen = VARSIZE(sent),
@@ -980,7 +980,7 @@ static void
 test_null()
 {
 	/* pointless tests to make codecov happy */
-	StringInfoData buffer = (StringInfoData){
+	StringInfoData buffer = (StringInfoData) {
 		.data = NULL,
 		.len = 0,
 		.maxlen = 0,
@@ -1000,7 +1000,7 @@ test_null()
 											   PointerGetDatum(&buffer));
 
 		bytea *sent = (bytea *) DatumGetPointer(sent_datum);
-		StringInfoData transmission = (StringInfoData){
+		StringInfoData transmission = (StringInfoData) {
 			.data = VARDATA(sent),
 			.len = VARSIZE(sent),
 			.maxlen = VARSIZE(sent),
@@ -1176,7 +1176,7 @@ test_delta_size_and_placement(const int32 *values, int n, int expected_size)
 			deltadelta_compressed_send((CompressedDataHeader *) pass1, &buf);
 			sent = pq_endtypsend(&buf);
 
-			transmission = (StringInfoData){
+			transmission = (StringInfoData) {
 				.data = VARDATA(sent),
 				.len = VARSIZE(sent),
 				.maxlen = VARSIZE(sent),
@@ -1541,7 +1541,7 @@ test_uuid_compressor_simple(int null_modulo, int value_modulo)
 		uuid_compressed_send((CompressedDataHeader *) compressed, &buf);
 		sent = pq_endtypsend(&buf);
 
-		transmission = (StringInfoData){
+		transmission = (StringInfoData) {
 			.data = VARDATA(sent),
 			.len = VARSIZE(sent),
 			.maxlen = VARSIZE(sent),

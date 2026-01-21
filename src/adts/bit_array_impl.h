@@ -47,7 +47,7 @@ static inline void bit_array_wrap_internal(BitArray *array, uint32 num_buckets,
 static inline void
 bit_array_init(BitArray *array, int expected_bits)
 {
-	*array = (BitArray){
+	*array = (BitArray) {
 		.bits_used_in_last_bucket = 0,
 	};
 	uint64_vec_init(&array->buckets, CurrentMemoryContext, expected_bits / 64);
@@ -59,10 +59,10 @@ static inline void
 bit_array_wrap_internal(BitArray *array, uint32 num_buckets, uint8 bits_used_in_last_bucket,
 						uint64 *buckets)
 {
-	*array = (BitArray){
+	*array = (BitArray) {
 		.bits_used_in_last_bucket = bits_used_in_last_bucket,
 		.buckets =
-			(uint64_vec){
+			(uint64_vec) {
 				.data = buckets,
 				.num_elements = num_buckets,
 				.max_elements = num_buckets,
@@ -227,7 +227,7 @@ bit_array_append(BitArray *array, uint8 num_bits, uint64 bits)
 static inline void
 bit_array_iterator_init(BitArrayIterator *iter, const BitArray *array)
 {
-	*iter = (BitArrayIterator){
+	*iter = (BitArrayIterator) {
 		.array = array,
 	};
 }
@@ -280,7 +280,7 @@ bit_array_iter_next(BitArrayIterator *iter, uint8 num_bits)
 static inline void
 bit_array_iterator_init_rev(BitArrayIterator *iter, const BitArray *array)
 {
-	*iter = (BitArrayIterator){
+	*iter = (BitArrayIterator) {
 		.array = array,
 		.current_bucket = array->buckets.num_elements - 1,
 		.bits_used_in_current_bucket = array->bits_used_in_last_bucket,

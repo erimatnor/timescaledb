@@ -848,7 +848,7 @@ build_column_map(const CompressionSettings *settings, const TupleDesc in_desc,
 					batch_metadata_builder_bloom1_create(attr->atttypid, bloom_attr_offset);
 			}
 
-			*column = (PerColumn){
+			*column = (PerColumn) {
 				.compressor = compressor_for_type(attr->atttypid),
 				.metadata_builder = batch_minmax_builder,
 				.segmentby_column_index = -1,
@@ -861,7 +861,7 @@ build_column_map(const CompressionSettings *settings, const TupleDesc in_desc,
 					 "expected segment by column \"%s\" to be same type as uncompressed column",
 					 NameStr(attr->attname));
 			int16 index = ts_array_position(settings->fd.segmentby, NameStr(attr->attname));
-			*column = (PerColumn){
+			*column = (PerColumn) {
 				.segment_info = segment_info_new(attr),
 				.segmentby_column_index = index,
 			};
@@ -1002,7 +1002,7 @@ row_compressor_init(RowCompressor *row_compressor, const CompressionSettings *se
 			 "missing metadata column '%s' in columnstore table",
 			 COMPRESSION_COLUMN_METADATA_COUNT_NAME);
 
-	*row_compressor = (RowCompressor){
+	*row_compressor = (RowCompressor) {
 		.per_row_ctx = AllocSetContextCreate(CurrentMemoryContext,
 											 "compress chunk per-row",
 											 ALLOCSET_DEFAULT_SIZES),
@@ -1422,7 +1422,7 @@ segment_info_new(Form_pg_attribute column_attr)
 
 	SegmentInfo *segment_info = palloc(sizeof(*segment_info));
 
-	*segment_info = (SegmentInfo){
+	*segment_info = (SegmentInfo) {
 		.typlen = column_attr->attlen,
 		.typ_by_val = column_attr->attbyval,
 	};
@@ -1747,7 +1747,7 @@ create_per_compressed_column(RowDecompressor *decompressor)
 
 		if (!AttributeNumberIsValid(decompressed_colnum))
 		{
-			*per_compressed_col = (PerCompressedColumn){
+			*per_compressed_col = (PerCompressedColumn) {
 				.decompressed_column_offset = -1,
 			};
 			continue;
@@ -1768,7 +1768,7 @@ create_per_compressed_column(RowDecompressor *decompressor)
 				 format_type_be(decompressed_type),
 				 col_name);
 
-		*per_compressed_col = (PerCompressedColumn){
+		*per_compressed_col = (PerCompressedColumn) {
 			.decompressed_column_offset = decompressed_column_offset,
 			.is_compressed = is_compressed,
 			.decompressed_type = decompressed_type,
@@ -2453,7 +2453,7 @@ tsl_compressed_data_in(PG_FUNCTION_ARGS)
 		elog(ERROR, "could not decode base64-encoded compressed data");
 
 	decoded[decoded_len] = '\0';
-	data = (StringInfoData){
+	data = (StringInfoData) {
 		.data = (char *) decoded,
 		.len = decoded_len,
 		.maxlen = decoded_len,

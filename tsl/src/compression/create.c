@@ -1224,7 +1224,7 @@ compression_setting_orderby_get_default(Hypertable *ht, ArrayType *segmentby)
 	if (!OidIsValid(orderby_fn))
 	{
 		/* fallback to original logic */
-		OrderBySettings obs = (OrderBySettings){ 0 };
+		OrderBySettings obs = (OrderBySettings) { 0 };
 		obs = add_time_to_order_by_if_not_included(obs, segmentby, ht);
 		elog(LOG_SERVER_ONLY,
 			 "order_by default: hypertable=\"%s\" function=\"\" confidence=-1",
@@ -1311,7 +1311,7 @@ compression_setting_orderby_get_default(Hypertable *ht, ArrayType *segmentby)
 
 	if (*orderby == '\0')
 	{
-		return (OrderBySettings){ 0 };
+		return (OrderBySettings) { 0 };
 	}
 
 	return ts_compress_parse_order_collist(orderby, ht);

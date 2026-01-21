@@ -1300,7 +1300,7 @@ ts_dimension_info_create_open(Oid table_relid, Name column_name, Datum interval,
 							  regproc partitioning_func)
 {
 	DimensionInfo *info = palloc(sizeof(*info));
-	*info = (DimensionInfo){
+	*info = (DimensionInfo) {
 		.type = DIMENSION_TYPE_OPEN,
 		.table_relid = table_relid,
 		.interval_datum = interval,
@@ -1316,7 +1316,7 @@ ts_dimension_info_create_closed(Oid table_relid, Name column_name, int32 num_sli
 								regproc partitioning_func)
 {
 	DimensionInfo *info = palloc(sizeof(*info));
-	*info = (DimensionInfo){
+	*info = (DimensionInfo) {
 		.type = DIMENSION_TYPE_CLOSED,
 		.table_relid = table_relid,
 		.num_slices = num_slices,

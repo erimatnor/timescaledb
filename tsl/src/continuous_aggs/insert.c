@@ -367,7 +367,7 @@ get_lowest_invalidated_time_for_hypertable(int32 hypertable_id)
 				BTEqualStrategyNumber,
 				F_INT4EQ,
 				Int32GetDatum(hypertable_id));
-	scanctx = (ScannerCtx){
+	scanctx = (ScannerCtx) {
 		.table = catalog_get_table_id(catalog, CONTINUOUS_AGGS_INVALIDATION_THRESHOLD),
 		.index = catalog_get_index(catalog,
 								   CONTINUOUS_AGGS_INVALIDATION_THRESHOLD,

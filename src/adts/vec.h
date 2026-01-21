@@ -148,7 +148,7 @@ VEC_RESERVE(VEC_TYPE *vec, uint32 additional)
 VEC_SCOPE void
 VEC_INIT(VEC_TYPE *vec, MemoryContext ctx, uint32 nelements)
 {
-	*vec = (VEC_TYPE){
+	*vec = (VEC_TYPE) {
 		.ctx = ctx,
 	};
 	if (nelements > 0)
@@ -174,7 +174,7 @@ VEC_FREE_DATA(VEC_TYPE *vec)
 	if (vec->data != NULL)
 		pfree(vec->data);
 	/* zero out all the vec data except the memory context so it can be reused */
-	*vec = (VEC_TYPE){
+	*vec = (VEC_TYPE) {
 		.ctx = vec->ctx,
 	};
 }

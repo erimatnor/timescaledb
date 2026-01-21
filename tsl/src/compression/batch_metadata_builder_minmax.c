@@ -32,9 +32,9 @@ batch_metadata_builder_minmax_create(Oid type_oid, Oid collation, int min_attr_o
 				 errmsg("could not identify an less-than operator for type %s",
 						format_type_be(type_oid))));
 
-	*builder = (BatchMetadataBuilderMinMax){
+	*builder = (BatchMetadataBuilderMinMax) {
 		.functions =
-			(BatchMetadataBuilder){
+			(BatchMetadataBuilder) {
 				.update_val = minmax_update_val,
 				.update_null = minmax_update_null,
 				.insert_to_compressed_row = minmax_insert_to_compressed_row,

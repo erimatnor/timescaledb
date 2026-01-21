@@ -41,7 +41,8 @@ extern void *null_compressor_get_dummy_block(void);
 	{                                                                                              \
 		.iterator_init_forward = null_decompression_iterator_from_datum_forward,                   \
 		.iterator_init_reverse = null_decompression_iterator_from_datum_reverse,                   \
-		.decompress_all = NULL, .compressed_data_send = null_compressed_send,                      \
+		.decompress_all = NULL,                                                                    \
+		.compressed_data_send = null_compressed_send,                                              \
 		.compressed_data_recv = null_compressed_recv,                                              \
 		.compressor_for_type = null_compressor_for_type,                                           \
 		.compressed_data_storage = TOAST_STORAGE_EXTERNAL,                                         \

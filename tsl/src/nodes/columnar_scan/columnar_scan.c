@@ -870,9 +870,9 @@ cost_batch_sorted_merge(PlannerInfo *root, const CompressionInfo *compression_in
 			   colname,
 			   compression_info->compressed_rte->relid);
 		Var *var = palloc(sizeof(Var));
-		*var = (Var){ .xpr.type = T_Var,
-					  .varno = compression_info->compressed_rel->relid,
-					  .varattno = compressed_attno };
+		*var = (Var) { .xpr.type = T_Var,
+					   .varno = compression_info->compressed_rel->relid,
+					   .varattno = compressed_attno };
 		segmentby_groupexprs = lappend(segmentby_groupexprs, var);
 	}
 	const double open_batches_estimated =

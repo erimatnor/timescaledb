@@ -325,7 +325,7 @@ static inline uint64
 calculate_hash(PGFunction hash_function, FmgrInfo *finfo, Datum needle)
 {
 	LOCAL_FCINFO(hashfcinfo, 2);
-	*hashfcinfo = (FunctionCallInfoBaseData){ 0 };
+	*hashfcinfo = (FunctionCallInfoBaseData) { 0 };
 
 	/*
 	 * Our hashing is not collation-sensitive, but the Postgres hashing functions
@@ -710,9 +710,9 @@ batch_metadata_builder_bloom1_create(Oid type_oid, int bloom_attr_offset)
 	const int varlena_bytes = bloom1_varlena_alloc_size(desired_bits);
 
 	Bloom1MetadataBuilder *builder = palloc(sizeof(*builder));
-	*builder = (Bloom1MetadataBuilder){
+	*builder = (Bloom1MetadataBuilder) {
 		.functions =
-			(BatchMetadataBuilder){
+			(BatchMetadataBuilder) {
 				.update_val = bloom1_update_val,
 				.update_null = bloom1_update_null,
 				.insert_to_compressed_row = bloom1_insert_to_compressed_row,

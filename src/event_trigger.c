@@ -165,7 +165,7 @@ make_event_trigger_drop_view(char *view_name, char *schema)
 {
 	EventTriggerDropView *obj = palloc(sizeof(*obj));
 
-	*obj = (EventTriggerDropView){
+	*obj = (EventTriggerDropView) {
 		.obj = { .type = EVENT_TRIGGER_DROP_VIEW },
 		.view_name = view_name,
 		.schema = schema,

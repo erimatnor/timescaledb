@@ -45,7 +45,8 @@ get_bytes_view(CompressedColumnValues *column_values, int arrow_row)
 	const int32 value_bytes = ((uint32 *) column_values->buffers[1])[arrow_row + 1] - start;
 	Assert(value_bytes >= 0);
 
-	return (BytesView){ .len = value_bytes, .data = &((uint8 *) column_values->buffers[2])[start] };
+	return (BytesView) { .len = value_bytes,
+						 .data = &((uint8 *) column_values->buffers[2])[start] };
 }
 
 static pg_attribute_always_inline void

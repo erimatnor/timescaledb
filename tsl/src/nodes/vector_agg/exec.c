@@ -83,7 +83,7 @@ vector_slot_evaluate_expression(DecompressContext *dcontext, TupleTableSlot *slo
 			Ensure(false,
 				   "wrong node type %s for vector expression",
 				   ts_get_node_name((Node *) argument));
-			return (CompressedColumnValues){ .decompression_type = DT_Invalid };
+			return (CompressedColumnValues) { .decompression_type = DT_Invalid };
 	}
 }
 

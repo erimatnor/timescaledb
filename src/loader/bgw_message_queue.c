@@ -212,10 +212,10 @@ bgw_message_create(BgwMessageType message_type, Oid db_oid)
 
 	seg = dsm_create(BGW_ACK_QUEUE_SIZE, 0);
 
-	*message = (BgwMessage){ .message_type = message_type,
-							 .sender_pid = MyProcPid,
-							 .db_oid = db_oid,
-							 .ack_dsm_handle = dsm_segment_handle(seg) };
+	*message = (BgwMessage) { .message_type = message_type,
+							  .sender_pid = MyProcPid,
+							  .db_oid = db_oid,
+							  .ack_dsm_handle = dsm_segment_handle(seg) };
 
 	return message;
 }

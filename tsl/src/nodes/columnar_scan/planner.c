@@ -409,13 +409,13 @@ build_decompression_map(DecompressionMapContext *context, List *compressed_outpu
 		 */
 		if (uncompressed_chunk_attno != InvalidAttrNumber)
 		{
-			context->uncompressed_attno_info[uncompressed_chunk_attno] = (UncompressedColumnInfo){
+			context->uncompressed_attno_info[uncompressed_chunk_attno] = (UncompressedColumnInfo) {
 				.bulk_decompression_possible = bulk_decompression_possible,
 				.custom_scan_attno = InvalidAttrNumber,
 			};
 		}
 
-		context->compressed_attno_info[compressed_chunk_attno] = (CompressedColumnInfo){
+		context->compressed_attno_info[compressed_chunk_attno] = (CompressedColumnInfo) {
 			.bulk_decompression_possible = bulk_decompression_possible,
 			.uncompressed_chunk_attno = destination_attno,
 			.is_segmentby = is_segment,

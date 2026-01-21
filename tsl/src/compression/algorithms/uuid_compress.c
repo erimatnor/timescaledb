@@ -338,7 +338,7 @@ uuid_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 	UuidType *uuid_values = (UuidType *) uuid_iter->uuid_buffer->buffers[1];
 
 	if (uuid_iter->position >= uuid_iter->total_elements)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -348,7 +348,7 @@ uuid_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 		if (!arrow_row_is_valid(validity_bitmap, uuid_iter->position))
 		{
 			uuid_iter->position++;
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 		}
@@ -357,7 +357,7 @@ uuid_decompression_iterator_try_next_forward(DecompressionIterator *iter)
 	UuidType *current_uuid = &uuid_values[uuid_iter->position];
 	uuid_iter->position++;
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = PointerGetDatum(current_uuid),
 	};
 }
@@ -390,7 +390,7 @@ uuid_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 	UuidType *uuid_values = (UuidType *) uuid_iter->uuid_buffer->buffers[1];
 
 	if (uuid_iter->position < 0)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -400,7 +400,7 @@ uuid_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 		if (!arrow_row_is_valid(validity_bitmap, uuid_iter->position))
 		{
 			uuid_iter->position--;
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 		}
@@ -410,7 +410,7 @@ uuid_decompression_iterator_try_next_reverse(DecompressionIterator *iter)
 	UuidType *current_uuid = &uuid_values[uuid_iter->position];
 	uuid_iter->position--;
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = PointerGetDatum(current_uuid),
 	};
 }
@@ -506,7 +506,7 @@ uuid_compressor_for_type(Oid element_type)
 	switch (element_type)
 	{
 		case UUIDOID:
-			*compressor = (ExtendedCompressor){ .base = uuid_compressor_initializer };
+			*compressor = (ExtendedCompressor) { .base = uuid_compressor_initializer };
 			return &compressor->base;
 		default:
 			elog(ERROR, "invalid type for uuid compressor \"%s\"", format_type_be(element_type));
@@ -723,7 +723,7 @@ decompression_iterator_init(UuidDecompressionIterator *iter, void *compressed, O
 		uuid_decompress_all(PointerGetDatum(compressed), element_type, CurrentMemoryContext);
 	int32 total_elements = arrow_array->length;
 
-	*iter = (UuidDecompressionIterator){
+	*iter = (UuidDecompressionIterator) {
 		.base = { .compression_algorithm = COMPRESSION_ALGORITHM_UUID,
 				  .forward = forward,
 				  .element_type = element_type,

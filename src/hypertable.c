@@ -756,7 +756,7 @@ ts_hypertable_drop(Hypertable *hypertable, DropBehavior behavior)
 	 * clean up the catalog entry. */
 	if (OidIsValid(hypertable->main_table_relid))
 	{
-		ObjectAddress hypertable_addr = (ObjectAddress){
+		ObjectAddress hypertable_addr = (ObjectAddress) {
 			.classId = RelationRelationId,
 			.objectId = hypertable->main_table_relid,
 		};

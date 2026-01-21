@@ -24,7 +24,7 @@ ts_telemetry_event_truncate(void)
 		.schemaname = CATALOG_SCHEMA_NAME,
 		.relname = TELEMETRY_EVENT_TABLE_NAME,
 	};
-	ExecuteTruncate(&(TruncateStmt){
+	ExecuteTruncate(&(TruncateStmt) {
 		.type = T_TruncateStmt,
 		.relations = list_make1(&rv),
 		.behavior = DROP_RESTRICT,

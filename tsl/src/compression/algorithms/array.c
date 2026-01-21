@@ -182,7 +182,7 @@ Compressor *
 array_compressor_for_type(Oid element_type)
 {
 	ExtendedCompressor *compressor = palloc(sizeof(*compressor));
-	*compressor = (ExtendedCompressor){
+	*compressor = (ExtendedCompressor) {
 		.base = array_compressor,
 		.element_type = element_type,
 	};
@@ -247,7 +247,7 @@ ArrayCompressorSerializationInfo *
 array_compressor_get_serialization_info(ArrayCompressor *compressor)
 {
 	ArrayCompressorSerializationInfo *info = palloc(sizeof(*info));
-	*info = (ArrayCompressorSerializationInfo){
+	*info = (ArrayCompressorSerializationInfo) {
 		.sizes = simple8brle_compressor_finish(&compressor->sizes),
 		.nulls = compressor->has_nulls ? simple8brle_compressor_finish(&compressor->nulls) : NULL,
 		.data = compressor->data,
@@ -315,7 +315,7 @@ array_compressed_from_serialization_info(ArrayCompressorSerializationInfo *info,
 
 	compressed_data = palloc0(compressed_size);
 	compressed_array = (ArrayCompressed *) compressed_data;
-	*compressed_array = (ArrayCompressed){
+	*compressed_array = (ArrayCompressed) {
 		.compression_algorithm = COMPRESSION_ALGORITHM_ARRAY,
 		.has_nulls = info->nulls != NULL,
 		.element_type = element_type,
@@ -421,19 +421,19 @@ array_decompression_iterator_try_next_forward(DecompressionIterator *general_ite
 		Simple8bRleDecompressResult null =
 			simple8brle_decompression_iterator_try_next_forward(&iter->nulls);
 		if (null.is_done)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_done = true,
 			};
 
 		if (null.val != 0)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 	}
 
 	datum_size = simple8brle_decompression_iterator_try_next_forward(&iter->sizes);
 	if (datum_size.is_done)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -444,7 +444,7 @@ array_decompression_iterator_try_next_forward(DecompressionIterator *general_ite
 	iter->data_offset += datum_size.val;
 	CheckCompressedData(iter->data + iter->data_offset == start_pointer);
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = val,
 	};
 }
@@ -860,19 +860,19 @@ array_decompression_iterator_try_next_reverse(DecompressionIterator *base_iter)
 		Simple8bRleDecompressResult null =
 			simple8brle_decompression_iterator_try_next_reverse(&iter->nulls);
 		if (null.is_done)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_done = true,
 			};
 
 		if (null.val != 0)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 	}
 
 	datum_size = simple8brle_decompression_iterator_try_next_reverse(&iter->sizes);
 	if (datum_size.is_done)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
@@ -882,7 +882,7 @@ array_decompression_iterator_try_next_reverse(DecompressionIterator *base_iter)
 	start_pointer = iter->data + iter->data_offset;
 	val = bytes_to_datum_and_advance(iter->deserializer, &start_pointer);
 
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = val,
 	};
 }

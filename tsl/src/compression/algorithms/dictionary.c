@@ -167,7 +167,7 @@ Compressor *
 dictionary_compressor_for_type(Oid element_type)
 {
 	ExtendedCompressor *compressor = palloc(sizeof(*compressor));
-	*compressor = (ExtendedCompressor){
+	*compressor = (ExtendedCompressor) {
 		.base = dictionary_compressor,
 		.element_type = element_type,
 	};
@@ -268,7 +268,7 @@ compressor_get_serialization_info(DictionaryCompressor *compressor)
 	Size header_size = sizeof(DictionaryCompressed);
 
 	if (sizes.dictionary_compressed_indexes == NULL)
-		return (DictionaryCompressorSerializationInfo){ .is_all_null = true };
+		return (DictionaryCompressorSerializationInfo) { .is_all_null = true };
 
 	sizes.bitmaps_size = simple8brle_serialized_total_size(dict_indexes);
 	sizes.total_size = MAXALIGN(header_size) + sizes.bitmaps_size;
@@ -792,24 +792,24 @@ dictionary_decompression_iterator_try_next_forward(DecompressionIterator *iter_b
 		Simple8bRleDecompressResult null =
 			simple8brle_decompression_iterator_try_next_forward(&iter->nulls);
 		if (null.is_done)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_done = true,
 			};
 
 		if (null.val != 0)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 	}
 
 	result = simple8brle_decompression_iterator_try_next_forward(&iter->bitmap);
 	if (result.is_done)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
 	CheckCompressedData(result.val < iter->compressed->num_distinct);
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = iter->values[result.val],
 		.is_null = false,
 		.is_done = false,
@@ -831,24 +831,24 @@ dictionary_decompression_iterator_try_next_reverse(DecompressionIterator *iter_b
 		Simple8bRleDecompressResult null =
 			simple8brle_decompression_iterator_try_next_reverse(&iter->nulls);
 		if (null.is_done)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_done = true,
 			};
 
 		if (null.val != 0)
-			return (DecompressResult){
+			return (DecompressResult) {
 				.is_null = true,
 			};
 	}
 
 	result = simple8brle_decompression_iterator_try_next_reverse(&iter->bitmap);
 	if (result.is_done)
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = true,
 		};
 
 	Assert(result.val < iter->compressed->num_distinct);
-	return (DecompressResult){
+	return (DecompressResult) {
 		.val = iter->values[result.val],
 		.is_null = false,
 		.is_done = false,

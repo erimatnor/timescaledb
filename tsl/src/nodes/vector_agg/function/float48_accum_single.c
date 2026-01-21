@@ -60,7 +60,7 @@ FUNCTION_NAME(init)(void *restrict agg_states, int n)
 	FUNCTION_NAME(state) *states = (FUNCTION_NAME(state) *) agg_states;
 	for (int i = 0; i < n; i++)
 	{
-		states[i] = (FUNCTION_NAME(state)){ 0 };
+		states[i] = (FUNCTION_NAME(state)) { 0 };
 	}
 }
 

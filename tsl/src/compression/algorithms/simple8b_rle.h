@@ -356,7 +356,7 @@ simple8brle_serialized_total_size(const Simple8bRleSerialized *data)
 static void
 simple8brle_compressor_init(Simple8bRleCompressor *compressor)
 {
-	*compressor = (Simple8bRleCompressor){
+	*compressor = (Simple8bRleCompressor) {
 		.num_elements = 0,
 		.num_buffered_elements = 0,
 		.last_value = 0,
@@ -841,7 +841,7 @@ simple8brle_compressor_finish(Simple8bRleCompressor *compressor)
 	Assert(compressor->compressed_data.num_elements ==
 		   simple8brle_compressor_num_selectors(compressor));
 
-	*compressed = (Simple8bRleSerialized){
+	*compressed = (Simple8bRleSerialized) {
 		.num_elements = compressor->num_elements,
 		.num_blocks = compressor->compressed_data.num_elements,
 	};
@@ -899,7 +899,7 @@ simple8brle_compressor_finish_into(Simple8bRleCompressor *compressor, char *dest
 	Assert(compressor->compressed_data.num_elements ==
 		   simple8brle_compressor_num_selectors(compressor));
 
-	*compressed = (Simple8bRleSerialized){
+	*compressed = (Simple8bRleSerialized) {
 		.num_elements = compressor->num_elements,
 		.num_blocks = compressor->compressed_data.num_elements,
 	};
@@ -935,7 +935,7 @@ simple8brle_decompression_iterator_init_common(Simple8bRleDecompressionIterator 
 	uint32 num_selector_slots =
 		simple8brle_num_selector_slots_for_num_blocks(compressed->num_blocks);
 
-	*iter = (Simple8bRleDecompressionIterator){
+	*iter = (Simple8bRleDecompressionIterator) {
 		.compressed_data = compressed->slots + num_selector_slots,
 		.num_blocks = compressed->num_blocks,
 		.current_compressed_pos = 0,
@@ -1019,7 +1019,7 @@ simple8brle_decompression_iterator_try_next_forward(Simple8bRleDecompressionIter
 {
 	uint64 uncompressed;
 	if (iter->num_elements_returned >= iter->num_elements)
-		return (Simple8bRleDecompressResult){
+		return (Simple8bRleDecompressResult) {
 			.is_done = true,
 		};
 
@@ -1043,7 +1043,7 @@ simple8brle_decompression_iterator_try_next_forward(Simple8bRleDecompressionIter
 	iter->num_elements_returned += 1;
 	iter->current_in_compressed_pos += 1;
 
-	return (Simple8bRleDecompressResult){
+	return (Simple8bRleDecompressResult) {
 		.val = uncompressed,
 	};
 }
@@ -1053,7 +1053,7 @@ simple8brle_decompression_iterator_try_next_reverse(Simple8bRleDecompressionIter
 {
 	uint64 uncompressed;
 	if (iter->num_elements_returned >= iter->num_elements)
-		return (Simple8bRleDecompressResult){
+		return (Simple8bRleDecompressResult) {
 			.is_done = true,
 		};
 
@@ -1072,7 +1072,7 @@ simple8brle_decompression_iterator_try_next_reverse(Simple8bRleDecompressionIter
 	iter->num_elements_returned += 1;
 	iter->current_in_compressed_pos -= 1;
 
-	return (Simple8bRleDecompressResult){
+	return (Simple8bRleDecompressResult) {
 		.val = uncompressed,
 	};
 }
@@ -1084,7 +1084,7 @@ simple8brle_decompression_iterator_try_next_reverse(Simple8bRleDecompressionIter
 static pg_attribute_always_inline Simple8bRleBlock
 simple8brle_block_create(uint8 selector, uint64 data)
 {
-	Simple8bRleBlock block = (Simple8bRleBlock){
+	Simple8bRleBlock block = (Simple8bRleBlock) {
 		.selector = selector,
 		.data = data,
 	};

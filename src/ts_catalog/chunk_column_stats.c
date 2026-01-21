@@ -971,7 +971,21 @@ ts_chunk_column_stats_insert(const Hypertable *ht, const Chunk *chunk)
 {
 	Size range_index = 0;
 	ChunkRangeSpace *rs = ht->range_space;
+	ChunkRangeSpace *local_rs = NULL;
 	MemoryContext work_mcxt, orig_mcxt;
+
+	/*
+	 * If range_space is NULL but chunk skipping is enabled, the hypertable
+	 * may have been cached before chunk skipping was enabled. In this case,
+	 * we need to scan the catalog directly to find any column stats entries.
+	 */
+	if (rs == NULL && ts_guc_enable_chunk_skipping)
+	{
+		local_rs = ts_chunk_column_stats_range_space_scan(ht->fd.id,
+														  ht->main_table_relid,
+														  CurrentMemoryContext);
+		rs = local_rs;
+	}
 
 	/* Quick check. Bail out early if none */
 	if (rs == NULL)
@@ -1004,6 +1018,10 @@ ts_chunk_column_stats_insert(const Hypertable *ht, const Chunk *chunk)
 
 	MemoryContextSwitchTo(orig_mcxt);
 	MemoryContextDelete(work_mcxt);
+
+	/* Free locally allocated range_space if we created one */
+	if (local_rs != NULL)
+		pfree(local_rs);
 
 	return range_index;
 }

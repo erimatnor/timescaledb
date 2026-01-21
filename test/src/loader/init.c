@@ -50,10 +50,10 @@ post_analyze_hook(ParseState *pstate, Query *query, JumbleState *jstate)
 	if (ts_extension_is_loaded_and_not_upgrading())
 		elog(WARNING, "mock post_analyze_hook " STR(TIMESCALEDB_VERSION_MOD));
 
-		/*
-		 * a symbol needed by IsParallelWorker is not exported on windows so we do
-		 * not perform this check
-		 */
+	/*
+	 * a symbol needed by IsParallelWorker is not exported on windows so we do
+	 * not perform this check
+	 */
 #ifndef WIN32
 	if (prev_post_parse_analyze_hook != NULL && !IsParallelWorker())
 		elog(ERROR, "the extension called with a loader should always have a NULL prev hook");

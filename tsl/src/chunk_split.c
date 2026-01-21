@@ -1179,12 +1179,12 @@ chunk_split_chunk(PG_FUNCTION_ARGS)
 			.noncompressed_tupdesc = CreateTupleDescCopy(RelationGetDescr(srcrel)),
 		};
 
-		csplit_relations[0] = (SplitRelationInfo){ .relid = compress_settings->fd.compress_relid,
-												   .chunk_id = chunk->fd.compressed_chunk_id,
-												   .heap_swap = true };
-		csplit_relations[1] = (SplitRelationInfo){ .relid = new_compressed_chunk->table_id,
-												   .chunk_id = new_chunk->fd.compressed_chunk_id,
-												   .heap_swap = false };
+		csplit_relations[0] = (SplitRelationInfo) { .relid = compress_settings->fd.compress_relid,
+													.chunk_id = chunk->fd.compressed_chunk_id,
+													.heap_swap = true };
+		csplit_relations[1] = (SplitRelationInfo) { .relid = new_compressed_chunk->table_id,
+													.chunk_id = new_chunk->fd.compressed_chunk_id,
+													.heap_swap = false };
 
 		Relation compressed_rel =
 			table_open(compress_settings->fd.compress_relid, AccessExclusiveLock);

@@ -228,25 +228,25 @@ delta_delta_compressor_for_type(Oid element_type)
 	switch (element_type)
 	{
 		case BOOLOID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_bool_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_bool_compressor };
 			return &compressor->base;
 		case INT2OID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_uint16_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_uint16_compressor };
 			return &compressor->base;
 		case INT4OID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_uint32_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_uint32_compressor };
 			return &compressor->base;
 		case INT8OID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_uint64_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_uint64_compressor };
 			return &compressor->base;
 		case DATEOID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_date_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_date_compressor };
 			return &compressor->base;
 		case TIMESTAMPOID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_timestamp_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_timestamp_compressor };
 			return &compressor->base;
 		case TIMESTAMPTZOID:
-			*compressor = (ExtendedCompressor){ .base = deltadelta_timestamptz_compressor };
+			*compressor = (ExtendedCompressor) { .base = deltadelta_timestamptz_compressor };
 			return &compressor->base;
 		default:
 			elog(ERROR,
@@ -523,7 +523,7 @@ convert_from_internal(DecompressResultInternal res_internal, Oid element_type)
 {
 	if (res_internal.is_done || res_internal.is_null)
 	{
-		return (DecompressResult){
+		return (DecompressResult) {
 			.is_done = res_internal.is_done,
 			.is_null = res_internal.is_null,
 		};
@@ -532,31 +532,31 @@ convert_from_internal(DecompressResultInternal res_internal, Oid element_type)
 	switch (element_type)
 	{
 		case BOOLOID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = BoolGetDatum(res_internal.val),
 			};
 		case INT8OID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = Int64GetDatum(res_internal.val),
 			};
 		case INT4OID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = Int32GetDatum(res_internal.val),
 			};
 		case INT2OID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = Int16GetDatum(res_internal.val),
 			};
 		case DATEOID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = DateADTGetDatum(res_internal.val),
 			};
 		case TIMESTAMPTZOID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = TimestampTzGetDatum(res_internal.val),
 			};
 		case TIMESTAMPOID:
-			return (DecompressResult){
+			return (DecompressResult) {
 				.val = TimestampGetDatum(res_internal.val),
 			};
 		default:
@@ -580,14 +580,14 @@ delta_delta_decompression_iterator_try_next_forward_internal(DeltaDeltaDecompres
 		Simple8bRleDecompressResult result =
 			simple8brle_decompression_iterator_try_next_forward(&iter->nulls);
 		if (result.is_done)
-			return (DecompressResultInternal){
+			return (DecompressResultInternal) {
 				.is_done = true,
 			};
 
 		if (result.val != 0)
 		{
 			CheckCompressedData(result.val == 1);
-			return (DecompressResultInternal){
+			return (DecompressResultInternal) {
 				.is_null = true,
 			};
 		}
@@ -596,7 +596,7 @@ delta_delta_decompression_iterator_try_next_forward_internal(DeltaDeltaDecompres
 	result = simple8brle_decompression_iterator_try_next_forward(&iter->delta_deltas);
 
 	if (result.is_done)
-		return (DecompressResultInternal){
+		return (DecompressResultInternal) {
 			.is_done = true,
 		};
 
@@ -605,7 +605,7 @@ delta_delta_decompression_iterator_try_next_forward_internal(DeltaDeltaDecompres
 	iter->prev_delta += delta_delta;
 	iter->prev_val += iter->prev_delta;
 
-	return (DecompressResultInternal){
+	return (DecompressResultInternal) {
 		.val = iter->prev_val,
 		.is_null = false,
 		.is_done = false,
@@ -673,14 +673,14 @@ delta_delta_decompression_iterator_try_next_reverse_internal(DeltaDeltaDecompres
 		Simple8bRleDecompressResult result =
 			simple8brle_decompression_iterator_try_next_reverse(&iter->nulls);
 		if (result.is_done)
-			return (DecompressResultInternal){
+			return (DecompressResultInternal) {
 				.is_done = true,
 			};
 
 		if (result.val != 0)
 		{
 			Assert(result.val == 1);
-			return (DecompressResultInternal){
+			return (DecompressResultInternal) {
 				.is_null = true,
 			};
 		}
@@ -689,7 +689,7 @@ delta_delta_decompression_iterator_try_next_reverse_internal(DeltaDeltaDecompres
 	result = simple8brle_decompression_iterator_try_next_reverse(&iter->delta_deltas);
 
 	if (result.is_done)
-		return (DecompressResultInternal){
+		return (DecompressResultInternal) {
 			.is_done = true,
 		};
 
@@ -699,7 +699,7 @@ delta_delta_decompression_iterator_try_next_reverse_internal(DeltaDeltaDecompres
 	iter->prev_val -= iter->prev_delta;
 	iter->prev_delta -= delta_delta;
 
-	return (DecompressResultInternal){
+	return (DecompressResultInternal) {
 		.val = val,
 	};
 }

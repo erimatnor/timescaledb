@@ -1655,7 +1655,7 @@ process_drop_hypertable(ProcessUtilityArgs *args, DropStmt *stmt)
 
 						if (OidIsValid(chunk->table_id))
 						{
-							ObjectAddress chunk_addr = (ObjectAddress){
+							ObjectAddress chunk_addr = (ObjectAddress) {
 								.classId = RelationRelationId,
 								.objectId = chunk->table_id,
 							};

@@ -748,7 +748,7 @@ bgw_job_delete_scan(ScanKeyData *scankey, int32 job_id)
 	/* get job lock before relation lock */
 	get_job_lock_for_delete(job_id);
 
-	scanctx = (ScannerCtx){
+	scanctx = (ScannerCtx) {
 		.table = catalog_get_table_id(catalog, BGW_JOB),
 		.index = catalog_get_index(catalog, BGW_JOB, BGW_JOB_PKEY_IDX),
 		.nkeys = 1,

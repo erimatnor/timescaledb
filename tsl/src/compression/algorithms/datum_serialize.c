@@ -50,7 +50,7 @@ create_datum_serializer(Oid type_oid)
 		elog(ERROR, "cache lookup failed for type %u", type_oid);
 	type = (Form_pg_type) GETSTRUCT(tup);
 
-	*res = (DatumSerializer){
+	*res = (DatumSerializer) {
 		.type_oid = type_oid,
 		.type_by_val = type->typbyval,
 		.type_len = type->typlen,
@@ -268,7 +268,7 @@ create_datum_deserializer(Oid type_oid)
 		elog(ERROR, "cache lookup failed for type %u", type_oid);
 	type = (Form_pg_type) GETSTRUCT(tup);
 
-	*res = (DatumDeserializer){
+	*res = (DatumDeserializer) {
 		.type_by_val = type->typbyval,
 		.type_len = type->typlen,
 		.type_align = type->typalign,

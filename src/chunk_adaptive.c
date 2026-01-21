@@ -838,7 +838,7 @@ ChunkSizingInfo *
 ts_chunk_sizing_info_get_default_disabled(Oid table_relid)
 {
 	ChunkSizingInfo *chunk_sizing_info = palloc(sizeof(*chunk_sizing_info));
-	*chunk_sizing_info = (ChunkSizingInfo){
+	*chunk_sizing_info = (ChunkSizingInfo) {
 		.table_relid = table_relid,
 		.target_size = NULL,
 		.func = get_default_chunk_sizing_fn_oid(),

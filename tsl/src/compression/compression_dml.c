@@ -1571,7 +1571,7 @@ make_batchfilter(char *column_name, StrategyNumber strategy, Oid collation, RegP
 {
 	BatchFilter *segment_filter = palloc0(sizeof(*segment_filter));
 
-	*segment_filter = (BatchFilter){
+	*segment_filter = (BatchFilter) {
 		.strategy = strategy,
 		.collation = collation,
 		.opcode = opcode,

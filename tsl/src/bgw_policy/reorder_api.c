@@ -34,10 +34,7 @@
  * If no such length is specified for the hypertable, then
  * the default is 4 days, which is approximately 1/2 of the default chunk size, 7 days.
  */
-#define DEFAULT_SCHEDULE_INTERVAL                                                                  \
-	{                                                                                              \
-		.day = 4                                                                                   \
-	}
+#define DEFAULT_SCHEDULE_INTERVAL { .day = 4 }
 
 /* Default max runtime for a reorder job is unlimited for now */
 #define DEFAULT_MAX_RUNTIME                                                                        \
