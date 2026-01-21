@@ -1155,12 +1155,14 @@ EOF
     log_info "Creating PR in repository: ${TARGET_REPOSITORY}"
     log_info "Base: ${BASE_BRANCH}, Head: ${branch_name}"
 
-    # Save PR body to file for debugging
-    echo "${pr_body}" > "${WORK_DIR}/pr_body_${test_name}.md"
+    # Save PR body to file for debugging (use safe_test_name to avoid path traversal)
+    local safe_test_name_for_file
+    safe_test_name_for_file=$(echo "${test_name}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//; s/-$//' | cut -c1-40)
+    echo "${pr_body}" > "${WORK_DIR}/pr_body_${safe_test_name_for_file}.md"
 
     local pr_url
     local gh_output
-    gh_output="${WORK_DIR}/gh_pr_output_${test_name}.txt"
+    gh_output="${WORK_DIR}/gh_pr_output_${safe_test_name_for_file}.txt"
 
     # Determine head ref format
     local head_ref="${branch_name}"

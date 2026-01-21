@@ -95,6 +95,8 @@ The label check allows users to disable review handling on a PR by removing the 
 | `pull_request_review` | Fires when review submitted on PR with `claude-code` label |
 | `workflow_dispatch` | Manual trigger with required `pr_number` input |
 
+**Note**: Manual triggers (`workflow_dispatch`) bypass reviewer trust checks since the person triggering the workflow is assumed to be authorized. Author verification still applies.
+
 For automatic triggers (`pull_request_review`):
 - PR must have `claude-code` label (user-controllable filter)
 - Review state must be `changes_requested` or `commented`
