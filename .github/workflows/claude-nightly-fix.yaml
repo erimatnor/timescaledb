@@ -60,7 +60,7 @@ jobs:
       id: check-prereqs
       run: |
         skip=false
-        if [[ -z "${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}" ]]; then
+        if [[ -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
           echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
           skip=true
         fi
@@ -69,6 +69,8 @@ jobs:
           skip=true
         fi
         echo "skip=${skip}" >> $GITHUB_OUTPUT
+      env:
+        VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
 
     - name: Determine run ID to analyze
       if: steps.check-prereqs.outputs.skip != 'true'
@@ -76,10 +78,11 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
+        INPUTS_RUN_ID: ${{ inputs.run_id }}
       run: |
         if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
           # Manual trigger: use provided run_id
-          RUN_ID="${{ inputs.run_id }}"
+          RUN_ID="${INPUTS_RUN_ID}"
           echo "Using provided run ID: ${RUN_ID}"
 
         elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
@@ -110,6 +113,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Setup Node.js
       if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
@@ -134,10 +138,12 @@ jobs:
       env:
         APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
         APP_ID: ${{ secrets.CLAUDE_APP_ID }}
+        VARS_CLAUDE_GIT_AUTHOR_NAME: ${{ vars.CLAUDE_GIT_AUTHOR_NAME }}
+        VARS_CLAUDE_GIT_AUTHOR_EMAIL: ${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}
       run: |
         # Use configured variables if set, otherwise fall back to GitHub App bot identity
-        GIT_USER="${{ vars.CLAUDE_GIT_AUTHOR_NAME }}"
-        GIT_EMAIL="${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}"
+        GIT_USER="${VARS_CLAUDE_GIT_AUTHOR_NAME}"
+        GIT_EMAIL="${VARS_CLAUDE_GIT_AUTHOR_EMAIL}"
         if [[ -z "${GIT_USER}" ]]; then
           GIT_USER="${APP_SLUG}[bot]"
         fi
