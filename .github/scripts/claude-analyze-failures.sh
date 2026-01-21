@@ -632,15 +632,14 @@ commit_claude_changes() {
     local title=""
     if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
         title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
-            grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
+            grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE\|COMMIT_MESSAGE:" | \
+            head -1 | \
             sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
-            tr '\n' ' ' | \
-            sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' | \
             cut -c1-72)
     fi
 
-    # Fallback title if no markers found
-    if [[ -z "${title}" ]]; then
+    # Fallback title if extraction failed or result is invalid
+    if [[ -z "${title}" ]] || [[ "${#title}" -gt 72 ]] || [[ "${title}" == *"COMMIT_MESSAGE"* ]]; then
         title="Fix test: ${test_name}"
     fi
 
@@ -1099,21 +1098,25 @@ create_pull_request() {
         # Extract title from Claude's output
         if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
             pr_title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
-                grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
-                sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
-                tr '\n' ' ' | \
-                sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+                grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE\|COMMIT_MESSAGE:" | \
+                head -1 | \
+                sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         fi
     fi
 
-    # Fallback: use commit subject line
-    if [[ -z "${pr_title}" ]]; then
+    # Validate extracted title - reject if empty, too long, or contains markers
+    if [[ -z "${pr_title}" ]] || [[ "${#pr_title}" -gt 256 ]] || [[ "${pr_title}" == *"COMMIT_MESSAGE"* ]]; then
+        # Fallback: use commit subject line
         pr_title=$(git log -1 --format="%s" 2>/dev/null)
     fi
 
     # Final fallback: use test name
-    if [[ -z "${pr_title}" ]] && [[ -n "${test_name}" ]]; then
-        pr_title="Fix test: ${test_name}"
+    if [[ -z "${pr_title}" ]] || [[ "${#pr_title}" -gt 256 ]] || [[ "${pr_title}" == *"COMMIT_MESSAGE"* ]]; then
+        if [[ -n "${test_name}" ]]; then
+            pr_title="Fix test: ${test_name}"
+        else
+            pr_title="Fix nightly test failure"
+        fi
     fi
 
     # Generate commit details for PR body
