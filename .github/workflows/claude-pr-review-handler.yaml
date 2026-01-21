@@ -48,7 +48,7 @@ jobs:
       id: check-prereqs
       run: |
         skip=false
-        if [[ -z "${{ vars.CLAUDE_PR_REVIEW_HANDLER_ENABLED }}" ]]; then
+        if [[ -z "${VARS_CLAUDE_PR_REVIEW_HANDLER_ENABLED}" ]]; then
           echo "CLAUDE_PR_REVIEW_HANDLER_ENABLED variable is not configured, skipping"
           skip=true
         fi
@@ -57,6 +57,8 @@ jobs:
           skip=true
         fi
         echo "skip=${skip}" >> $GITHUB_OUTPUT
+      env:
+        VARS_CLAUDE_PR_REVIEW_HANDLER_ENABLED: ${{ vars.CLAUDE_PR_REVIEW_HANDLER_ENABLED }}
 
     - name: Generate GitHub App token
       if: steps.check-prereqs.outputs.skip != 'true'
@@ -71,24 +73,30 @@ jobs:
       id: pr-info
       env:
         GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        STEPS_GENERATE_TOKEN_OUTPUTS_APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
+        INPUTS_PR_NUMBER: ${{ inputs.pr_number }}
+        GITHUB_EVENT_PULL_REQUEST_USER_LOGIN: ${{ github.event.pull_request.user.login }}
+        GITHUB_EVENT_PULL_REQUEST_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        GITHUB_EVENT_PULL_REQUEST_HEAD_REPO_FULL_NAME: ${{ github.event.pull_request.head.repo.full_name }}
+        GITHUB_EVENT_REVIEW_USER_LOGIN: ${{ github.event.review.user.login }}
       run: |
-        EXPECTED_AUTHOR="${{ steps.generate-token.outputs.app-slug }}[bot]"
+        EXPECTED_AUTHOR="${STEPS_GENERATE_TOKEN_OUTPUTS_APP_SLUG}[bot]"
 
         # For workflow_dispatch, fetch PR info from API
         if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          PR_NUMBER="${{ inputs.pr_number }}"
+          PR_NUMBER="${INPUTS_PR_NUMBER}"
           echo "Fetching PR #${PR_NUMBER} info..."
           PR_INFO=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}")
           ACTUAL_AUTHOR=$(echo "$PR_INFO" | jq -r '.user.login')
           PR_BRANCH=$(echo "$PR_INFO" | jq -r '.head.ref')
           PUSH_REPO=$(echo "$PR_INFO" | jq -r '.head.repo.full_name')
         else
-          ACTUAL_AUTHOR="${{ github.event.pull_request.user.login }}"
-          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
-          PUSH_REPO="${{ github.event.pull_request.head.repo.full_name }}"
+          ACTUAL_AUTHOR="${GITHUB_EVENT_PULL_REQUEST_USER_LOGIN}"
+          PR_BRANCH="${GITHUB_EVENT_PULL_REQUEST_HEAD_REF}"
+          PUSH_REPO="${GITHUB_EVENT_PULL_REQUEST_HEAD_REPO_FULL_NAME}"
 
           # Check reviewer is not the bot itself (prevent loops)
-          REVIEWER="${{ github.event.review.user.login }}"
+          REVIEWER="${GITHUB_EVENT_REVIEW_USER_LOGIN}"
           if [[ "$REVIEWER" == "$EXPECTED_AUTHOR" ]]; then
             echo "::notice::Review submitted by bot itself, skipping to prevent loops"
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -125,16 +133,19 @@ jobs:
         ref: ${{ steps.pr-info.outputs.pr_branch }}
         fetch-depth: 0
         token: ${{ steps.generate-token.outputs.token }}
+        persist-credentials: false
 
     - name: Configure Git
       if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
       env:
         APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
         APP_ID: ${{ secrets.CLAUDE_APP_ID }}
+        VARS_CLAUDE_GIT_AUTHOR_NAME: ${{ vars.CLAUDE_GIT_AUTHOR_NAME }}
+        VARS_CLAUDE_GIT_AUTHOR_EMAIL: ${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}
       run: |
         # Use configured variables if set, otherwise fall back to GitHub App bot identity
-        GIT_USER="${{ vars.CLAUDE_GIT_AUTHOR_NAME }}"
-        GIT_EMAIL="${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}"
+        GIT_USER="${VARS_CLAUDE_GIT_AUTHOR_NAME}"
+        GIT_EMAIL="${VARS_CLAUDE_GIT_AUTHOR_EMAIL}"
         if [[ -z "${GIT_USER}" ]]; then
           GIT_USER="${APP_SLUG}[bot]"
         fi
