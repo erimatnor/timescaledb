@@ -714,7 +714,29 @@ static void
 job_execute_procedure(FuncExpr *funcexpr)
 {
 	CallStmt *call = makeNode(CallStmt);
+#if PG18_GE
+	/*
+	 * PG18 changed CallStmt to use FuncCall instead of FuncExpr.
+	 * We need to create a FuncCall node that matches our FuncExpr.
+	 */
+	FuncCall *funccall = makeNode(FuncCall);
+	char *schema_name = get_namespace_name(get_func_namespace(funcexpr->funcid));
+	char *func_name = get_func_name(funcexpr->funcid);
+	funccall->funcname = list_make2(makeString(schema_name), makeString(func_name));
+	funccall->args = funcexpr->args;
+	funccall->agg_order = NIL;
+	funccall->agg_filter = NULL;
+	funccall->over = NULL;
+	funccall->agg_within_group = false;
+	funccall->agg_star = false;
+	funccall->agg_distinct = false;
+	funccall->func_variadic = false;
+	funccall->funcformat = COERCE_EXPLICIT_CALL;
+	funccall->location = -1;
+	call->funccall = funccall;
+#else
 	call->funcexpr = funcexpr;
+#endif
 	DestReceiver *dest = CreateDestReceiver(DestNone);
 	/* we don't need to create proper param list cause we pass in all arguments as Const */
 	ParamListInfo params = makeParamList(0);
