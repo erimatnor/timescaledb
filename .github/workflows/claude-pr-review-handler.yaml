@@ -28,6 +28,11 @@ on:
 # Restrict default permissions for security - jobs declare only what they need
 permissions: {}
 
+# Run one job at a time per PR
+concurrency:
+  group: claude-handle-review-${{ inputs.pr_number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   handle-review:
     name: Handle PR Review with Claude
@@ -82,14 +87,17 @@ jobs:
           GITHUB_EVENT_PULL_REQUEST_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           GITHUB_EVENT_PULL_REQUEST_HEAD_REPO_FULL_NAME: ${{ github.event.pull_request.head.repo.full_name }}
           GITHUB_EVENT_REVIEW_USER_LOGIN: ${{ github.event.review.user.login }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ASSOCIATION: ${{ github.event.review.author_association }}
         run: |
           EXPECTED_AUTHOR="${STEPS_GENERATE_TOKEN_OUTPUTS_APP_SLUG}[bot]"
 
           # For workflow_dispatch, fetch PR info from API
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             PR_NUMBER="${INPUTS_PR_NUMBER}"
             echo "Fetching PR #${PR_NUMBER} info..."
-            PR_INFO=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}")
+            PR_INFO=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
             ACTUAL_AUTHOR=$(echo "$PR_INFO" | jq -r '.user.login')
             PR_BRANCH=$(echo "$PR_INFO" | jq -r '.head.ref')
             PUSH_REPO=$(echo "$PR_INFO" | jq -r '.head.repo.full_name')
@@ -107,13 +115,12 @@ jobs:
             fi
 
             # Check reviewer has trusted association (OWNER, MEMBER, or COLLABORATOR)
-            ASSOCIATION="${{ github.event.review.author_association }}"
-            if [[ ! "$ASSOCIATION" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
-              echo "::notice::Reviewer association ($ASSOCIATION) is not trusted, skipping"
+            if [[ ! "$GITHUB_ASSOCIATION" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+              echo "::notice::Reviewer association ($GITHUB_ASSOCIATION) is not trusted, skipping"
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
             fi
-            echo "Reviewer association verified: $ASSOCIATION"
+            echo "Reviewer association verified: $GITHUB_ASSOCIATION"
           fi
 
           echo "pr_branch=${PR_BRANCH}" >> $GITHUB_OUTPUT
