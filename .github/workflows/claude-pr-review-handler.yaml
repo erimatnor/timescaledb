@@ -192,6 +192,7 @@ jobs:
           PR_REPOSITORY: ${{ github.repository }}
           PUSH_REPOSITORY: ${{ steps.pr-info.outputs.push_repo }}
           CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]
+          ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-review-output
         run: .github/scripts/claude-handle-pr-review.sh
 
       - name: Upload Claude review handler output
@@ -199,6 +200,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Claude review handler output PR-${{ inputs.pr_number || github.event.pull_request.number }}
-          path: /tmp/claude-review-*/
+          path: claude-review-output/
           if-no-files-found: ignore
           retention-days: 7

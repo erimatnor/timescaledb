@@ -5,8 +5,9 @@ name: Claude Nightly Test Fix
 # 1. Called by the Regression workflow when nightly tests fail (workflow_call)
 # 2. Manually for testing (workflow_dispatch)
 #
-# Required repository variables:
+# Required repository variables (for workflow_call triggers):
 #   CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY - e.g., "timescale/timescaledb"
+#     Acts as an enable flag; if not set, workflow_call triggers are skipped.
 #
 # Required secrets (passed via workflow_call or available in repository):
 #   ANTHROPIC_API_KEY - API key for Claude
@@ -20,6 +21,14 @@ on:
       run_id:
         description: "Workflow run ID to analyze (required)"
         required: true
+        type: string
+      source_repository:
+        description: |
+          Repository to fetch artifacts from. Defaults to the current repo if
+          not specified. Use when, e.g., running from a fork to analyze
+          failures from the parent repo. PRs will still be created in this
+          repo.
+        required: false
         type: string
 
   # Called by the Regression workflow on nightly failures
@@ -61,7 +70,9 @@ jobs:
         id: check-prereqs
         run: |
           skip=false
-          if [[ -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
+          # For workflow_call triggers, require the source repository variable to be set
+          # This acts as an enable/disable flag for automatic triggers
+          if [[ "${EVENT_NAME}" == "workflow_call" && -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
             echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
             skip=true
           fi
@@ -71,6 +82,7 @@ jobs:
           fi
           echo "skip=${skip}" >> $GITHUB_OUTPUT
         env:
+          EVENT_NAME: ${{ github.event_name }}
           VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
           SECRETS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -102,6 +114,31 @@ jobs:
         if: steps.check-prereqs.outputs.skip != 'true'
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Determine source repository
+        if: steps.check-prereqs.outputs.skip != 'true'
+        id: source-repo
+        env:
+          INPUT_SOURCE_REPO: ${{ inputs.source_repository }}
+          VAR_SOURCE_REPO: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
+          CURRENT_REPO: ${{ github.repository }}
+        run: |
+          # Determine the source repository (where to fetch artifacts from)
+          SOURCE_REPO="${INPUT_SOURCE_REPO:-${VAR_SOURCE_REPO:-${CURRENT_REPO}}}"
+          echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
+
+          # Check if source repo is different from current repo (cross-org access needed)
+          SOURCE_OWNER="${SOURCE_REPO%%/*}"
+          CURRENT_OWNER="${CURRENT_REPO%%/*}"
+          if [[ "${SOURCE_OWNER}" != "${CURRENT_OWNER}" ]]; then
+            echo "Cross-org access needed: ${SOURCE_OWNER} -> ${CURRENT_OWNER}"
+            echo "needs_source_token=true" >> $GITHUB_OUTPUT
+            echo "source_owner=${SOURCE_OWNER}" >> $GITHUB_OUTPUT
+            echo "source_repo_name=${SOURCE_REPO##*/}" >> $GITHUB_OUTPUT
+          else
+            echo "Same org, single token sufficient"
+            echo "needs_source_token=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Generate GitHub App token
         if: steps.check-prereqs.outputs.skip != 'true'
         id: generate-token
@@ -109,6 +146,28 @@ jobs:
         with:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+
+      - name: Generate GitHub App token for source repository
+        if: steps.check-prereqs.outputs.skip != 'true' && steps.source-repo.outputs.needs_source_token == 'true'
+        id: generate-source-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ steps.source-repo.outputs.source_owner }}
+          repositories: ${{ steps.source-repo.outputs.source_repo_name }}
+
+      - name: Debug source token permissions
+        if: steps.check-prereqs.outputs.skip != 'true' && steps.source-repo.outputs.needs_source_token == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-source-token.outputs.token }}
+          SOURCE_REPO: ${{ steps.source-repo.outputs.source_repo }}
+        run: |
+          echo "Testing source token access to ${SOURCE_REPO}..."
+          echo "Checking repository access:"
+          gh api "repos/${SOURCE_REPO}" --jq '.full_name' || echo "Failed to access repo"
+          echo "Checking actions access:"
+          gh api "repos/${SOURCE_REPO}/actions/runs?per_page=1" --jq '.total_count' || echo "Failed to access actions"
 
       - name: Configure Git
         if: steps.check-prereqs.outputs.skip != 'true'
@@ -135,11 +194,15 @@ jobs:
         if: steps.check-prereqs.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+          # Token for accessing source repository (for cross-org scenarios)
+          # Falls back to GITHUB_TOKEN if not needed
+          SOURCE_GITHUB_TOKEN: ${{ steps.generate-source-token.outputs.token || steps.generate-token.outputs.token }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
-          SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
-          GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
+          SOURCE_REPOSITORY: ${{ steps.source-repo.outputs.source_repo }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          ANALYZE_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
           ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
           # Bot username for filtering existing PRs (constructed from app slug)
           CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]

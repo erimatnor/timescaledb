@@ -9,11 +9,14 @@
 # 4. Creates a separate PR for each fix with a descriptive title
 #
 # Required environment variables:
-#   GITHUB_RUN_ID      - The workflow run ID
+#   ANALYZE_RUN_ID     - The workflow run ID to analyze (preferred)
+#                        Falls back to GITHUB_RUN_ID for backwards compatibility
 #   SOURCE_REPOSITORY  - The source repository to clone and fetch artifacts from
 #
 # Optional environment variables (with defaults):
-#   GITHUB_TOKEN       - GitHub token (default: from gh auth token)
+#   GITHUB_TOKEN       - GitHub token for target repo operations (default: from gh auth token)
+#   SOURCE_GITHUB_TOKEN - GitHub token for source repo API calls (default: GITHUB_TOKEN)
+#                         Required when source repo is in a different org than target
 #
 # Optional environment variables:
 #   ANTHROPIC_API_KEY  - API key for Claude Code (not needed if logged in locally)
@@ -43,6 +46,15 @@ SKIP_PR="${SKIP_PR:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
 ANALYSIS_OUTPUT_DIR="${ANALYSIS_OUTPUT_DIR:-}"
 
+# Set up debug logging early - capture all stderr to a log file
+# Create work dir immediately so we can start logging
+mkdir -p "${WORK_DIR}"
+DEBUG_LOG="${WORK_DIR}/debug.log"
+: > "${DEBUG_LOG}"  # Initialize empty log file
+
+# Redirect stderr through tee to capture to log while still displaying
+exec 2> >(tee -a "${DEBUG_LOG}" >&2)
+
 # SOURCE_REPOSITORY is required (no default - must be explicitly set)
 if [[ -z "${SOURCE_REPOSITORY:-}" ]]; then
     echo "ERROR: SOURCE_REPOSITORY is not set" >&2
@@ -55,6 +67,33 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     GITHUB_TOKEN=$(gh auth token 2>/dev/null || true)
 fi
 export GITHUB_TOKEN
+
+# SOURCE_GITHUB_TOKEN is used for API calls to the source repository
+# Defaults to GITHUB_TOKEN if not set (same-org scenario)
+SOURCE_GITHUB_TOKEN="${SOURCE_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+export SOURCE_GITHUB_TOKEN
+
+# Debug: Check if we have separate tokens for source and target
+if [[ "${SOURCE_GITHUB_TOKEN}" == "${GITHUB_TOKEN}" ]]; then
+    echo "[DEBUG] Using same token for source and target repos" >&2
+else
+    echo "[DEBUG] Using separate token for source repo (cross-org)" >&2
+fi
+
+# ANALYZE_RUN_ID is the run ID to analyze. Fall back to GITHUB_RUN_ID for backwards
+# compatibility, but note that GITHUB_RUN_ID is a built-in GitHub Actions variable
+# that contains the CURRENT workflow's run ID, not the one we want to analyze.
+# Using ANALYZE_RUN_ID avoids this conflict.
+if [[ -z "${ANALYZE_RUN_ID:-}" ]]; then
+    if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+        ANALYZE_RUN_ID="${ANALYZE_RUN_ID}"
+        echo "[DEBUG] Using GITHUB_RUN_ID as fallback: ${ANALYZE_RUN_ID}" >&2
+        echo "[WARN] GITHUB_RUN_ID may be the current workflow's run ID, not the target" >&2
+    fi
+else
+    echo "[DEBUG] Using ANALYZE_RUN_ID: ${ANALYZE_RUN_ID}" >&2
+fi
+export ANALYZE_RUN_ID
 
 # TARGET_REPOSITORY defaults to SOURCE_REPOSITORY (set in check_prerequisites)
 
@@ -82,6 +121,9 @@ cleanup() {
         log_info "Saving analysis output to: ${ANALYSIS_OUTPUT_DIR}"
         mkdir -p "${ANALYSIS_OUTPUT_DIR}"
 
+        # Copy the debug log (all stderr output)
+        [[ -f "${DEBUG_LOG}" ]] && cp "${DEBUG_LOG}" "${ANALYSIS_OUTPUT_DIR}/"
+
         # Copy analysis output files (Claude's reasoning and conclusions)
         for f in "${WORK_DIR}"/analysis_*.txt; do
             [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
@@ -92,6 +134,11 @@ cleanup() {
 
         # Copy prompt files for debugging
         for f in "${WORK_DIR}"/prompt*.txt; do
+            [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
+        done
+
+        # Copy any API error files for debugging
+        for f in "${WORK_DIR}"/*_error.txt; do
             [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
         done
 
@@ -205,7 +252,7 @@ check_prerequisites() {
 
     local missing_vars=()
     [[ -z "${GITHUB_TOKEN:-}" ]] && missing_vars+=("GITHUB_TOKEN (set it or run 'gh auth login')")
-    [[ -z "${GITHUB_RUN_ID:-}" ]] && missing_vars+=("GITHUB_RUN_ID")
+    [[ -z "${ANALYZE_RUN_ID:-}" ]] && missing_vars+=("ANALYZE_RUN_ID")
     [[ -z "${CLAUDE_BOT_USERNAME:-}" ]] && missing_vars+=("CLAUDE_BOT_USERNAME (e.g., github-actions[bot])")
 
     if [[ ${#missing_vars[@]} -gt 0 ]]; then
@@ -246,18 +293,37 @@ check_prerequisites() {
 }
 
 get_failed_jobs() {
-    log_info "Fetching failed jobs from run ${GITHUB_RUN_ID}..."
+    log_info "Fetching failed jobs from run ${ANALYZE_RUN_ID}..."
 
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
+    # Verify SOURCE_GITHUB_TOKEN works before proceeding
+    echo "[DEBUG] Testing SOURCE_GITHUB_TOKEN access to ${SOURCE_REPOSITORY}..." >&2
+    local test_result
+    if test_result=$(GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs?per_page=1" --jq '.total_count' 2>&1); then
+        echo "[DEBUG] Token test passed: ${test_result} runs accessible" >&2
+    else
+        echo "[DEBUG] Token test FAILED: ${test_result}" >&2
+        echo "[DEBUG] SOURCE_GITHUB_TOKEN length: ${#SOURCE_GITHUB_TOKEN}" >&2
+        echo "[DEBUG] GITHUB_TOKEN length: ${#GITHUB_TOKEN}" >&2
+    fi
+
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
-    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+    # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
+    local api_error_file="${WORK_DIR}/api_error.txt"
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/jobs" \
         --paginate \
         --jq '.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}' \
-        > "${jobs_file}" 2>/dev/null || {
-        log_error "Failed to fetch jobs list"
+        > "${jobs_file}" 2>"${api_error_file}"; then
+        log_error "Failed to fetch jobs list from ${SOURCE_REPOSITORY}"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/jobs"
+        if [[ -s "${api_error_file}" ]]; then
+            log_error "Error details:"
+            cat "${api_error_file}" >&2
+        fi
+        log_error "This may be a permission issue - ensure the GitHub token has 'actions:read' access to ${SOURCE_REPOSITORY}"
         return 1
-    }
+    fi
 
     if [[ ! -s "${jobs_file}" ]]; then
         log_warn "No failed jobs found"
@@ -288,11 +354,11 @@ download_job_logs() {
         local safe_name
         safe_name=$(echo "${job_name}" | tr '/' '_' | tr ' ' '_')
 
-        gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
-            > "${WORK_DIR}/logs/${safe_name}.log" 2>/dev/null || {
-            log_warn "Failed to download log for job: ${job_name}"
+        if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
+            > "${WORK_DIR}/logs/${safe_name}.log"; then
+            log_warn "Failed to download log for job: ${job_name} (job_id: ${job_id})"
             continue
-        }
+        fi
     done < "${jobs_file}"
 }
 
@@ -380,13 +446,21 @@ download_failure_artifacts() {
     local artifacts_file="${WORK_DIR}/artifacts.json"
 
     # Get artifacts that match failed jobs and are relevant types
-    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+    # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
+    local artifacts_error_file="${WORK_DIR}/artifacts_api_error.txt"
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/artifacts" \
         --paginate \
         --jq ".artifacts[] | select(.name | test(\"Regression|PostgreSQL log|Stacktrace|TAP\")) | {name: .name, id: .id}" \
-        > "${artifacts_file}.all" 2>/dev/null || {
-        log_error "Failed to fetch artifacts list"
+        > "${artifacts_file}.all" 2>"${artifacts_error_file}"; then
+        log_error "Failed to fetch artifacts list from ${SOURCE_REPOSITORY}"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/artifacts"
+        if [[ -s "${artifacts_error_file}" ]]; then
+            log_error "Error details:"
+            cat "${artifacts_error_file}" >&2
+        fi
+        log_error "This may be a permission issue - ensure the GitHub token has 'actions:read' access to ${SOURCE_REPOSITORY}"
         return 1
-    }
+    fi
 
     # Filter artifacts matching our failed jobs
     : > "${artifacts_file}"
@@ -425,7 +499,7 @@ download_failure_artifacts() {
 
         ((count++))
         log_info "Downloading artifact: ${name} (${count}/${total_artifacts})"
-        gh api "repos/${SOURCE_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
+        GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
             log_warn "Failed to download artifact: ${name}"
             continue
         }
@@ -632,15 +706,14 @@ commit_claude_changes() {
     local title=""
     if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
         title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
-            grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
+            grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE\|COMMIT_MESSAGE:" | \
+            head -1 | \
             sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
-            tr '\n' ' ' | \
-            sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//' | \
             cut -c1-72)
     fi
 
-    # Fallback title if no markers found
-    if [[ -z "${title}" ]]; then
+    # Fallback title if extraction failed or result is invalid
+    if [[ -z "${title}" ]] || [[ "${#title}" -gt 72 ]] || [[ "${title}" == *"COMMIT_MESSAGE"* ]]; then
         title="Fix test: ${test_name}"
     fi
 
@@ -686,7 +759,7 @@ check_existing_pr_for_test() {
         --label "claude-code" \
         --json number,title,url,body \
         --jq ".[] | select(.title + .body | test(\"${test_name}\"; \"i\")) | .url" \
-        2>/dev/null | head -1)
+        | head -1)
 
     if [[ -n "${matching_pr}" ]]; then
         echo "${matching_pr}"
@@ -1099,21 +1172,25 @@ create_pull_request() {
         # Extract title from Claude's output
         if grep -q "COMMIT_TITLE:" "${analysis_output}"; then
             pr_title=$(sed -n '/COMMIT_TITLE:/,/END_COMMIT_TITLE/p' "${analysis_output}" | \
-                grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE" | \
-                sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | \
-                tr '\n' ' ' | \
-                sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+                grep -v "COMMIT_TITLE:\|END_COMMIT_TITLE\|COMMIT_MESSAGE:" | \
+                head -1 | \
+                sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         fi
     fi
 
-    # Fallback: use commit subject line
-    if [[ -z "${pr_title}" ]]; then
+    # Validate extracted title - reject if empty, too long, or contains markers
+    if [[ -z "${pr_title}" ]] || [[ "${#pr_title}" -gt 256 ]] || [[ "${pr_title}" == *"COMMIT_MESSAGE"* ]]; then
+        # Fallback: use commit subject line
         pr_title=$(git log -1 --format="%s" 2>/dev/null)
     fi
 
     # Final fallback: use test name
-    if [[ -z "${pr_title}" ]] && [[ -n "${test_name}" ]]; then
-        pr_title="Fix test: ${test_name}"
+    if [[ -z "${pr_title}" ]] || [[ "${#pr_title}" -gt 256 ]] || [[ "${pr_title}" == *"COMMIT_MESSAGE"* ]]; then
+        if [[ -n "${test_name}" ]]; then
+            pr_title="Fix test: ${test_name}"
+        else
+            pr_title="Fix nightly test failure"
+        fi
     fi
 
     # Generate commit details for PR body
@@ -1137,8 +1214,8 @@ ${commit_body}
 
 ### Original Failure
 
-- **Run ID**: ${GITHUB_RUN_ID}
-- **Run URL**: https://github.com/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+- **Run ID**: ${ANALYZE_RUN_ID}
+- **Run URL**: https://github.com/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}
 
 ### Testing
 
@@ -1214,7 +1291,7 @@ main() {
     log_info "Source repository: ${SOURCE_REPOSITORY:-not set}"
     log_info "Target repository: ${TARGET_REPOSITORY:-${SOURCE_REPOSITORY:-not set}}"
     log_info "Base branch: ${BASE_BRANCH}"
-    log_info "Run ID: ${GITHUB_RUN_ID:-not set}"
+    log_info "Run ID: ${ANALYZE_RUN_ID:-not set}"
     log_info "Mode: $(if [[ "${DRY_RUN}" == "true" ]]; then echo "DRY_RUN"; elif [[ "${SKIP_PR}" == "true" ]]; then echo "SKIP_PR"; else echo "FULL"; fi)"
 
     check_prerequisites
@@ -1242,7 +1319,7 @@ main() {
     if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
         local target_sha source_sha
         target_sha=$(git -C "${CLONE_DIR}" rev-parse HEAD 2>/dev/null)
-        source_sha=$(gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' 2>/dev/null || echo "")
+        source_sha=$(GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' || echo "")
 
         if [[ -n "${source_sha}" && "${target_sha}" != "${source_sha}" ]]; then
             log_warn "Source and target repos are at different commits:"
@@ -1255,7 +1332,7 @@ main() {
     local jobs_file
     jobs_file=$(get_failed_jobs)
     if [[ -z "${jobs_file}" || ! -s "${jobs_file}" ]]; then
-        log_error "No failed jobs found in run ${GITHUB_RUN_ID}"
+        log_error "No failed jobs found in run ${ANALYZE_RUN_ID}"
         exit 1
     fi
 
