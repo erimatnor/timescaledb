@@ -154,7 +154,8 @@ fetch_pr_info() {
         exit 1
     fi
 
-    if [[ "${PR_AUTHOR}" != "${CLAUDE_BOT_USERNAME}" ]]; then
+    # Use case-insensitive comparison since GitHub usernames are case-insensitive
+    if [[ "${PR_AUTHOR,,}" != "${CLAUDE_BOT_USERNAME,,}" ]]; then
         log_error "PR #${PR_NUMBER} was not created by ${CLAUDE_BOT_USERNAME} (author: ${PR_AUTHOR})"
         log_error "This script only handles PRs created by the Claude bot"
         exit 1
