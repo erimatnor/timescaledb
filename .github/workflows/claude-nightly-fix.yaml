@@ -1,19 +1,14 @@
 name: Claude Nightly Test Fix
 
 # This workflow analyzes nightly test failures and creates PRs to fix them.
-# It can be triggered in three ways:
-# 1. Automatically when the test workflow fails (workflow_run)
-# 2. On a schedule as a backup (schedule) - DISABLED BY DEFAULT
-# 3. Manually for testing (workflow_dispatch)
-#
-# To switch between workflow_run and schedule triggers, comment/uncomment
-# the relevant sections below. Don't enable both simultaneously to avoid
-# duplicate runs.
+# It can be triggered in two ways:
+# 1. Called by the Regression workflow when nightly tests fail (workflow_call)
+# 2. Manually for testing (workflow_dispatch)
 #
 # Required repository variables:
 #   CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY - e.g., "timescale/timescaledb"
 #
-# Required secrets:
+# Required secrets (passed via workflow_call or available in repository):
 #   ANTHROPIC_API_KEY - API key for Claude
 #   CLAUDE_APP_ID - GitHub App ID for authentication
 #   CLAUDE_APP_PRIVATE_KEY - GitHub App private key
@@ -23,32 +18,32 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'Workflow run ID to analyze (required)'
+        description: "Workflow run ID to analyze (required)"
         required: true
         type: string
 
-  # Automatic trigger when test workflow fails
-  # Comment out this section if using schedule instead
-  workflow_run:
-    workflows: ["Build and test"]
-    types: [completed]
-
-  # Schedule trigger as alternative to workflow_run
-  # Uncomment to enable, but disable workflow_run above first
-  # schedule:
-  #   - cron: '0 2 * * *'  # 2 hours after nightly tests (which run at 0 0 * * *)
+  # Called by the Regression workflow on nightly failures
+  workflow_call:
+    inputs:
+      run_id:
+        description: "Workflow run ID to analyze"
+        required: true
+        type: string
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      CLAUDE_APP_ID:
+        required: true
+      CLAUDE_APP_PRIVATE_KEY:
+        required: true
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL_CLAUDE:
+        required: false
 
 jobs:
   analyze-and-fix:
     name: Analyze Failures with Claude
-    # For workflow_run: only process failed scheduled runs
-    # For workflow_dispatch and schedule: always run (conditions checked in steps)
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'failure' &&
-       github.event.workflow_run.event == 'schedule')
     runs-on: ubuntu-latest
 
     permissions:
@@ -56,124 +51,99 @@ jobs:
       pull-requests: write
 
     steps:
-    - name: Check prerequisites
-      id: check-prereqs
-      run: |
-        skip=false
-        if [[ -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
-          echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
-          skip=true
-        fi
-        if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
-          echo "ANTHROPIC_API_KEY secret is not configured, skipping"
-          skip=true
-        fi
-        echo "skip=${skip}" >> $GITHUB_OUTPUT
-      env:
-        VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
-
-    - name: Determine run ID to analyze
-      if: steps.check-prereqs.outputs.skip != 'true'
-      id: get-run-id
-      env:
-        GH_TOKEN: ${{ github.token }}
-        SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
-        INPUTS_RUN_ID: ${{ inputs.run_id }}
-      run: |
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          # Manual trigger: use provided run_id
-          RUN_ID="${INPUTS_RUN_ID}"
-          echo "Using provided run ID: ${RUN_ID}"
-
-        elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-          # Automatic trigger: use the triggering workflow's run ID
-          RUN_ID="${{ github.event.workflow_run.id }}"
-          echo "Using workflow_run ID: ${RUN_ID}"
-
-        elif [[ "${{ github.event_name }}" == "schedule" ]]; then
-          # Schedule trigger: find most recent failed nightly run
-          echo "Finding most recent failed nightly run..."
-          RUN_ID=$(gh api "repos/${SOURCE_REPOSITORY}/actions/workflows/linux-build-and-test.yaml/runs" \
-            --jq '[.workflow_runs[] | select(.event == "schedule" and .conclusion == "failure")] | first | .id' \
-            2>/dev/null || echo "")
-
-          if [[ -z "${RUN_ID}" || "${RUN_ID}" == "null" ]]; then
-            echo "No recent failed nightly runs found"
-            echo "skip=true" >> $GITHUB_OUTPUT
-            exit 0
+      - name: Check prerequisites
+        id: check-prereqs
+        run: |
+          skip=false
+          if [[ -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
+            echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
+            skip=true
           fi
-          echo "Found failed run ID: ${RUN_ID}"
-        fi
+          if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
+            echo "ANTHROPIC_API_KEY secret is not configured, skipping"
+            skip=true
+          fi
+          echo "skip=${skip}" >> $GITHUB_OUTPUT
+        env:
+          VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
 
-        echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
-        echo "skip=false" >> $GITHUB_OUTPUT
+      - name: Determine run ID to analyze
+        if: steps.check-prereqs.outputs.skip != 'true'
+        id: get-run-id
+        env:
+          INPUTS_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          # Run ID is always provided via inputs (workflow_dispatch or workflow_call)
+          RUN_ID="${INPUTS_RUN_ID}"
+          echo "Using run ID: ${RUN_ID}"
+          echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
 
-    - name: Checkout repository
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        persist-credentials: false
+      - name: Checkout repository
+        if: steps.check-prereqs.outputs.skip != 'true'
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Setup Node.js
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      uses: actions/setup-node@v4
-      with:
-        node-version: "20"
+      - name: Setup Node.js
+        if: steps.check-prereqs.outputs.skip != 'true'
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "20"
 
-    - name: Install Claude Code
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      run: npm install -g @anthropic-ai/claude-code
+      - name: Install Claude Code
+        if: steps.check-prereqs.outputs.skip != 'true'
+        run: npm install -g @anthropic-ai/claude-code
 
-    - name: Generate GitHub App token
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      id: generate-token
-      uses: actions/create-github-app-token@v1
-      with:
-        app-id: ${{ secrets.CLAUDE_APP_ID }}
-        private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+      - name: Generate GitHub App token
+        if: steps.check-prereqs.outputs.skip != 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
 
-    - name: Configure Git
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      env:
-        APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
-        APP_ID: ${{ secrets.CLAUDE_APP_ID }}
-        VARS_CLAUDE_GIT_AUTHOR_NAME: ${{ vars.CLAUDE_GIT_AUTHOR_NAME }}
-        VARS_CLAUDE_GIT_AUTHOR_EMAIL: ${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}
-      run: |
-        # Use configured variables if set, otherwise fall back to GitHub App bot identity
-        GIT_USER="${VARS_CLAUDE_GIT_AUTHOR_NAME}"
-        GIT_EMAIL="${VARS_CLAUDE_GIT_AUTHOR_EMAIL}"
-        if [[ -z "${GIT_USER}" ]]; then
-          GIT_USER="${APP_SLUG}[bot]"
-        fi
-        if [[ -z "${GIT_EMAIL}" ]]; then
-          GIT_EMAIL="${APP_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
-        fi
-        git config --global user.name "${GIT_USER}"
-        git config --global user.email "${GIT_EMAIL}"
-        echo "Configured git author: ${GIT_USER} <${GIT_EMAIL}>"
+      - name: Configure Git
+        if: steps.check-prereqs.outputs.skip != 'true'
+        env:
+          APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
+          APP_ID: ${{ secrets.CLAUDE_APP_ID }}
+          VARS_CLAUDE_GIT_AUTHOR_NAME: ${{ vars.CLAUDE_GIT_AUTHOR_NAME }}
+          VARS_CLAUDE_GIT_AUTHOR_EMAIL: ${{ vars.CLAUDE_GIT_AUTHOR_EMAIL }}
+        run: |
+          # Use configured variables if set, otherwise fall back to GitHub App bot identity
+          GIT_USER="${VARS_CLAUDE_GIT_AUTHOR_NAME}"
+          GIT_EMAIL="${VARS_CLAUDE_GIT_AUTHOR_EMAIL}"
+          if [[ -z "${GIT_USER}" ]]; then
+            GIT_USER="${APP_SLUG}[bot]"
+          fi
+          if [[ -z "${GIT_EMAIL}" ]]; then
+            GIT_EMAIL="${APP_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          fi
+          git config --global user.name "${GIT_USER}"
+          git config --global user.email "${GIT_EMAIL}"
+          echo "Configured git author: ${GIT_USER} <${GIT_EMAIL}>"
 
-    - name: Analyze failures and create fix PR
-      if: steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      env:
-        GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
-        SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
-        GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
-        ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
-        # Bot username for filtering existing PRs (constructed from app slug)
-        CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]
-      run: |
-        .github/scripts/claude-analyze-failures.sh
+      - name: Analyze failures and create fix PR
+        if: steps.check-prereqs.outputs.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
+          SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
+          GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
+          ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
+          # Bot username for filtering existing PRs (constructed from app slug)
+          CLAUDE_BOT_USERNAME: ${{ steps.generate-token.outputs.app-slug }}[bot]
+        run: |
+          .github/scripts/claude-analyze-failures.sh
 
-    - name: Upload Claude analysis output
-      if: always() && steps.check-prereqs.outputs.skip != 'true' && steps.get-run-id.outputs.skip != 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: Claude analysis output
-        path: claude-analysis-output/
-        if-no-files-found: ignore
-        retention-days: 30
+      - name: Upload Claude analysis output
+        if: always() && steps.check-prereqs.outputs.skip != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Claude analysis output
+          path: claude-analysis-output/
+          if-no-files-found: ignore
+          retention-days: 30
