@@ -360,6 +360,9 @@ jobs:
       always() &&
       github.event_name == 'schedule' &&
       needs.regress.result == 'failure'
+    permissions:
+      contents: write # Needed by called workflow to push commits
+      pull-requests: write # Needed by called workflow to create PRs
     uses: ./.github/workflows/claude-nightly-fix.yaml
     with:
       run_id: "${{ github.run_id }}"
