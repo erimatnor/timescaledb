@@ -33,22 +33,27 @@ Both workflows:
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Nightly Tests  │────▶│  workflow_run    │────▶│  Claude Code    │
+│  Nightly Tests  │────▶│  workflow_call   │────▶│  Claude Code    │
 │  (scheduled)    │     │  (on failure)    │     │  analyzes &     │
 └─────────────────┘     └──────────────────┘     │  creates PRs    │
                                                   └─────────────────┘
 ```
 
+The nightly fix workflow is called directly from the Regression workflow when tests fail, using `workflow_call`. This approach:
+- Only triggers on actual failures (no phantom workflow runs)
+- Keeps the fix attempt visible in the same workflow run
+- Passes the run ID directly without needing to query the API
+
 **Workflow file**: `.github/workflows/claude-nightly-fix.yaml`
 **Script**: `.github/scripts/claude-analyze-failures.sh`
+**Caller**: `.github/workflows/linux-build-and-test.yaml` (trigger-claude-fix job)
 
 ### Triggers
 
 | Trigger | Description |
 |---------|-------------|
-| `workflow_run` | Fires when "Build and test" workflow fails (scheduled runs only) |
+| `workflow_call` | Called by Regression workflow when nightly tests fail |
 | `workflow_dispatch` | Manual trigger with required `run_id` input |
-| `schedule` | Optional cron trigger (disabled by default) |
 
 ### Duplicate Prevention
 
@@ -273,6 +278,28 @@ PR_NUMBER=123 .github/scripts/claude-handle-pr-review.sh
 
 ## Security Considerations
 
+### Workflow Permissions
+
+Both workflows follow the principle of least privilege for GitHub Actions permissions:
+
+```yaml
+# Workflow level - deny all by default
+permissions: {}
+
+jobs:
+  job-name:
+    # Job level - request only what's needed
+    permissions:
+      contents: write       # Push commits
+      pull-requests: write  # Create PRs, post comments
+```
+
+This approach:
+- Defaults to no permissions at the workflow level (`permissions: {}`)
+- Each job explicitly declares only the permissions it needs
+- Prevents accidental token privilege escalation
+- Makes permission requirements visible and auditable
+
 ### Authentication & Authorization
 
 | Aspect | Implementation |
@@ -335,7 +362,7 @@ PR_NUMBER=123 .github/scripts/claude-handle-pr-review.sh
 
 1. Check that required repository variables are set
 2. Verify secrets are configured (workflow will skip silently if missing)
-3. For nightly fix: ensure triggering workflow is named "Build and test"
+3. For nightly fix: ensure the `trigger-claude-fix` job exists in `linux-build-and-test.yaml`
 
 ### Author Verification Failing
 

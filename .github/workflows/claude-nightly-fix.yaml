@@ -41,14 +41,17 @@ on:
       SLACK_CHANNEL_CLAUDE:
         required: false
 
+# Restrict default permissions for security - jobs declare only what they need
+permissions: {}
+
 jobs:
   analyze-and-fix:
     name: Analyze Failures with Claude
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write # Needed to push commits to new branches for fix PRs
+      pull-requests: write # Needed to create PRs, add labels, post comments
 
     steps:
       - name: Check prerequisites
