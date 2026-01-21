@@ -54,13 +54,14 @@ jobs:
             echo "CLAUDE_PR_REVIEW_HANDLER_ENABLED variable is not configured, skipping"
             skip=true
           fi
-          if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
+          if [[ -z "${SECRETS_ANTHROPIC_API_KEY}" ]]; then
             echo "ANTHROPIC_API_KEY secret is not configured, skipping Claude review handler"
             skip=true
           fi
           echo "skip=${skip}" >> $GITHUB_OUTPUT
         env:
           VARS_CLAUDE_PR_REVIEW_HANDLER_ENABLED: ${{ vars.CLAUDE_PR_REVIEW_HANDLER_ENABLED }}
+          SECRETS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Generate GitHub App token
         if: steps.check-prereqs.outputs.skip != 'true'

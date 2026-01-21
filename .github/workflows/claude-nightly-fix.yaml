@@ -43,6 +43,9 @@ on:
 
 # Restrict default permissions for security - jobs declare only what they need
 permissions: {}
+concurrency:
+  group: claude-nightly-fix
+  cancel-in-progress: true # Should only run one job at a time per failed nightly run
 
 jobs:
   analyze-and-fix:
@@ -62,13 +65,14 @@ jobs:
             echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
             skip=true
           fi
-          if [[ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]]; then
+          if [[ -z "${SECRETS_ANTHROPIC_API_KEY}" ]]; then
             echo "ANTHROPIC_API_KEY secret is not configured, skipping"
             skip=true
           fi
           echo "skip=${skip}" >> $GITHUB_OUTPUT
         env:
           VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
+          SECRETS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Determine run ID to analyze
         if: steps.check-prereqs.outputs.skip != 'true'
