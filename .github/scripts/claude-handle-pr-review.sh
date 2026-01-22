@@ -36,6 +36,7 @@
 #   DRY_RUN           - If "true", show context but don't invoke Claude
 #   SKIP_PUSH         - If "true", make changes locally but don't push
 #   KEEP_WORK_DIR     - If "true", preserve work directory after completion
+#   ANALYSIS_OUTPUT_DIR - If set, copy analysis output files to this directory before cleanup
 #
 
 set -euo pipefail
@@ -48,6 +49,16 @@ CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-20250514}"
 DRY_RUN="${DRY_RUN:-false}"
 SKIP_PUSH="${SKIP_PUSH:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
+ANALYSIS_OUTPUT_DIR="${ANALYSIS_OUTPUT_DIR:-}"
+
+# Set up debug logging early - capture all stderr to a log file
+# Create work dir immediately so we can start logging
+mkdir -p "${WORK_DIR}"
+DEBUG_LOG="${WORK_DIR}/debug.log"
+: > "${DEBUG_LOG}"  # Initialize empty log file
+
+# Redirect stderr through tee to capture to log while still displaying
+exec 2> >(tee -a "${DEBUG_LOG}" >&2)
 
 # Handle command-line arguments for local testing
 if [[ $# -ge 1 ]]; then
@@ -110,6 +121,33 @@ find_remote_for_repo() {
 }
 
 cleanup() {
+    # Save analysis output if requested
+    if [[ -n "${ANALYSIS_OUTPUT_DIR}" && -d "${WORK_DIR}" ]]; then
+        log_info "Saving analysis output to: ${ANALYSIS_OUTPUT_DIR}"
+        mkdir -p "${ANALYSIS_OUTPUT_DIR}"
+
+        # Copy the debug log (all stderr output)
+        [[ -f "${DEBUG_LOG}" ]] && cp "${DEBUG_LOG}" "${ANALYSIS_OUTPUT_DIR}/"
+
+        # Copy analysis output files
+        [[ -f "${WORK_DIR}/analysis_output.txt" ]] && cp "${WORK_DIR}/analysis_output.txt" "${ANALYSIS_OUTPUT_DIR}/"
+
+        # Copy the review context that was sent to Claude
+        [[ -f "${WORK_DIR}/review_context.md" ]] && cp "${WORK_DIR}/review_context.md" "${ANALYSIS_OUTPUT_DIR}/"
+
+        # Copy prompt file for debugging
+        [[ -f "${WORK_DIR}/prompt.txt" ]] && cp "${WORK_DIR}/prompt.txt" "${ANALYSIS_OUTPUT_DIR}/"
+
+        # Copy review data files
+        for f in "${WORK_DIR}"/*.json; do
+            [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
+        done
+
+        # List what was saved
+        log_info "Saved files:"
+        ls -la "${ANALYSIS_OUTPUT_DIR}" >&2
+    fi
+
     if [[ -d "${WORK_DIR}" ]]; then
         if [[ "${KEEP_WORK_DIR}" == "true" ]]; then
             log_info "Work directory preserved at: ${WORK_DIR}"
@@ -256,7 +294,7 @@ fetch_review_comments() {
         [[ -z "${review_id}" ]] && continue
         gh api "repos/${PR_REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}/comments" \
             --jq '.[] | {review_id: '"${review_id}"', path: .path, line: .line, body: .body, diff_hunk: .diff_hunk, user: .user.login, addressed: '"${addressed}"'}' \
-            >> "${comments_file}" 2>/dev/null || true
+            >> "${comments_file}" || true
     done <<< "${review_status}"
 
     # Count comments
@@ -276,7 +314,7 @@ fetch_pr_conversation() {
     # Get issue comments (general PR comments, not inline)
     gh api "repos/${PR_REPOSITORY}/issues/${PR_NUMBER}/comments" \
         --jq '.[] | {user: .user.login, body: .body, created_at: .created_at}' \
-        > "${conversation_file}" 2>/dev/null || true
+        > "${conversation_file}" || true
 
     echo "${conversation_file}"
 }
@@ -286,7 +324,7 @@ fetch_pr_diff() {
 
     local diff_file="${WORK_DIR}/pr_diff.patch"
 
-    gh pr diff "${PR_NUMBER}" --repo "${PR_REPOSITORY}" > "${diff_file}" 2>/dev/null || true
+    gh pr diff "${PR_NUMBER}" --repo "${PR_REPOSITORY}" > "${diff_file}" || true
 
     echo "${diff_file}"
 }
