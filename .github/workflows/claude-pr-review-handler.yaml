@@ -136,11 +136,12 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Checkout PR branch
+      - name: Checkout repository
         if: steps.check-prereqs.outputs.skip != 'true' && steps.pr-info.outputs.skip != 'true'
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
-          ref: ${{ steps.pr-info.outputs.pr_branch }}
+          # Check out default branch to get latest scripts
+          # The script will fetch and check out the PR branch
           fetch-depth: 0
           token: ${{ steps.generate-token.outputs.token }}
           persist-credentials: false
