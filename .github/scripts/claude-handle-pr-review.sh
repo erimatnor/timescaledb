@@ -624,6 +624,16 @@ gh pr edit ${PR_NUMBER} --repo ${PR_REPOSITORY} --body "New description here"
 
 Only do this if the fix approach changed significantly - not for minor refinements.
 
+### Step 7: Re-request Review
+
+After making code changes to address feedback, **always re-request a review** from the reviewer(s) so they know to look at your changes:
+
+\`\`\`bash
+gh pr edit ${PR_NUMBER} --repo ${PR_REPOSITORY} --add-reviewer ${REVIEWER}
+\`\`\`
+
+This notifies the reviewer that you've addressed their feedback and the PR is ready for another look.
+
 ### Output Format
 
 After making changes, output a summary in this exact format:
