@@ -329,7 +329,13 @@ scheduled_bgw_job_transition_state_to(ScheduledBgwJob *sjob, JobState new_state)
 					 NameStr(sjob->job.fd.application_name));
 				sjob->consecutive_failed_launches++;
 
-				/* Mark the job as started so we can properly record the failure */
+				/*
+				 * Mark the job as started so we can properly record the failure.
+				 * We don't transition to JOB_STATE_SCHEDULED here because we want to
+				 * record this failure in bgw_job_stat_history. The job will be
+				 * rescheduled automatically by the normal scheduling logic after we
+				 * record the failure via on_failure_to_start_job().
+				 */
 				mark_job_as_started(sjob);
 
 				PopActiveSnapshot();
