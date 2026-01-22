@@ -205,7 +205,7 @@ For faster iteration during development, run the scripts directly without the wo
 ```bash
 # Required environment variables
 export SOURCE_REPOSITORY="timescale/timescaledb"
-export GITHUB_RUN_ID="12345678"  # Failed workflow run ID
+export ANALYZE_RUN_ID="12345678"  # Failed workflow run ID
 export CLAUDE_BOT_USERNAME="github-actions[bot]"  # Or your app's bot name
 
 # Optional: test without creating PRs
@@ -243,7 +243,7 @@ PR_NUMBER=123 .github/scripts/claude-handle-pr-review.sh
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SOURCE_REPOSITORY` | Yes | - | Repository to fetch artifacts from |
-| `GITHUB_RUN_ID` | Yes | - | Workflow run ID to analyze |
+| `ANALYZE_RUN_ID` | Yes | - | Workflow run ID to analyze (preferred over `GITHUB_RUN_ID`) |
 | `CLAUDE_BOT_USERNAME` | Yes | - | Bot username for identification |
 | `GITHUB_TOKEN` | No | `gh auth token` | GitHub token for API calls |
 | `TARGET_REPOSITORY` | No | `SOURCE_REPOSITORY` | Repository to create PRs in |

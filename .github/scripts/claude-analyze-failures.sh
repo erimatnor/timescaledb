@@ -9,7 +9,8 @@
 # 4. Creates a separate PR for each fix with a descriptive title
 #
 # Required environment variables:
-#   GITHUB_RUN_ID      - The workflow run ID
+#   ANALYZE_RUN_ID     - The workflow run ID to analyze (preferred)
+#                        Falls back to GITHUB_RUN_ID for backwards compatibility
 #   SOURCE_REPOSITORY  - The source repository to clone and fetch artifacts from
 #
 # Optional environment variables (with defaults):
@@ -78,6 +79,21 @@ if [[ "${SOURCE_GITHUB_TOKEN}" == "${GITHUB_TOKEN}" ]]; then
 else
     echo "[DEBUG] Using separate token for source repo (cross-org)" >&2
 fi
+
+# ANALYZE_RUN_ID is the run ID to analyze. Fall back to GITHUB_RUN_ID for backwards
+# compatibility, but note that GITHUB_RUN_ID is a built-in GitHub Actions variable
+# that contains the CURRENT workflow's run ID, not the one we want to analyze.
+# Using ANALYZE_RUN_ID avoids this conflict.
+if [[ -z "${ANALYZE_RUN_ID:-}" ]]; then
+    if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+        ANALYZE_RUN_ID="${ANALYZE_RUN_ID}"
+        echo "[DEBUG] Using GITHUB_RUN_ID as fallback: ${ANALYZE_RUN_ID}" >&2
+        echo "[WARN] GITHUB_RUN_ID may be the current workflow's run ID, not the target" >&2
+    fi
+else
+    echo "[DEBUG] Using ANALYZE_RUN_ID: ${ANALYZE_RUN_ID}" >&2
+fi
+export ANALYZE_RUN_ID
 
 # TARGET_REPOSITORY defaults to SOURCE_REPOSITORY (set in check_prerequisites)
 
@@ -236,7 +252,7 @@ check_prerequisites() {
 
     local missing_vars=()
     [[ -z "${GITHUB_TOKEN:-}" ]] && missing_vars+=("GITHUB_TOKEN (set it or run 'gh auth login')")
-    [[ -z "${GITHUB_RUN_ID:-}" ]] && missing_vars+=("GITHUB_RUN_ID")
+    [[ -z "${ANALYZE_RUN_ID:-}" ]] && missing_vars+=("ANALYZE_RUN_ID")
     [[ -z "${CLAUDE_BOT_USERNAME:-}" ]] && missing_vars+=("CLAUDE_BOT_USERNAME (e.g., github-actions[bot])")
 
     if [[ ${#missing_vars[@]} -gt 0 ]]; then
@@ -277,12 +293,11 @@ check_prerequisites() {
 }
 
 get_failed_jobs() {
-    log_info "Fetching failed jobs from run ${GITHUB_RUN_ID}..."
+    log_info "Fetching failed jobs from run ${ANALYZE_RUN_ID}..."
 
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
     # Verify SOURCE_GITHUB_TOKEN works before proceeding
-    # This test mirrors the debug step in the workflow
     echo "[DEBUG] Testing SOURCE_GITHUB_TOKEN access to ${SOURCE_REPOSITORY}..." >&2
     local test_result
     if test_result=$(GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs?per_page=1" --jq '.total_count' 2>&1); then
@@ -296,12 +311,12 @@ get_failed_jobs() {
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
     # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
     local api_error_file="${WORK_DIR}/api_error.txt"
-    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/jobs" \
         --paginate \
         --jq '.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}' \
         > "${jobs_file}" 2>"${api_error_file}"; then
         log_error "Failed to fetch jobs list from ${SOURCE_REPOSITORY}"
-        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/jobs"
         if [[ -s "${api_error_file}" ]]; then
             log_error "Error details:"
             cat "${api_error_file}" >&2
@@ -433,12 +448,12 @@ download_failure_artifacts() {
     # Get artifacts that match failed jobs and are relevant types
     # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
     local artifacts_error_file="${WORK_DIR}/artifacts_api_error.txt"
-    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/artifacts" \
         --paginate \
         --jq ".artifacts[] | select(.name | test(\"Regression|PostgreSQL log|Stacktrace|TAP\")) | {name: .name, id: .id}" \
         > "${artifacts_file}.all" 2>"${artifacts_error_file}"; then
         log_error "Failed to fetch artifacts list from ${SOURCE_REPOSITORY}"
-        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}/artifacts"
         if [[ -s "${artifacts_error_file}" ]]; then
             log_error "Error details:"
             cat "${artifacts_error_file}" >&2
@@ -1199,8 +1214,8 @@ ${commit_body}
 
 ### Original Failure
 
-- **Run ID**: ${GITHUB_RUN_ID}
-- **Run URL**: https://github.com/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+- **Run ID**: ${ANALYZE_RUN_ID}
+- **Run URL**: https://github.com/${SOURCE_REPOSITORY}/actions/runs/${ANALYZE_RUN_ID}
 
 ### Testing
 
@@ -1276,7 +1291,7 @@ main() {
     log_info "Source repository: ${SOURCE_REPOSITORY:-not set}"
     log_info "Target repository: ${TARGET_REPOSITORY:-${SOURCE_REPOSITORY:-not set}}"
     log_info "Base branch: ${BASE_BRANCH}"
-    log_info "Run ID: ${GITHUB_RUN_ID:-not set}"
+    log_info "Run ID: ${ANALYZE_RUN_ID:-not set}"
     log_info "Mode: $(if [[ "${DRY_RUN}" == "true" ]]; then echo "DRY_RUN"; elif [[ "${SKIP_PR}" == "true" ]]; then echo "SKIP_PR"; else echo "FULL"; fi)"
 
     check_prerequisites
@@ -1317,7 +1332,7 @@ main() {
     local jobs_file
     jobs_file=$(get_failed_jobs)
     if [[ -z "${jobs_file}" || ! -s "${jobs_file}" ]]; then
-        log_error "No failed jobs found in run ${GITHUB_RUN_ID}"
+        log_error "No failed jobs found in run ${ANALYZE_RUN_ID}"
         exit 1
     fi
 
