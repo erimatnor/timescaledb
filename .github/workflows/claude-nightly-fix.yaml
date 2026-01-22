@@ -5,8 +5,9 @@ name: Claude Nightly Test Fix
 # 1. Called by the Regression workflow when nightly tests fail (workflow_call)
 # 2. Manually for testing (workflow_dispatch)
 #
-# Required repository variables:
+# Required repository variables (for workflow_call triggers):
 #   CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY - e.g., "timescale/timescaledb"
+#     Acts as an enable flag; if not set, workflow_call triggers are skipped.
 #
 # Required secrets (passed via workflow_call or available in repository):
 #   ANTHROPIC_API_KEY - API key for Claude
@@ -20,6 +21,14 @@ on:
       run_id:
         description: "Workflow run ID to analyze (required)"
         required: true
+        type: string
+      source_repository:
+        description: |
+          Repository to fetch artifacts from. Defaults to the current repo if
+          not specified. Use when, e.g., running from a fork to analyze
+          failures from the parent repo. PRs will still be created in this
+          repo.
+        required: false
         type: string
 
   # Called by the Regression workflow on nightly failures
@@ -61,7 +70,9 @@ jobs:
         id: check-prereqs
         run: |
           skip=false
-          if [[ -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
+          # For workflow_call triggers, require the source repository variable to be set
+          # This acts as an enable/disable flag for automatic triggers
+          if [[ "${EVENT_NAME}" == "workflow_call" && -z "${VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY}" ]]; then
             echo "CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY variable is not configured, skipping"
             skip=true
           fi
@@ -71,6 +82,7 @@ jobs:
           fi
           echo "skip=${skip}" >> $GITHUB_OUTPUT
         env:
+          EVENT_NAME: ${{ github.event_name }}
           VARS_CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
           SECRETS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -138,7 +150,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
-          SOURCE_REPOSITORY: ${{ vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository || vars.CLAUDE_NIGHTLY_FIX_SOURCE_REPOSITORY || github.repository }}
           GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
           ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
           # Bot username for filtering existing PRs (constructed from app slug)
