@@ -1,4 +1,4 @@
-name: Handle PR Review Feedback
+name: Claude PR Feedback Handler
 
 # This workflow allows Claude to respond to PR review feedback on PRs it created.
 # When a review is submitted, the workflow verifies the PR was created by the

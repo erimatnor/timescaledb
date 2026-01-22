@@ -1,4 +1,4 @@
-name: Claude Nightly Test Fix
+name: Claude Nightly Test Fixer
 
 # This workflow analyzes nightly test failures and creates PRs to fix them.
 # It can be triggered in two ways:
