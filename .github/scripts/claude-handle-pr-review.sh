@@ -560,11 +560,13 @@ If a reviewer requests out-of-scope changes, respond politely:
 - "Thanks for the suggestion! However, that change is outside the scope of this PR, which focuses on fixing the nightly test failure. I'd recommend opening a separate PR for that improvement."
 - "I appreciate the feedback! That's a good idea, but it's not directly related to the test fix this PR addresses. A separate PR would be the best way to handle that change."
 
-If ALL comments are in categories 2-4 (discussions, acknowledgements, questions), then:
-- You may still respond to comments (see Step 2)
+If ALL comments are in categories 2-4 (discussions, acknowledgements, questions), OR if you only need to respond/explain without changing code, then:
+- Respond to comments as needed (see Step 2)
 - Do NOT make code changes
 - Output "NO_CHANGES_NEEDED" instead of a commit message
-- Explain that the comments don't require code changes
+- Briefly explain why no code changes were required
+
+**IMPORTANT**: Use NO_CHANGES_NEEDED whenever you don't make code changes, even if you responded to comments. Only use COMMIT_MESSAGE when you actually modified files.
 
 ### Step 4: Making Changes (when needed)
 
@@ -915,14 +917,18 @@ main() {
         log_info "Claude determined no code changes are needed"
         # Claude should have already replied to inline comments - no PR-level comment needed
         log_info "Claude handled responses inline"
-    # Commit and push changes
+    # Try to commit and push changes
     elif commit_and_push_changes "${analysis_output}"; then
         # Claude should have already replied to inline comments - no PR-level comment needed
         log_info "Successfully addressed PR review feedback"
     else
-        # Only post error comment if something went wrong
-        post_pr_comment "false" "${analysis_output}"
-        log_info "Failed to make changes in response to review feedback"
+        # No changes to commit - this is NOT an error
+        # Claude may have:
+        # 1. Only responded to comments without needing code changes
+        # 2. Found the changes were already applied
+        # 3. Decided after analysis that no changes were needed
+        # Claude should have already replied inline, so no error comment needed
+        log_info "No code changes were made (Claude may have only responded to comments)"
     fi
 
     log_info "Done!"
