@@ -43,6 +43,15 @@ SKIP_PR="${SKIP_PR:-false}"
 KEEP_WORK_DIR="${KEEP_WORK_DIR:-false}"
 ANALYSIS_OUTPUT_DIR="${ANALYSIS_OUTPUT_DIR:-}"
 
+# Set up debug logging early - capture all stderr to a log file
+# Create work dir immediately so we can start logging
+mkdir -p "${WORK_DIR}"
+DEBUG_LOG="${WORK_DIR}/debug.log"
+: > "${DEBUG_LOG}"  # Initialize empty log file
+
+# Redirect stderr through tee to capture to log while still displaying
+exec 2> >(tee -a "${DEBUG_LOG}" >&2)
+
 # SOURCE_REPOSITORY is required (no default - must be explicitly set)
 if [[ -z "${SOURCE_REPOSITORY:-}" ]]; then
     echo "ERROR: SOURCE_REPOSITORY is not set" >&2
@@ -82,6 +91,9 @@ cleanup() {
         log_info "Saving analysis output to: ${ANALYSIS_OUTPUT_DIR}"
         mkdir -p "${ANALYSIS_OUTPUT_DIR}"
 
+        # Copy the debug log (all stderr output)
+        [[ -f "${DEBUG_LOG}" ]] && cp "${DEBUG_LOG}" "${ANALYSIS_OUTPUT_DIR}/"
+
         # Copy analysis output files (Claude's reasoning and conclusions)
         for f in "${WORK_DIR}"/analysis_*.txt; do
             [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
@@ -92,6 +104,11 @@ cleanup() {
 
         # Copy prompt files for debugging
         for f in "${WORK_DIR}"/prompt*.txt; do
+            [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
+        done
+
+        # Copy any API error files for debugging
+        for f in "${WORK_DIR}"/*_error.txt; do
             [[ -f "$f" ]] && cp "$f" "${ANALYSIS_OUTPUT_DIR}/"
         done
 
@@ -251,13 +268,20 @@ get_failed_jobs() {
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
-    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+    local api_error_file="${WORK_DIR}/api_error.txt"
+    if ! gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
         --paginate \
         --jq '.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}' \
-        > "${jobs_file}" 2>/dev/null || {
-        log_error "Failed to fetch jobs list"
+        > "${jobs_file}" 2>"${api_error_file}"; then
+        log_error "Failed to fetch jobs list from ${SOURCE_REPOSITORY}"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs"
+        if [[ -s "${api_error_file}" ]]; then
+            log_error "Error details:"
+            cat "${api_error_file}" >&2
+        fi
+        log_error "This may be a permission issue - ensure the GitHub token has 'actions:read' access to ${SOURCE_REPOSITORY}"
         return 1
-    }
+    fi
 
     if [[ ! -s "${jobs_file}" ]]; then
         log_warn "No failed jobs found"
@@ -288,11 +312,11 @@ download_job_logs() {
         local safe_name
         safe_name=$(echo "${job_name}" | tr '/' '_' | tr ' ' '_')
 
-        gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
-            > "${WORK_DIR}/logs/${safe_name}.log" 2>/dev/null || {
-            log_warn "Failed to download log for job: ${job_name}"
+        if ! gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
+            > "${WORK_DIR}/logs/${safe_name}.log"; then
+            log_warn "Failed to download log for job: ${job_name} (job_id: ${job_id})"
             continue
-        }
+        fi
     done < "${jobs_file}"
 }
 
@@ -380,13 +404,20 @@ download_failure_artifacts() {
     local artifacts_file="${WORK_DIR}/artifacts.json"
 
     # Get artifacts that match failed jobs and are relevant types
-    gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+    local artifacts_error_file="${WORK_DIR}/artifacts_api_error.txt"
+    if ! gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
         --paginate \
         --jq ".artifacts[] | select(.name | test(\"Regression|PostgreSQL log|Stacktrace|TAP\")) | {name: .name, id: .id}" \
-        > "${artifacts_file}.all" 2>/dev/null || {
-        log_error "Failed to fetch artifacts list"
+        > "${artifacts_file}.all" 2>"${artifacts_error_file}"; then
+        log_error "Failed to fetch artifacts list from ${SOURCE_REPOSITORY}"
+        log_error "API endpoint: repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts"
+        if [[ -s "${artifacts_error_file}" ]]; then
+            log_error "Error details:"
+            cat "${artifacts_error_file}" >&2
+        fi
+        log_error "This may be a permission issue - ensure the GitHub token has 'actions:read' access to ${SOURCE_REPOSITORY}"
         return 1
-    }
+    fi
 
     # Filter artifacts matching our failed jobs
     : > "${artifacts_file}"
@@ -685,7 +716,7 @@ check_existing_pr_for_test() {
         --label "claude-code" \
         --json number,title,url,body \
         --jq ".[] | select(.title + .body | test(\"${test_name}\"; \"i\")) | .url" \
-        2>/dev/null | head -1)
+        | head -1)
 
     if [[ -n "${matching_pr}" ]]; then
         echo "${matching_pr}"
@@ -1245,7 +1276,7 @@ main() {
     if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
         local target_sha source_sha
         target_sha=$(git -C "${CLONE_DIR}" rev-parse HEAD 2>/dev/null)
-        source_sha=$(gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' 2>/dev/null || echo "")
+        source_sha=$(gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' || echo "")
 
         if [[ -n "${source_sha}" && "${target_sha}" != "${source_sha}" ]]; then
             log_warn "Source and target repos are at different commits:"
