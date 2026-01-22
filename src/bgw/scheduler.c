@@ -336,7 +336,13 @@ scheduled_bgw_job_transition_state_to(ScheduledBgwJob *sjob, JobState new_state)
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(scratch_mctx);
 
-				/* Record the failure to start the job */
+				/*
+				 * Record the failure to start the job. This must be called after
+				 * CommitTransactionCommand() because on_failure_to_start_job()
+				 * starts its own transaction internally. PostgreSQL does not support
+				 * nested transactions without savepoints, so we must commit the
+				 * current transaction first.
+				 */
 				on_failure_to_start_job(sjob);
 				return;
 			}
