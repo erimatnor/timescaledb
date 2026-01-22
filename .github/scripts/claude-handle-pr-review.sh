@@ -290,10 +290,11 @@ fetch_review_comments() {
     review_status=$(jq -r '.[] | "\(.id):\(.addressed)"' "${reviews_file}" 2>/dev/null || true)
 
     # Fetch comments for each review, marking addressed status
+    # Include comment id so Claude can reply to specific comments
     while IFS=: read -r review_id addressed; do
         [[ -z "${review_id}" ]] && continue
         gh api "repos/${PR_REPOSITORY}/pulls/${PR_NUMBER}/reviews/${review_id}/comments" \
-            --jq '.[] | {review_id: '"${review_id}"', path: .path, line: .line, body: .body, diff_hunk: .diff_hunk, user: .user.login, addressed: '"${addressed}"'}' \
+            --jq '.[] | {id: .id, review_id: '"${review_id}"', path: .path, line: .line, body: .body, diff_hunk: .diff_hunk, user: .user.login, addressed: '"${addressed}"'}' \
             >> "${comments_file}" || true
     done <<< "${review_status}"
 
@@ -394,14 +395,15 @@ EOF
                 [[ "${filter}" == "unaddressed" && "${addressed}" == "true" ]] && continue
                 [[ "${filter}" == "addressed" && "${addressed}" != "true" ]] && continue
 
-                local path line body diff_hunk user
+                local comment_id path line body diff_hunk user
+                comment_id=$(echo "${comment}" | jq -r '.id')
                 path=$(echo "${comment}" | jq -r '.path')
                 line=$(echo "${comment}" | jq -r '.line')
                 body=$(echo "${comment}" | jq -r '.body')
                 diff_hunk=$(echo "${comment}" | jq -r '.diff_hunk')
                 user=$(echo "${comment}" | jq -r '.user // "unknown"')
 
-                echo "### ${path}:${line} (${user})"
+                echo "### ${path}:${line} (${user}) [comment_id: ${comment_id}]"
                 echo ""
                 echo "**Comment:**"
                 echo "${body}"
@@ -511,21 +513,23 @@ For each review comment, determine which category it falls into:
    - Examples: "Why did you do it this way?", "What's the purpose of this?"
    - You may respond but don't necessarily need to change code
 
-### Step 2: Respond to Comments When Appropriate
+### Step 2: Respond to Inline Comments Directly
 
-You can and should respond to PR comments when:
-- You need more information to understand what the reviewer wants
-- You want to explain why you made a certain choice
-- You disagree with feedback and want to explain your reasoning
-- You want to acknowledge feedback even if no code change is needed
+When addressing inline code comments, **reply directly in that comment thread** to acknowledge the specific feedback. This keeps the conversation organized.
+
+To reply to an inline comment, use the comment_id shown in brackets (e.g., [comment_id: 123456]):
+\`\`\`bash
+gh api repos/${PR_REPOSITORY}/pulls/${PR_NUMBER}/comments/COMMENT_ID/replies -f body="Your reply here"
+\`\`\`
 
 **IMPORTANT: Always be friendly, patient, and polite in your responses.**
 
-Examples of good responses:
-- "Thanks for the feedback! Could you clarify what specific behavior you'd like to see here?"
-- "I appreciate the suggestion! I chose this approach because [reason]. Would you like me to change it anyway?"
-- "Good question! The reason I did it this way is [explanation]. Let me know if you'd prefer a different approach."
-- "Thanks for catching that! I've made the fix."
+Examples of good inline replies:
+- "Done! Added the comment as suggested."
+- "Good catch! Fixed."
+- "Thanks for the suggestion! I chose this approach because [reason]. Let me know if you'd prefer a different approach."
+
+Keep inline replies **brief and to the point**. The commit message will have more detail.
 
 If you disagree with feedback:
 - Always provide clear, respectful motivation for your decision
@@ -533,12 +537,7 @@ If you disagree with feedback:
 - Be open to changing if the reviewer provides additional context
 - Never be dismissive or defensive
 
-To respond to a comment, use the GitHub CLI:
-\`\`\`
-gh pr comment ${PR_NUMBER} --repo ${PR_REPOSITORY} --body "Your response here"
-\`\`\`
-
-For inline comment replies, you can post a general comment referencing the file and line.
+**DO NOT** post a general PR-level comment for each inline comment - reply in the thread instead.
 
 ### Step 3: Decide on Code Changes
 
@@ -596,6 +595,36 @@ Important constraints:
   3. If the test passes without errors, crashes, or truncated output, copy the new output over the expected file
   4. This ensures all output changes (including unexpected ones like plan changes) are captured
 - If you cannot address a comment, explain why
+
+### Step 5: PR-Level Summary (Only When Needed)
+
+**DO NOT** post a PR-level summary comment for small fixes. The inline replies and commit message are sufficient.
+
+**ONLY** post a PR-level summary if:
+- You made significant changes to the approach (not just small tweaks)
+- Multiple reviewers asked questions that need a consolidated answer
+- The changes affect the overall PR in a way that needs explanation
+
+To post a PR-level comment (only when truly needed):
+\`\`\`bash
+gh pr comment ${PR_NUMBER} --repo ${PR_REPOSITORY} --body "Your summary here"
+\`\`\`
+
+### Step 6: Update PR Title/Description (If Approach Changed)
+
+If the reviewer feedback caused you to **fundamentally change the approach**, update the PR:
+
+\`\`\`bash
+# Update PR title
+gh pr edit ${PR_NUMBER} --repo ${PR_REPOSITORY} --title "New title here"
+
+# Update PR body/description
+gh pr edit ${PR_NUMBER} --repo ${PR_REPOSITORY} --body "New description here"
+\`\`\`
+
+Only do this if the fix approach changed significantly - not for minor refinements.
+
+### Output Format
 
 After making changes, output a summary in this exact format:
 
@@ -735,51 +764,16 @@ post_pr_comment() {
     local success="$1"
     local analysis_output="$2"
 
-    log_info "Posting comment to PR..."
+    # Only post PR-level comments for errors - Claude handles inline replies for success cases
+    if [[ "${success}" == "true" || "${success}" == "no_action" ]]; then
+        return
+    fi
+
+    log_info "Posting error comment to PR..."
 
     local comment_body
-    if [[ "${success}" == "true" ]]; then
-        comment_body=$(cat <<EOF
-## 🤖 Claude has addressed the review feedback
-
-I've pushed changes to address the feedback from @${REVIEWER}.
-
-**Changes made:**
-$(git log -1 --format="%b" | head -20)
-
-Please review the new changes and let me know if there's anything else to address.
-
----
-*This comment was automatically generated by Claude Code in response to PR review feedback.*
-EOF
-)
-    elif [[ "${success}" == "no_action" ]]; then
-        # Extract the explanation from Claude's output
-        local explanation=""
-        if [[ -f "${analysis_output}" ]]; then
-            explanation=$(sed -n '/NO_CHANGES_NEEDED/,$ p' "${analysis_output}" | tail -n +2 | head -10)
-        fi
-        if [[ -z "${explanation}" ]]; then
-            explanation="The comments appear to be discussions, acknowledgements, or questions that don't require code changes."
-        fi
-
-        comment_body=$(cat <<EOF
-## 🤖 Claude reviewed the feedback
-
-I analyzed the recent comments and determined that no code changes are required.
-
-**Reason:**
-${explanation}
-
-If you intended for me to make changes, please provide specific instructions on what code modifications are needed.
-
----
-*This comment was automatically generated by Claude Code in response to PR review feedback.*
-EOF
-)
-    else
-        comment_body=$(cat <<EOF
-## 🤖 Claude attempted to address the review feedback
+    comment_body=$(cat <<EOF
+## 🤖 Claude encountered an issue
 
 I reviewed the feedback from @${REVIEWER} but was unable to make changes automatically.
 
@@ -789,12 +783,8 @@ This could be because:
 - There was an error processing the request
 
 Please review the feedback manually or provide more specific guidance.
-
----
-*This comment was automatically generated by Claude Code in response to PR review feedback.*
 EOF
 )
-    fi
 
     if [[ "${SKIP_PUSH}" == "true" ]]; then
         log_info "SKIP_PUSH mode - not posting PR comment"
@@ -913,15 +903,16 @@ main() {
     # Check if Claude determined no changes were needed
     if grep -q "NO_CHANGES_NEEDED" "${analysis_output}"; then
         log_info "Claude determined no code changes are needed"
-        post_pr_comment "no_action" "${analysis_output}"
-        log_info "Posted acknowledgement comment to PR"
+        # Claude should have already replied to inline comments - no PR-level comment needed
+        log_info "Claude handled responses inline"
     # Commit and push changes
     elif commit_and_push_changes "${analysis_output}"; then
-        post_pr_comment "true" "${analysis_output}"
+        # Claude should have already replied to inline comments - no PR-level comment needed
         log_info "Successfully addressed PR review feedback"
     else
+        # Only post error comment if something went wrong
         post_pr_comment "false" "${analysis_output}"
-        log_info "No changes made in response to review feedback"
+        log_info "Failed to make changes in response to review feedback"
     fi
 
     log_info "Done!"
