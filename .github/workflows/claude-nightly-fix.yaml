@@ -157,6 +157,18 @@ jobs:
           owner: ${{ steps.source-repo.outputs.source_owner }}
           repositories: ${{ steps.source-repo.outputs.source_repo_name }}
 
+      - name: Debug source token permissions
+        if: steps.check-prereqs.outputs.skip != 'true' && steps.source-repo.outputs.needs_source_token == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-source-token.outputs.token }}
+          SOURCE_REPO: ${{ steps.source-repo.outputs.source_repo }}
+        run: |
+          echo "Testing source token access to ${SOURCE_REPO}..."
+          echo "Checking repository access:"
+          gh api "repos/${SOURCE_REPO}" --jq '.full_name' || echo "Failed to access repo"
+          echo "Checking actions access:"
+          gh api "repos/${SOURCE_REPO}/actions/runs?per_page=1" --jq '.total_count' || echo "Failed to access actions"
+
       - name: Configure Git
         if: steps.check-prereqs.outputs.skip != 'true'
         env:
