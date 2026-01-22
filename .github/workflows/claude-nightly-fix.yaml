@@ -189,6 +189,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL_CLAUDE }}
           SOURCE_REPOSITORY: ${{ steps.source-repo.outputs.source_repo }}
+          TARGET_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
           ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/claude-analysis-output
           # Bot username for filtering existing PRs (constructed from app slug)
