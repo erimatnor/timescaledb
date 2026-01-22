@@ -13,7 +13,9 @@
 #   SOURCE_REPOSITORY  - The source repository to clone and fetch artifacts from
 #
 # Optional environment variables (with defaults):
-#   GITHUB_TOKEN       - GitHub token (default: from gh auth token)
+#   GITHUB_TOKEN       - GitHub token for target repo operations (default: from gh auth token)
+#   SOURCE_GITHUB_TOKEN - GitHub token for source repo API calls (default: GITHUB_TOKEN)
+#                         Required when source repo is in a different org than target
 #
 # Optional environment variables:
 #   ANTHROPIC_API_KEY  - API key for Claude Code (not needed if logged in locally)
@@ -64,6 +66,11 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     GITHUB_TOKEN=$(gh auth token 2>/dev/null || true)
 fi
 export GITHUB_TOKEN
+
+# SOURCE_GITHUB_TOKEN is used for API calls to the source repository
+# Defaults to GITHUB_TOKEN if not set (same-org scenario)
+SOURCE_GITHUB_TOKEN="${SOURCE_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
+export SOURCE_GITHUB_TOKEN
 
 # TARGET_REPOSITORY defaults to SOURCE_REPOSITORY (set in check_prerequisites)
 
@@ -268,8 +275,9 @@ get_failed_jobs() {
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
+    # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
     local api_error_file="${WORK_DIR}/api_error.txt"
-    if ! gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
         --paginate \
         --jq '.jobs[] | select(.conclusion == "failure") | {id: .id, name: .name}' \
         > "${jobs_file}" 2>"${api_error_file}"; then
@@ -312,7 +320,7 @@ download_job_logs() {
         local safe_name
         safe_name=$(echo "${job_name}" | tr '/' '_' | tr ' ' '_')
 
-        if ! gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
+        if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/jobs/${job_id}/logs" \
             > "${WORK_DIR}/logs/${safe_name}.log"; then
             log_warn "Failed to download log for job: ${job_name} (job_id: ${job_id})"
             continue
@@ -404,8 +412,9 @@ download_failure_artifacts() {
     local artifacts_file="${WORK_DIR}/artifacts.json"
 
     # Get artifacts that match failed jobs and are relevant types
+    # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
     local artifacts_error_file="${WORK_DIR}/artifacts_api_error.txt"
-    if ! gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+    if ! GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
         --paginate \
         --jq ".artifacts[] | select(.name | test(\"Regression|PostgreSQL log|Stacktrace|TAP\")) | {name: .name, id: .id}" \
         > "${artifacts_file}.all" 2>"${artifacts_error_file}"; then
@@ -456,7 +465,7 @@ download_failure_artifacts() {
 
         ((count++))
         log_info "Downloading artifact: ${name} (${count}/${total_artifacts})"
-        gh api "repos/${SOURCE_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
+        GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/artifacts/${id}/zip" > "${name}.zip" || {
             log_warn "Failed to download artifact: ${name}"
             continue
         }
@@ -1276,7 +1285,7 @@ main() {
     if [[ "${TARGET_REPOSITORY}" != "${SOURCE_REPOSITORY}" ]]; then
         local target_sha source_sha
         target_sha=$(git -C "${CLONE_DIR}" rev-parse HEAD 2>/dev/null)
-        source_sha=$(gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' || echo "")
+        source_sha=$(GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/commits/${BASE_BRANCH}" --jq '.sha' || echo "")
 
         if [[ -n "${source_sha}" && "${target_sha}" != "${source_sha}" ]]; then
             log_warn "Source and target repos are at different commits:"
