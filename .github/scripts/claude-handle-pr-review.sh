@@ -712,19 +712,13 @@ EOF
         return 0
     fi
 
-    # Find or create a remote for pushing
-    local push_remote
-    push_remote=$(find_remote_for_repo "${PUSH_REPOSITORY}" || true)
-
-    if [[ -z "${push_remote}" ]]; then
-        log_info "Setting up remote for push repository: ${PUSH_REPOSITORY}"
-        local push_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${PUSH_REPOSITORY}.git"
-        git remote add push-target "${push_url}" 2>/dev/null || \
-            git remote set-url push-target "${push_url}"
-        push_remote="push-target"
-    else
-        log_info "Using existing remote '${push_remote}' for pushing"
-    fi
+    # Always set up an authenticated remote for pushing
+    # Even if an existing remote matches the repo, it may not have the token
+    local push_remote="push-target"
+    local push_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${PUSH_REPOSITORY}.git"
+    log_info "Setting up authenticated remote for push repository: ${PUSH_REPOSITORY}"
+    git remote add "${push_remote}" "${push_url}" 2>/dev/null || \
+        git remote set-url "${push_remote}" "${push_url}"
 
     # Push to the PR branch
     log_info "Pushing to ${PUSH_REPOSITORY}:${PR_BRANCH}"
