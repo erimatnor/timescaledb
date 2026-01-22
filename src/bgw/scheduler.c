@@ -328,10 +328,16 @@ scheduled_bgw_job_transition_state_to(ScheduledBgwJob *sjob, JobState new_state)
 					 sjob->job.fd.id,
 					 NameStr(sjob->job.fd.application_name));
 				sjob->consecutive_failed_launches++;
-				scheduled_bgw_job_transition_state_to(sjob, JOB_STATE_SCHEDULED);
+
+				/* Mark the job as started so we can properly record the failure */
+				mark_job_as_started(sjob);
+
 				PopActiveSnapshot();
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(scratch_mctx);
+
+				/* Record the failure to start the job */
+				on_failure_to_start_job(sjob);
 				return;
 			}
 
