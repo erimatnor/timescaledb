@@ -297,17 +297,6 @@ get_failed_jobs() {
 
     local jobs_file="${WORK_DIR}/failed_jobs.json"
 
-    # Verify SOURCE_GITHUB_TOKEN works before proceeding
-    echo "[DEBUG] Testing SOURCE_GITHUB_TOKEN access to ${SOURCE_REPOSITORY}..." >&2
-    local test_result
-    if test_result=$(GH_TOKEN="${SOURCE_GITHUB_TOKEN}" gh api "repos/${SOURCE_REPOSITORY}/actions/runs?per_page=1" --jq '.total_count' 2>&1); then
-        echo "[DEBUG] Token test passed: ${test_result} runs accessible" >&2
-    else
-        echo "[DEBUG] Token test FAILED: ${test_result}" >&2
-        echo "[DEBUG] SOURCE_GITHUB_TOKEN length: ${#SOURCE_GITHUB_TOKEN}" >&2
-        echo "[DEBUG] GITHUB_TOKEN length: ${#GITHUB_TOKEN}" >&2
-    fi
-
     # Get all jobs from the run, filter for failed ones (excluding ignored failures)
     # Use SOURCE_GITHUB_TOKEN for cross-org access to source repository
     local api_error_file="${WORK_DIR}/api_error.txt"
