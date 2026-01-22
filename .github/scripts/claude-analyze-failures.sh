@@ -455,8 +455,13 @@ download_failure_artifacts() {
     : > "${artifacts_file}"
     while IFS= read -r artifact; do
         [[ -z "${artifact}" ]] && continue
+        # Skip malformed JSON entries
+        if ! echo "$artifact" | jq -e '.' >/dev/null 2>&1; then
+            continue
+        fi
         local name
-        name=$(echo "$artifact" | jq -r '.name')
+        name=$(echo "$artifact" | jq -r '.name // empty')
+        [[ -z "${name}" ]] && continue
         if echo "${name}" | grep -qE "${combined_pattern}"; then
             echo "${artifact}" >> "${artifacts_file}"
         fi
@@ -482,9 +487,21 @@ download_failure_artifacts() {
             break
         fi
 
+        # Validate JSON before parsing
+        if ! echo "$artifact" | jq -e '.' >/dev/null 2>&1; then
+            log_warn "Skipping malformed artifact entry"
+            continue
+        fi
+
         local name id
-        name=$(echo "$artifact" | jq -r '.name')
-        id=$(echo "$artifact" | jq -r '.id')
+        name=$(echo "$artifact" | jq -r '.name // empty')
+        id=$(echo "$artifact" | jq -r '.id // empty')
+
+        # Skip if name or id is empty
+        if [[ -z "${name}" || -z "${id}" ]]; then
+            log_warn "Skipping artifact with missing name or id"
+            continue
+        fi
 
         ((count++))
         log_info "Downloading artifact: ${name} (${count}/${total_artifacts})"
