@@ -10,6 +10,8 @@ name: Memory tests
     paths: .github/workflows/memory-tests.yaml
 jobs:
   memory_leak:
+    # TEMPORARY: Skip push events in forks to reduce CI load during testing
+    if: github.event_name != 'push' || github.repository == 'timescale/timescaledb'
     name: Memory leak on insert PG${{ matrix.pg }}
     runs-on: ubuntu-22.04
     strategy:

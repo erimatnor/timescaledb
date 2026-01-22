@@ -9,6 +9,8 @@ name: Test Update and Downgrade
 
 jobs:
   update_test:
+    # TEMPORARY: Skip push events in forks to reduce CI load during testing
+    if: github.event_name != 'push' || github.repository == 'timescale/timescaledb'
     name: Update test PG${{ matrix.pg }}
     runs-on: 'ubuntu-latest'
     strategy:

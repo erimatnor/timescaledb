@@ -23,6 +23,8 @@ name: Regression Linux i386
       - NOTICE
 jobs:
   config:
+    # TEMPORARY: Skip push events in forks to reduce CI load during testing
+    if: github.event_name != 'push' || github.repository == 'timescale/timescaledb'
     runs-on: ubuntu-latest
     outputs:
       pg_latest: ${{ github.event_name == 'pull_request' && steps.setter.outputs.PG_LATEST_ONLY || steps.setter.outputs.PG_LATEST }}

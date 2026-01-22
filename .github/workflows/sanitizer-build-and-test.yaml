@@ -58,6 +58,8 @@ env:
   EXTENSIONS: "postgres_fdw test_decoding"
 jobs:
   config:
+    # TEMPORARY: Skip push events in forks to reduce CI load during testing
+    if: github.event_name != 'push' || github.repository == 'timescale/timescaledb'
     runs-on: ubuntu-latest
     outputs:
       pg_latest: ${{ steps.setter.outputs.PG_LATEST }}

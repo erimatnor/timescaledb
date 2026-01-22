@@ -8,6 +8,8 @@ name: pg_upgrade test
 
 jobs:
   pg_upgrade_test:
+    # TEMPORARY: Skip push events in forks to reduce CI load during testing
+    if: github.event_name != 'push' || github.repository == 'timescale/timescaledb'
     name: pg_upgrade test from PG${{ matrix.pg_version_old }} to PG${{ matrix.pg_version_new }}
     runs-on: 'ubuntu-latest'
     strategy:
