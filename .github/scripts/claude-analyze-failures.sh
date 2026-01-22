@@ -72,6 +72,13 @@ export GITHUB_TOKEN
 SOURCE_GITHUB_TOKEN="${SOURCE_GITHUB_TOKEN:-${GITHUB_TOKEN}}"
 export SOURCE_GITHUB_TOKEN
 
+# Debug: Check if we have separate tokens for source and target
+if [[ "${SOURCE_GITHUB_TOKEN}" == "${GITHUB_TOKEN}" ]]; then
+    echo "[DEBUG] Using same token for source and target repos" >&2
+else
+    echo "[DEBUG] Using separate token for source repo (cross-org)" >&2
+fi
+
 # TARGET_REPOSITORY defaults to SOURCE_REPOSITORY (set in check_prerequisites)
 
 # Colors for output
