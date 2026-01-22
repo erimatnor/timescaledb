@@ -152,6 +152,7 @@ Set these in **Settings > Secrets and variables > Actions > Secrets**:
 
 | Permission | Access | Reason |
 |------------|--------|--------|
+| **Actions** | Read-only | Fetch workflow runs, jobs, and artifacts |
 | **Contents** | Read & Write | Push commits to branches |
 | **Pull requests** | Read & Write | Create PRs, add labels, post comments |
 | **Metadata** | Read-only | Required for API access |
