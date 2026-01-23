@@ -998,7 +998,8 @@ invoke_claude_code() {
         #   "not ok 51    + chunk_column_stats    1542 ms"  (TAP format with timestamp prefix)
         #   "foo ... FAILED 123 ms"
         sed 's/^[^:]*: //' "${failed_tests_file}" | tee "${WORK_DIR}/tests_without_prefix.txt" | \
-            sed 's/^[0-9T:.Z-]* //' | \
+            sed 's/^[0-9T:.Z-]* *//' | \
+            sed 's/^[[:space:]]*//' | \
             grep -oE 'test [^ ]+|^[^ ]+ \.\.\.|not ok [0-9]+\s+[+-]\s+[a-zA-Z0-9_]+|not ok [0-9]+ - [^ ]+' | \
             sed 's/^test //; s/ \.\.\..*//; s/^not ok [0-9]* - //; s/^not ok [0-9]*\s*[+-]\s*//' | \
             sort -u > "${unique_tests_file}"
