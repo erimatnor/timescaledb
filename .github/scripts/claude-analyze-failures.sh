@@ -997,10 +997,12 @@ invoke_claude_code() {
         #   "not ok 1 - test_name"
         #   "not ok 51    + chunk_column_stats    1542 ms"  (TAP format with timestamp prefix)
         #   "foo ... FAILED 123 ms"
-        sed 's/^[^:]*: //' "${failed_tests_file}" | tee "${WORK_DIR}/tests_without_prefix.txt" | \
-            sed 's/^[0-9T:.Z-]* //' | \
-            grep -oE 'test [^ ]+|^[^ ]+ \.\.\.|not ok [0-9]+\s+[+-]\s+[a-zA-Z0-9_]+|not ok [0-9]+ - [^ ]+' | \
-            sed 's/^test //; s/ \.\.\..*//; s/^not ok [0-9]* - //; s/^not ok [0-9]*\s*[+-]\s*//' | \
+        sed 's/^[^:]*: //' "${failed_tests_file}" | \
+            sed 's/^[^ ]* *//' | \
+            tee "${WORK_DIR}/tests_without_prefix.txt" | \
+            sed 's/^[[:space:]]*//' | \
+            grep -oE 'test [^ ]+|^[^ ]+ +\.\.\.|not ok [0-9]+\s+[+-]\s+[a-zA-Z0-9_]+|not ok [0-9]+ - [^ ]+' | \
+            sed 's/^test //; s/ *\.\.\..*//; s/^not ok [0-9]* - //; s/^not ok [0-9]*\s*[+-]\s*//' | \
             sort -u > "${unique_tests_file}"
 
         log_info "After extraction (tests_without_prefix.txt):"
