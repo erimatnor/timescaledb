@@ -643,7 +643,9 @@ FROM i;
 
 -- test CTE
 -- no chunk exclusion for CTE because cte query is not pulled up
+-- Force use of composite index by increasing cost of tuple filtering
 SET enable_seqscan TO false;
+SET cpu_tuple_cost TO 0.1;
 :PREFIX WITH cte AS (
   SELECT time
   FROM :TEST_TABLE
@@ -980,6 +982,7 @@ LIMIT 1;
          ->  Index Only Scan using _hyper_2_11_chunk_metrics_space_device_id_time_idx on _hyper_2_11_chunk (actual rows=1.00 loops=1)
                Index Cond: (device_id = ANY ('{1,2}'::integer[]))
 
+RESET cpu_tuple_cost;
 RESET enable_seqscan;
 -- test equality constraint on ORDER BY prefix
 -- currently not optimized
@@ -1628,7 +1631,9 @@ FROM i;
 
 -- test CTE
 -- no chunk exclusion for CTE because cte query is not pulled up
+-- Force use of composite index by increasing cost of tuple filtering
 SET enable_seqscan TO false;
+SET cpu_tuple_cost TO 0.1;
 :PREFIX WITH cte AS (
   SELECT time
   FROM :TEST_TABLE
@@ -1648,6 +1653,7 @@ WHERE time < '2000-02-01'::timestamptz;
    ->  Index Only Scan using _hyper_2_10_chunk_metrics_space_device_id_time_idx on _hyper_2_10_chunk (actual rows=5038.00 loops=1)
          Index Cond: ((device_id = 1) AND ("time" < 'Tue Feb 01 00:00:00 2000 PST'::timestamp with time zone))
 
+RESET cpu_tuple_cost;
 RESET enable_seqscan;
 -- test subquery
 -- not ChunkAppend so no chunk exclusion
@@ -2639,7 +2645,9 @@ FROM i;
 
 -- test CTE
 -- no chunk exclusion for CTE because cte query is not pulled up
+-- Force use of composite index by increasing cost of tuple filtering
 SET enable_seqscan TO false;
+SET cpu_tuple_cost TO 0.1;
 :PREFIX WITH cte AS (
   SELECT time
   FROM :TEST_TABLE
@@ -4546,7 +4554,9 @@ FROM i;
 
 -- test CTE
 -- no chunk exclusion for CTE because cte query is not pulled up
+-- Force use of composite index by increasing cost of tuple filtering
 SET enable_seqscan TO false;
+SET cpu_tuple_cost TO 0.1;
 :PREFIX WITH cte AS (
   SELECT time
   FROM :TEST_TABLE

@@ -255,7 +255,9 @@ FROM i;
 
 -- test CTE
 -- no chunk exclusion for CTE because cte query is not pulled up
+-- Force use of composite index by increasing cost of tuple filtering
 SET enable_seqscan TO false;
+SET cpu_tuple_cost TO 0.1;
 :PREFIX WITH cte AS (
   SELECT time
   FROM :TEST_TABLE
@@ -265,6 +267,7 @@ SET enable_seqscan TO false;
 SELECT *
 FROM cte
 WHERE time < '2000-02-01'::timestamptz;
+RESET cpu_tuple_cost;
 RESET enable_seqscan;
 
 -- test subquery
