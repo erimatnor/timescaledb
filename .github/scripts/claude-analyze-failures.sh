@@ -661,6 +661,8 @@ EOF
 commit_claude_changes() {
     local test_name="$1"
     local analysis_output="$2"
+    # Output variable for failure reason (caller can read COMMIT_FAILURE_REASON)
+    COMMIT_FAILURE_REASON=""
 
     # Check if there are any changes to commit
     local modified_files new_files_list
@@ -672,7 +674,7 @@ commit_claude_changes() {
     done)
 
     if [[ -z "${modified_files}" && -z "${new_files_list}" ]]; then
-        log_info "No changes made for test: ${test_name}"
+        COMMIT_FAILURE_REASON="Claude analyzed the failure but did not modify any files"
         return 1
     fi
 
@@ -694,7 +696,7 @@ commit_claude_changes() {
     fi
 
     if [[ -z "${filtered_modified}" && -z "${filtered_new}" ]]; then
-        log_info "No changes made for test (excluding .github/): ${test_name}"
+        COMMIT_FAILURE_REASON="Claude only modified .github/ files which are not allowed"
         return 1
     fi
 
@@ -788,9 +790,20 @@ fix_single_test() {
     # Check if an unmerged PR already exists for this test
     local existing_pr
     if existing_pr=$(check_existing_pr_for_test "${test_name}"); then
-        log_warn "SKIPPING: An unmerged PR already exists for test '${test_name}'"
-        log_warn "Existing PR: ${existing_pr}"
-        log_info "Not creating a duplicate fix. Please review and merge the existing PR."
+        log_info "No fix applied for test: ${test_name}"
+        log_info "Reason: An unmerged PR already exists: ${existing_pr}"
+        # Create analysis file to document skip reason for artifact upload
+        local analysis_output="${WORK_DIR}/analysis_${test_number}.txt"
+        {
+            echo "=============================================="
+            echo "FIX NOT APPLIED - EXISTING PR"
+            echo "=============================================="
+            echo "Test: ${test_name}"
+            echo "Reason: An unmerged PR already exists for this test"
+            echo "Existing PR: ${existing_pr}"
+            echo ""
+            echo "Please review and merge the existing PR to resolve this failure."
+        } > "${analysis_output}"
         return 2  # Return code 2 indicates "skipped due to existing PR"
     fi
 
@@ -861,7 +874,16 @@ EOF
         --allowedTools "Edit,Write,Read,Glob,Grep,Bash" \
         < "${prompt_file}" \
         2>&1 | tee "${analysis_output}" >&2; then
-        log_warn "Claude Code failed to fix test: ${test_name}"
+        log_warn "No fix applied for test: ${test_name}"
+        log_warn "Reason: Claude Code command exited with an error"
+        # Append reason to analysis output for artifact upload
+        {
+            echo ""
+            echo "=============================================="
+            echo "FIX NOT APPLIED"
+            echo "=============================================="
+            echo "Reason: Claude Code command exited with an error"
+        } >> "${analysis_output}"
         git checkout "${BASE_BRANCH}" >&2
         git branch -D "${branch_name}" >&2 2>/dev/null || true
         return 1
@@ -874,7 +896,23 @@ EOF
 
     # Commit the changes for this test
     if ! commit_claude_changes "${test_name}" "${analysis_output}"; then
-        log_info "No changes made for test: ${test_name}"
+        log_warn "No fix applied for test: ${test_name}"
+        if [[ -n "${COMMIT_FAILURE_REASON:-}" ]]; then
+            log_warn "Reason: ${COMMIT_FAILURE_REASON}"
+            # Append reason to analysis output for artifact upload
+            {
+                echo ""
+                echo "=============================================="
+                echo "FIX NOT APPLIED"
+                echo "=============================================="
+                echo "Reason: ${COMMIT_FAILURE_REASON}"
+                echo ""
+                echo "This may happen when Claude analyzes the failure and provides"
+                echo "an explanation but does not make actual code changes. Review"
+                echo "Claude's analysis above to understand the issue and determine"
+                echo "if manual intervention is needed."
+            } >> "${analysis_output}"
+        fi
         git checkout "${BASE_BRANCH}" >&2
         git branch -D "${branch_name}" >&2 2>/dev/null || true
         return 1
@@ -1072,9 +1110,30 @@ EOF
                     fi
                 fi
             else
+                log_warn "No fix applied for bulk analysis"
+                if [[ -n "${COMMIT_FAILURE_REASON:-}" ]]; then
+                    log_warn "Reason: ${COMMIT_FAILURE_REASON}"
+                    # Append reason to analysis output for artifact upload
+                    {
+                        echo ""
+                        echo "=============================================="
+                        echo "FIX NOT APPLIED"
+                        echo "=============================================="
+                        echo "Reason: ${COMMIT_FAILURE_REASON}"
+                    } >> "${analysis_output}"
+                fi
                 ((failed_fixes++))
             fi
         else
+            log_warn "Claude Code command failed"
+            # Append reason to analysis output for artifact upload
+            {
+                echo ""
+                echo "=============================================="
+                echo "FIX NOT APPLIED"
+                echo "=============================================="
+                echo "Reason: Claude Code command exited with an error"
+            } >> "${analysis_output}"
             ((failed_fixes++))
         fi
 
