@@ -17,7 +17,7 @@ sed  -E -e '/<exclude_from_test>/,/<\/exclude_from_test>/d' \
 	 -e '/ +QUERY PLAN +/{N;s/ +QUERY PLAN +\n-+/--- QUERY PLAN ---/;}' \
      -e '/Disabled: true/d' \
      -e '/Heap Fetches: [0-9]+/d' \
-     -e '/Buckets: [0-9]\+/d' \
+     -e '/Buckets: [0-9]+/d' \
      -e '/Index Searches: [0-9]+/d' \
      -e '/Storage: Memory  Maximum Storage: [0-9]+kB/d' \
      -e '/Window: /d' \
