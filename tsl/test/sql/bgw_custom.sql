@@ -512,7 +512,7 @@ BEGIN
 END
 $$;
 
-select add_job('add_scheduled_jobs_with_check', schedule_interval => '1 hour') as last_job_id \gset
+select add_job('add_scheduled_jobs_with_check', schedule_interval => '1 hour', initial_start => now()) as last_job_id \gset
 -- wait for enough time
 SELECT _timescaledb_functions.restart_background_workers();
 SELECT test.wait_for_job_to_run(:last_job_id, 1);
