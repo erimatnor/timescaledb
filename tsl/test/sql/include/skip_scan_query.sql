@@ -228,11 +228,13 @@ SELECT * FROM devices;
 SELECT * FROM devices ORDER BY dev;
 
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev_name) dev_name FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 
 -- ReScan tests
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (

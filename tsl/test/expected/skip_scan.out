@@ -317,11 +317,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev_name) dev_name FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -570,11 +572,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev_name) dev_name FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -841,11 +845,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev_name) dev_name FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -1094,11 +1100,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev_name) dev_name FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -1349,11 +1357,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev) dev FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 -- no SkipScan as distinct is over subquery
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
@@ -1589,11 +1599,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev) dev FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 -- no SkipScan as distinct is over subquery
 :PREFIX SELECT time, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (dev) * FROM (
@@ -1759,11 +1771,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev) dev FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 -- have SkipScan as Distinct is over index
 :PREFIX SELECT time, dev, val, 'q7_2' FROM (SELECT * FROM (
@@ -1877,11 +1891,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev) dev FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 -- have SkipScan as Distinct is over index
 :PREFIX SELECT time, dev, val, 'q7_2' FROM (SELECT * FROM (
@@ -2026,11 +2042,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2106,11 +2124,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2198,11 +2218,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2278,11 +2300,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2370,11 +2394,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2450,11 +2476,13 @@ SELECT * FROM devices;
 )
 SELECT * FROM devices ORDER BY region, dev;
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2565,12 +2593,14 @@ psql:include/skip_scan_multi_query.sql:64: INFO:  SkipScan used on mskip_scan_st
 SELECT * FROM devices ORDER BY region, dev;
 psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on mskip_scan_status_region_dev_dev_name_idx(region NOT NULL, dev NOT NULL)
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on mskip_scan_status_region_dev_dev_name_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2730,6 +2760,7 @@ psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on _hyper_7_66_c
 psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on _hyper_7_67_chunk_mskip_scan_ht_status_region_dev_dev_name_idx(region NOT NULL, dev NOT NULL)
 psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on _hyper_7_68_chunk_mskip_scan_ht_status_region_dev_dev_name_idx(region NOT NULL, dev NOT NULL)
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on _hyper_7_65_chunk_mskip_scan_ht_status_region_dev_dev_name_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
@@ -2739,6 +2770,7 @@ psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on _hyper_7_68_c
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),
@@ -2891,15 +2923,17 @@ psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on compress_hype
 psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on compress_hyper_9_75_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL)
 psql:include/skip_scan_multi_query.sql:69: INFO:  SkipScan used on compress_hyper_9_76_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL)
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
-psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on compress_hyper_9_73_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
-psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on compress_hyper_9_74_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
-psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on compress_hyper_9_75_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
-psql:include/skip_scan_multi_query.sql:73: INFO:  SkipScan used on compress_hyper_9_76_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
+psql:include/skip_scan_multi_query.sql:74: INFO:  SkipScan used on compress_hyper_9_73_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
+psql:include/skip_scan_multi_query.sql:74: INFO:  SkipScan used on compress_hyper_9_74_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
+psql:include/skip_scan_multi_query.sql:74: INFO:  SkipScan used on compress_hyper_9_75_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
+psql:include/skip_scan_multi_query.sql:74: INFO:  SkipScan used on compress_hyper_9_76_chunk_status_region_dev_dev_name__ts_me_idx(region NOT NULL, dev NOT NULL, dev_name NOT NULL)
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
     VALUES (1), (2)) a(v),

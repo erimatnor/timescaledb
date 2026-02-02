@@ -220,11 +220,13 @@ SELECT * FROM devices;
 SELECT * FROM devices ORDER BY dev;
 
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (dev) dev FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 
 -- ReScan tests
 -- no SkipScan as distinct is over subquery
