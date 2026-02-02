@@ -114,11 +114,13 @@ SELECT * FROM devices;
 SELECT * FROM devices ORDER BY dev;
 
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT count(DISTINCT dev) FROM :TABLE;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 
 -- ReScan tests
 :PREFIX SELECT c, 'q7_1' FROM (SELECT count(DISTINCT dev) c FROM (

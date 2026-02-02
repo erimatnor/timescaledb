@@ -69,11 +69,13 @@ SELECT * FROM devices;
 SELECT * FROM devices ORDER BY region, dev;
 
 -- prepared statements
+SET plan_cache_mode = force_generic_plan;
 PREPARE prep AS SELECT DISTINCT ON (region, dev, dev_name) region, dev, dev_name FROM :TABLE WHERE status = 1;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 :PREFIX EXECUTE prep;
 DEALLOCATE prep;
+RESET plan_cache_mode;
 
 -- ReScan tests
 :PREFIX SELECT time, status, region, dev, val, 'q7_1' FROM (SELECT DISTINCT ON (status, region, dev) * FROM (
